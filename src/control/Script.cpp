@@ -498,7 +498,7 @@ void CRunningScript::Init()
 }
 
 #ifdef USE_DEBUG_SCRIPT_LOADER
-int CTheScripts::ScriptToLoad = 1;
+int CTheScripts::ScriptToLoad = 0;
 
 int CTheScripts::OpenScript()
 {
@@ -525,8 +525,8 @@ void CTheScripts::Init()
 	UpsideDownCars.Init();
 	StuckCars.Init();
 #ifdef USE_DEBUG_SCRIPT_LOADER
-	// Corleone always starts a new game with the unlocked freeroam script.
-	ScriptToLoad = 1;
+	// Use GTA III's normal world and mission script.
+	ScriptToLoad = 0;
 	int mainf = OpenScript();
 #else
 	CFileMgr::SetDir("data");
@@ -1374,6 +1374,8 @@ int8 CRunningScript::ProcessCommands0To99(int32 command)
 		player->DeleteRwObject();
 		player->m_modelIndex = -1;
 		player->SetModelIndex(MI_GANG01);
+		player->SetPedStats(PEDSTAT_PLAYER);
+		player->m_headingRate = player->m_pedStats->m_headingChangeRate;
 		uint32 coltSlot = player->GiveWeapon(WEAPONTYPE_COLT45, 999);
 		player->SetCurrentWeapon(coltSlot);
 		player->m_nSelectedWepSlot = coltSlot;
