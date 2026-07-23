@@ -24,6 +24,8 @@
 #include "CarAI.h"
 #include "Zones.h"
 #include "Cranes.h"
+#include "Pools.h"
+#include "PlayerPed.h"
 
 CVector vecPedCarDoorAnimOffset;
 CVector vecPedCarDoorLoAnimOffset;
@@ -2051,6 +2053,10 @@ CPed::SelectGunIfArmed(void)
 void
 CPed::ReactToPointGun(CEntity *entWithGun)
 {
+	if (m_nPedType == PEDTYPE_GANG1 && entWithGun && entWithGun->IsPed() &&
+	    ((CPed*)entWithGun)->IsPlayer())
+		return;
+
 	CPed *pedWithGun = (CPed*)entWithGun;
 	int waitTime;
 
@@ -2132,10 +2138,62 @@ CPed::ReactToPointGun(CEntity *entWithGun)
 	}
 }
 
+static void
+MakeNearbyLeoneDefendPlayer(CEntity *target)
+{
+	if (target == nil || !target->IsPed())
+		return;
+
+	CPlayerPed *player = FindPlayerPed();
+	CPed *enemy = (CPed*)target;
+	if (player == nil || enemy == player || enemy->m_nPedType == PEDTYPE_GANG1)
+		return;
+
+	CPedPool *pool = CPools::GetPedPool();
+	for (int32 i = 0; i < pool->GetSize(); i++) {
+		CPed *leone = pool->GetSlot(i);
+		if (leone == nil || leone == player ||
+		    leone->m_nPedType != PEDTYPE_GANG1 ||
+		    leone->DyingOrDead() || !leone->IsPedInControl())
+			continue;
+
+		if ((leone->GetPosition() - player->GetPosition()).MagnitudeSqr() > SQR(40.0f))
+			continue;
+
+		leone->SetLeader(player);
+		leone->SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, enemy);
+		leone->SetObjectiveTimer(30000);
+		leone->SetMoveState(PEDMOVE_RUN);
+	}
+}
+
 void
 CPed::ReactToAttack(CEntity *attacker)
 {
+	if (attacker && attacker->IsPed()) {
+		CPed *attackerPed = (CPed*)attacker;
+
+		// When the player attacks a non-Leone ped, nearby Leone join the fight.
+		if (attackerPed->IsPlayer() && m_nPedType != PEDTYPE_GANG1)
+			MakeNearbyLeoneDefendPlayer(this);
+
+		// Leone never retaliate, flee from, or target the player.
+		if (m_nPedType == PEDTYPE_GANG1 && attackerPed->IsPlayer()) {
+			if (m_objective == OBJECTIVE_KILL_CHAR_ON_FOOT ||
+			    m_objective == OBJECTIVE_KILL_CHAR_ANY_MEANS ||
+			    m_objective == OBJECTIVE_FLEE_CHAR_ON_FOOT_TILL_SAFE ||
+			    m_objective == OBJECTIVE_FLEE_CHAR_ON_FOOT_ALWAYS) {
+				ClearObjective();
+				RestorePreviousState();
+			}
+			ClearLookFlag();
+			ClearPointGunAt();
+			return;
+		}
+	}
+
 	if (IsPlayer() && attacker->IsPed()) {
+		MakeNearbyLeoneDefendPlayer(attacker);
 		InformMyGangOfAttack(attacker);
 		SetLookFlag(attacker, true);
 		SetLookTimer(700);

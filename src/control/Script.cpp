@@ -498,7 +498,7 @@ void CRunningScript::Init()
 }
 
 #ifdef USE_DEBUG_SCRIPT_LOADER
-int CTheScripts::ScriptToLoad = 0;
+int CTheScripts::ScriptToLoad = 1;
 
 int CTheScripts::OpenScript()
 {
@@ -525,12 +525,8 @@ void CTheScripts::Init()
 	UpsideDownCars.Init();
 	StuckCars.Init();
 #ifdef USE_DEBUG_SCRIPT_LOADER
-	// glfwGetKey doesn't work because of CGame::Initialise is blocking
-	CPad::UpdatePads();
-	if(CPad::GetPad(0)->GetChar('G')) ScriptToLoad = 0;
-	if(CPad::GetPad(0)->GetChar('R')) ScriptToLoad = 1;
-	if(CPad::GetPad(0)->GetChar('D')) ScriptToLoad = 2;
-
+	// Corleone always starts a new game with the unlocked freeroam script.
+	ScriptToLoad = 1;
 	int mainf = OpenScript();
 #else
 	CFileMgr::SetDir("data");
@@ -1366,7 +1362,7 @@ int8 CRunningScript::ProcessCommands0To99(int32 command)
 		script_assert(index < 1); /* Constant? Also no more double player glitch */
 		printf("&&&&&&&&&&&&&Creating player: %d\n", index);
 		if (!CStreaming::HasModelLoaded(MI_PLAYER)) {
-			CStreaming::RequestSpecialModel(MI_PLAYER, "player", STREAMFLAGS_DONT_REMOVE | STREAMFLAGS_DEPENDENCY);
+			CStreaming::RequestSpecialModel(MI_PLAYER, "mafia", STREAMFLAGS_DONT_REMOVE | STREAMFLAGS_DEPENDENCY);
 			CStreaming::LoadAllRequestedModels(false);
 		}
 		CPlayerPed::SetupPlayerPed(index);

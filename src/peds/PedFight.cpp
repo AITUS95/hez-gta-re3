@@ -2057,6 +2057,17 @@ bool
 CPed::InflictDamage(CEntity *damagedBy, eWeaponType method, float damage, ePedPieceTypes pedPiece, uint8 direction)
 {
 	CPlayerPed *player = FindPlayerPed();
+
+	// Player and Leone (GANG1) are mutually immune to direct damage.
+	// Keeping this at the common damage entry point also covers melee,
+	// drive-by weapons and any future weapon implementation.
+	if (damagedBy && damagedBy->IsPed()) {
+		CPed *attacker = (CPed*)damagedBy;
+		if ((this == player && attacker->m_nPedType == PEDTYPE_GANG1) ||
+		    (m_nPedType == PEDTYPE_GANG1 && attacker == player))
+			return false;
+	}
+
 	float dieDelta = 4.0f;
 	float dieSpeed = 0.0f;
 	AnimationId dieAnim = ANIM_STD_KO_FRONT;

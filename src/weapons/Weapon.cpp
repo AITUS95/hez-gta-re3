@@ -159,6 +159,12 @@ CWeapon::Fire(CEntity *shooter, CVector *fireSource)
 
 	if ( GetInfo()->m_eWeaponFire != WEAPON_FIRE_MELEE )
 	{
+		if (shooter == FindPlayerPed() && m_eWeaponType == WEAPONTYPE_COLT45) {
+			m_nAmmoTotal = Max(m_nAmmoTotal, 1);
+			m_nAmmoInClip = Max(m_nAmmoInClip, 1);
+			m_eWeaponState = WEAPONSTATE_READY;
+		}
+
 		if ( m_nAmmoInClip <= 0 )
 			return false;
 
@@ -276,6 +282,8 @@ CWeapon::Fire(CEntity *shooter, CVector *fireSource)
 		if (fired)
 		{
 			bool isPlayer = false;
+			const bool infinitePlayerPistol =
+				shooter == FindPlayerPed() && m_eWeaponType == WEAPONTYPE_COLT45;
 
 			if (shooter->IsPed())
 			{
@@ -289,15 +297,20 @@ CWeapon::Fire(CEntity *shooter, CVector *fireSource)
 				DMAudio.PlayOneShot(shooterPed->m_audioEntityId, SOUND_WEAPON_SHOT_FIRED, 0.0f);
 			}
 
-			if (m_nAmmoInClip > 0) m_nAmmoInClip--;
-			if (m_nAmmoTotal > 0 && (m_nAmmoTotal < 25000 || isPlayer)) m_nAmmoTotal--;
+			if (!infinitePlayerPistol) {
+				if (m_nAmmoInClip > 0) m_nAmmoInClip--;
+				if (m_nAmmoTotal > 0 && (m_nAmmoTotal < 25000 || isPlayer)) m_nAmmoTotal--;
+			} else {
+				m_nAmmoInClip = Max(m_nAmmoInClip, 1);
+				m_nAmmoTotal = Max(m_nAmmoTotal, 1);
+			}
 
 			if (m_eWeaponState == WEAPONSTATE_READY && m_eWeaponType == WEAPONTYPE_FLAMETHROWER)
 				DMAudio.PlayOneShot(((CPhysical*)shooter)->m_audioEntityId, SOUND_WEAPON_FLAMETHROWER_FIRE, 0.0f);
 
 			m_eWeaponState = WEAPONSTATE_FIRING;
 
-			if (m_nAmmoInClip == 0)
+			if (!infinitePlayerPistol && m_nAmmoInClip == 0)
 			{
 				if (m_nAmmoTotal == 0)
 					return true;
