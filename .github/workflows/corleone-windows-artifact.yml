@@ -44,13 +44,22 @@ jobs:
         run: |
           $artifact = "artifact/corleone-re3-win-x86"
           New-Item -ItemType Directory -Force -Path $artifact | Out-Null
+          Copy-Item "gamefiles/*" $artifact -Recurse -Force
           Copy-Item "bin/win-x86-librw_d3d9-oal/Release/re3.exe" $artifact
           if (Test-Path "bin/win-x86-librw_d3d9-oal/Release/re3.pdb") {
             Copy-Item "bin/win-x86-librw_d3d9-oal/Release/re3.pdb" $artifact
           }
           Copy-Item "vendor/mpg123/dist/Win32/libmpg123-0.dll" $artifact
           Copy-Item "vendor/openal-soft/dist/Win32/OpenAL32.dll" $artifact
-          Copy-Item "gamefiles/data/main_freeroam.scm" $artifact
+          @(
+            "INSTALLAZIONE:"
+            "1. Usa una copia completa e funzionante di GTA III per Windows."
+            "2. Copia tutto il contenuto di questo artifact nella cartella principale di GTA III."
+            "3. Mantieni le sottocartelle data, models e TEXT; non avviare re3.exe dalla cartella dell'artifact isolata."
+            "4. Avvia re3.exe dalla cartella principale di GTA III."
+            ""
+            "Questo artifact non include i file originali protetti da copyright di GTA III."
+          ) | Set-Content -Path "$artifact/INSTALLAZIONE.txt" -Encoding UTF8
 
       - name: Upload compiled game
         uses: actions/upload-artifact@v4
