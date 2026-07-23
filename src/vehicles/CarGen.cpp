@@ -39,6 +39,11 @@ void CCarGenerator::SwitchOn()
 	++CTheCarGenerators::CurrentActiveCount;
 }
 
+bool CCarGenerator::IsAt(float x, float y) const
+{
+	return Abs(m_vecPos.x - x) < 0.01f && Abs(m_vecPos.y - y) < 0.01f;
+}
+
 uint32 CCarGenerator::CalcNextGen()
 {
 	return CTimer::GetTimeInMilliseconds() + 4;
@@ -228,6 +233,31 @@ void CTheCarGenerators::Init()
 	NumOfCarGenerators = 0;
 	ProcessCounter = 0;
 	CurrentActiveCount = 0;
+}
+
+void CTheCarGenerators::ApplyCompletedGameState()
+{
+	// Mission 0 normally switches on the parked-car generators after the
+	// introduction.  The completed story later removes the Belly-Up vans
+	// from the destroyed fish factory and replaces the Colombian cars at
+	// Fort Staunton.  Joey's BF Injection remains controlled by its own
+	// time-of-day script, which is not part of completed free roam.
+	CurrentActiveCount = 0;
+	for (uint32 i = 0; i < NumOfCarGenerators; i++) {
+		CCarGenerator &generator = CarGeneratorArray[i];
+		bool disabledAtStoryEnd =
+			generator.IsAt(930.875f, -267.625f) ||
+			generator.IsAt(978.5625f, -1093.0f) ||
+			generator.IsAt(996.25f, -1127.5f) ||
+			generator.IsAt(1012.5f, -1141.0f) ||
+			generator.IsAt(352.375f, -345.5f) ||
+			generator.IsAt(394.6875f, -171.375f);
+
+		if (disabledAtStoryEnd)
+			generator.SetUsesRemaining(0);
+		else
+			generator.SwitchOn();
+	}
 }
 
 void CTheCarGenerators::SaveAllCarGenerators(uint8 *buffer, uint32 *size)

@@ -6,6 +6,7 @@
 #include "Bike.h"
 #include "Camera.h"
 #include "CarCtrl.h"
+#include "CarGen.h"
 #include "Cranes.h"
 #include "Credits.h"
 #include "CutsceneMgr.h"
@@ -72,6 +73,26 @@ UnlockCorleoneWorld(void)
 	ThePaths.SwitchRoadsOffInArea(529.5625f, 581.375f, 65.6875f, 106.5f, -30.0f, 0.0f, false);
 	ThePaths.SwitchRoadsOffInArea(-69.0625f, -46.75f, -648.0f, -614.0f, 39.0f, 50.0f, false);
 	ThePaths.SwitchRoadsOffInArea(484.0f, 496.6875f, 44.1875f, 75.5f, -30.0f, 0.0f, false);
+}
+
+static void
+ApplyCompletedStoryZoneState(void)
+{
+	// Preserve the zone tables initialized by the original main.scm and
+	// apply only the two permanent population changes made by story
+	// missions.  This keeps every other district's vanilla gang, police and
+	// vehicle distribution intact.
+	int16 fishFactory = CTheZones::FindZoneByLabelAndReturnIndex("FISHFAC");
+	if (fishFactory >= 0) {
+		CTheZones::SetZonePedInfo(fishFactory, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+		CTheZones::SetZonePedInfo(fishFactory, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+	}
+
+	int16 construction = CTheZones::FindZoneByLabelAndReturnIndex("CONSTRU");
+	if (construction >= 0) {
+		CTheZones::SetZonePedInfo(construction, 1, 30, 0, 0, 0, 250, 0, 50, 0, 0, 0, 20);
+		CTheZones::SetZonePedInfo(construction, 0, 15, 0, 0, 0, 300, 0, 70, 0, 0, 0, 10);
+	}
 }
 
 int8 CRunningScript::ProcessCommands1000To1099(int32 command)
@@ -343,6 +364,8 @@ int8 CRunningScript::ProcessCommands1000To1099(int32 command)
 		// game, so loading an existing save is left untouched.
 		if (ScriptParams[0] == 0 && !m_bIsMissionScript) {
 			UnlockCorleoneWorld();
+			ApplyCompletedStoryZoneState();
+			CTheCarGenerators::ApplyCompletedGameState();
 			CPlayerPed *player = FindPlayerPed();
 			if (player) {
 				CVector pos(1458.688f, -187.25f, 55.0f);

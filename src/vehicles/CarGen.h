@@ -35,6 +35,7 @@ public:
 	bool CheckForBlockage();
 	bool CheckIfWithinRangeOfAnyPlayer();
 	void SetUsesRemaining(uint16 uses) { m_nUsesRemaining = uses; }
+	bool IsAt(float x, float y) const;
 };
 
 class CTheCarGenerators
@@ -49,6 +50,7 @@ public:
 	static void Process();
 	static int32 CreateCarGenerator(float x, float y, float z, float angle, int32 mi, int16 color1, int16 color2, uint8 force, uint8 alarm, uint8 lock, uint16 min_delay, uint16 max_delay);
 	static void Init();
+	static void ApplyCompletedGameState();
 	static void SaveAllCarGenerators(uint8 *, uint32 *);
 	static void LoadAllCarGenerators(uint8 *, uint32);
 };
