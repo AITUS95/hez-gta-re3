@@ -99,7 +99,11 @@ CCarCtrl::GenerateRandomCars()
 		else if (--CountDownToCarsAtStart == 0) {
 			for (int i = 0; i < 50; i++)
 				GenerateOneRandomCar();
-			CTheCarGenerators::GenerateEvenIfPlayerIsCloseCounter = 20;
+			// Give parked generators enough time to load their models after
+			// a new-game teleport or a hospital/police restart.  The
+			// original 20-frame window can expire before nearby vehicles
+			// such as the Leone Sentinels or hospital ambulance are ready.
+			CTheCarGenerators::GenerateEvenIfPlayerIsCloseCounter = CARGEN_SPAWN_AFTER_TELEPORT_FRAMES;
 		}
 	}
 	/* Approximately once per 4 seconds. */

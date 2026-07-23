@@ -3,7 +3,8 @@
 #include "config.h"
 
 enum {
-	CARGEN_MAXACTUALLIMIT = 100
+	CARGEN_MAXACTUALLIMIT = 100,
+	CARGEN_SPAWN_AFTER_TELEPORT_FRAMES = 120
 };
 
 class CCarGenerator

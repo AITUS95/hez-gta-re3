@@ -625,7 +625,9 @@ CPopulation::AddToPopulation(float minDist, float maxDist, float minDistOffScree
 
 		if (pedTypeToAdd >= PEDTYPE_GANG1 && pedTypeToAdd <= PEDTYPE_GANG9) {
 			int randVal = CGeneral::GetRandomNumber() % 100;
-			if (randVal < 50)
+			// Keep each zone's vanilla gang selection and composition, but
+			// allow 20% more of the selected gang spawn attempts to proceed.
+			if (randVal < 40)
 				return;
 
 			if (randVal < 57) {
