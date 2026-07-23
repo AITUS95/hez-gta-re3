@@ -4,6 +4,7 @@
 #include "ScriptCommands.h"
 
 #include "Bike.h"
+#include "Camera.h"
 #include "CarCtrl.h"
 #include "Cranes.h"
 #include "Credits.h"
@@ -18,8 +19,11 @@
 #include "GenericGameStorage.h"
 #endif
 #include "Messages.h"
+#include "Object.h"
 #include "Pad.h"
 #include "Particle.h"
+#include "PathFind.h"
+#include "PlayerPed.h"
 #include "Phones.h"
 #include "Population.h"
 #include "Pools.h"
@@ -30,11 +34,45 @@
 #include "Stats.h"
 #include "Streaming.h"
 #include "Weather.h"
+#include "World.h"
 #include "Zones.h"
 #include "main.h"
 
 // NB: on PS2 this file did not exist; ProcessCommands1000To1099 was in Script5.cpp and ProcessCommands1100To1199 was only added on PC
 // however to avoid redundant copies of code, Script6.cpp is used with PS2 defines
+
+static bool
+IsCorleoneWorldBlocker(const CVector &pos)
+{
+	return (pos - CVector(988.9375f, -471.75f, 5.1875f)).MagnitudeSqr() < 1.0f ||
+	       (pos - CVector(730.3125f, 172.4375f, -21.0625f)).MagnitudeSqr() < 1.0f ||
+	       (pos - CVector(-73.125f, -630.3125f, 25.875f)).MagnitudeSqr() < 1.0f;
+}
+
+static void
+UnlockCorleoneWorld(void)
+{
+	// These three script objects physically close the Portland subway,
+	// Portland tunnel and Staunton lift bridge before story progression.
+	CObjectPool *objectPool = CPools::GetObjectPool();
+	for (int32 i = objectPool->GetSize() - 1; i >= 0; i--) {
+		CObject *object = objectPool->GetSlot(i);
+		if (object && IsCorleoneWorldBlocker(object->GetPosition())) {
+			CWorld::Remove(object);
+			delete object;
+		}
+	}
+
+	// Restore only the road links normally enabled when Portland and
+	// Staunton are completed. All unrelated mission and traffic areas keep
+	// their original state.
+	ThePaths.SwitchRoadsOffInArea(619.5625f, 834.25f, -954.5f, -911.5f, 32.0f, 45.0f, false);
+	ThePaths.SwitchRoadsOffInArea(659.5625f, 945.75f, 147.5f, 200.0f, -20.0f, 5.0f, false);
+	ThePaths.SwitchPedRoadsOffInArea(659.5625f, 945.75f, 147.5f, 200.0f, -25.0f, 5.0f, false);
+	ThePaths.SwitchRoadsOffInArea(529.5625f, 581.375f, 65.6875f, 106.5f, -30.0f, 0.0f, false);
+	ThePaths.SwitchRoadsOffInArea(-69.0625f, -46.75f, -648.0f, -614.0f, 39.0f, 50.0f, false);
+	ThePaths.SwitchRoadsOffInArea(484.0f, 496.6875f, 44.1875f, 75.5f, -30.0f, 0.0f, false);
+}
 
 int8 CRunningScript::ProcessCommands1000To1099(int32 command)
 {
@@ -297,6 +335,31 @@ int8 CRunningScript::ProcessCommands1000To1099(int32 command)
 	case COMMAND_LOAD_AND_LAUNCH_MISSION_INTERNAL:
 	{
 		CollectParameters(&m_nIp, 1);
+
+		// A Corleone new game is a completed free-roam game.  Keep the
+		// original main script for normal traffic, zones, garages and world
+		// objects, but do not launch GTA III's bridge/8-Ball introduction.
+		// Mission 0 is only launched by the main script when starting a new
+		// game, so loading an existing save is left untouched.
+		if (ScriptParams[0] == 0 && !m_bIsMissionScript) {
+			UnlockCorleoneWorld();
+			CPlayerPed *player = FindPlayerPed();
+			if (player) {
+				CVector pos(1458.688f, -187.25f, 55.0f);
+				CStreaming::LoadScene(pos);
+				pos.z = CWorld::FindGroundZForCoord(pos.x, pos.y);
+				pos.z += player->GetDistanceFromCentreOfMassToBaseOfModel();
+				player->Teleport(pos);
+				player->m_fRotationCur = player->m_fRotationDest = DEGTORAD(180.0f);
+				player->SetHeading(player->m_fRotationCur);
+				CTheScripts::ClearSpaceForMissionEntity(pos, player);
+				TheCamera.RestoreWithJumpCut();
+				TheCamera.SetFadeColour(0, 0, 0);
+				TheCamera.Fade(1.0f, FADE_IN);
+			}
+			return 0;
+		}
+
 #ifdef MISSION_REPLAY
 		missionRetryScriptIndex = ScriptParams[0];
 		if (missionRetryScriptIndex == 19)

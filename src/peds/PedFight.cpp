@@ -150,6 +150,12 @@ CheckForPedsOnGroundToAttack(CPed *attacker, CPed **pedOnGround)
 void
 CPed::SetPointGunAt(CEntity *to)
 {
+	if (m_nPedType == PEDTYPE_GANG1 && to && to->IsPed() &&
+	    ((CPed*)to)->IsPlayer()) {
+		ClearPointGunAt();
+		return;
+	}
+
 	if (to) {
 		SetLookFlag(to, true);
 		SetAimFlag(to);
@@ -246,6 +252,12 @@ CPed::SetAttack(CEntity *victim)
 	CPed *victimPed = nil;
 	if (victim && victim->IsPed())
 		victimPed = (CPed*)victim;
+
+	if (m_nPedType == PEDTYPE_GANG1 && victimPed && victimPed->IsPlayer()) {
+		bIsAttacking = false;
+		ClearPointGunAt();
+		return;
+	}
 
 	CAnimBlendAssociation *animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_IDLE_BIGGUN);
 	if (animAssoc) {

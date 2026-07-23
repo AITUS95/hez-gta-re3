@@ -171,6 +171,22 @@ CPed::SetObjective(eObjective newObj, void *entity)
 	if (DyingOrDead())
 		return;
 
+	// No AI or mission script may turn a Leone into an enemy or follower of
+	// the player. Leone only receive a temporary combat objective against
+	// the player's attacker in MakeNearbyLeoneDefendPlayer().
+	if (m_nPedType == PEDTYPE_GANG1 &&
+	    (newObj == OBJECTIVE_KILL_CHAR_ON_FOOT ||
+	     newObj == OBJECTIVE_KILL_CHAR_ANY_MEANS ||
+	     newObj == OBJECTIVE_MUG_CHAR ||
+	     newObj == OBJECTIVE_FLEE_CHAR_ON_FOOT_TILL_SAFE ||
+	     newObj == OBJECTIVE_FLEE_CHAR_ON_FOOT_ALWAYS ||
+	     newObj == OBJECTIVE_GOTO_CHAR_ON_FOOT ||
+	     newObj == OBJECTIVE_FOLLOW_CHAR_IN_FORMATION ||
+	     newObj == OBJECTIVE_GUARD_ATTACK ||
+	     newObj == OBJECTIVE_SET_LEADER) &&
+	    entity && ((CEntity*)entity)->IsPed() && ((CPed*)entity)->IsPlayer())
+		return;
+
 	if (m_prevObjective == newObj) {
 		// Why?
 		if (m_prevObjective != OBJECTIVE_NONE)
@@ -2160,7 +2176,8 @@ MakeNearbyLeoneDefendPlayer(CEntity *target)
 		if ((leone->GetPosition() - player->GetPosition()).MagnitudeSqr() > SQR(40.0f))
 			continue;
 
-		leone->SetLeader(player);
+		if (leone->m_leader == player)
+			leone->ClearLeader();
 		leone->SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, enemy);
 		leone->SetObjectiveTimer(30000);
 		leone->SetMoveState(PEDMOVE_RUN);
