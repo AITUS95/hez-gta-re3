@@ -20,8 +20,10 @@
 #include "GenericGameStorage.h"
 #endif
 #include "Messages.h"
+#include "Object.h"
 #include "Pad.h"
 #include "Particle.h"
+#include "PathFind.h"
 #include "PlayerPed.h"
 #include "Phones.h"
 #include "Population.h"
@@ -39,6 +41,59 @@
 
 // NB: on PS2 this file did not exist; ProcessCommands1000To1099 was in Script5.cpp and ProcessCommands1100To1199 was only added on PC
 // however to avoid redundant copies of code, Script6.cpp is used with PS2 defines
+
+static bool
+IsCorleoneWorldBlocker(const CVector &pos)
+{
+	return (pos - CVector(988.9375f, -471.75f, 5.1875f)).MagnitudeSqr() < 1.0f ||
+	       (pos - CVector(730.3125f, 172.4375f, -21.0625f)).MagnitudeSqr() < 1.0f ||
+	       (pos - CVector(-73.125f, -630.3125f, 25.875f)).MagnitudeSqr() < 1.0f;
+}
+
+static void
+UnlockCorleoneWorld(void)
+{
+	// These three script objects physically close the Portland subway,
+	// Portland tunnel and Staunton lift bridge before story progression.
+	CObjectPool *objectPool = CPools::GetObjectPool();
+	for (int32 i = objectPool->GetSize() - 1; i >= 0; i--) {
+		CObject *object = objectPool->GetSlot(i);
+		if (object && IsCorleoneWorldBlocker(object->GetPosition())) {
+			CWorld::Remove(object);
+			delete object;
+		}
+	}
+
+	// Restore only the road links normally enabled when Portland and
+	// Staunton are completed. All unrelated mission and traffic areas keep
+	// their original state.
+	ThePaths.SwitchRoadsOffInArea(619.5625f, 834.25f, -954.5f, -911.5f, 32.0f, 45.0f, false);
+	ThePaths.SwitchRoadsOffInArea(659.5625f, 945.75f, 147.5f, 200.0f, -20.0f, 5.0f, false);
+	ThePaths.SwitchPedRoadsOffInArea(659.5625f, 945.75f, 147.5f, 200.0f, -25.0f, 5.0f, false);
+	ThePaths.SwitchRoadsOffInArea(529.5625f, 581.375f, 65.6875f, 106.5f, -30.0f, 0.0f, false);
+	ThePaths.SwitchRoadsOffInArea(-69.0625f, -46.75f, -648.0f, -614.0f, 39.0f, 50.0f, false);
+	ThePaths.SwitchRoadsOffInArea(484.0f, 496.6875f, 44.1875f, 75.5f, -30.0f, 0.0f, false);
+}
+
+static void
+ApplyCompletedStoryZoneState(void)
+{
+	// Preserve the zone tables initialized by the original main.scm and
+	// apply only the two permanent population changes made by story
+	// missions.  This keeps every other district's vanilla gang, police and
+	// vehicle distribution intact.
+	int16 fishFactory = CTheZones::FindZoneByLabelAndReturnIndex("FISHFAC");
+	if (fishFactory >= 0) {
+		CTheZones::SetZonePedInfo(fishFactory, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+		CTheZones::SetZonePedInfo(fishFactory, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+	}
+
+	int16 construction = CTheZones::FindZoneByLabelAndReturnIndex("CONSTRU");
+	if (construction >= 0) {
+		CTheZones::SetZonePedInfo(construction, 1, 30, 0, 0, 0, 250, 0, 50, 0, 0, 0, 20);
+		CTheZones::SetZonePedInfo(construction, 0, 15, 0, 0, 0, 300, 0, 70, 0, 0, 0, 10);
+	}
+}
 
 static void
 IncreaseRedLightLeoneDensity(void)
@@ -316,27 +371,54 @@ int8 CRunningScript::ProcessCommands1000To1099(int32 command)
 	{
 		CollectParameters(&m_nIp, 1);
 
-		// Keep the original fresh-game world, traffic and zone state while
-		// disabling every mission file.  Mission 0 receives the one-time
-		// free-roam setup that its skipped introduction would normally do.
+		// A Corleone new game is a completed free-roam game.  Keep the
+		// original main script for normal traffic, zones, garages and world
+		// objects, but do not launch GTA III's bridge/8-Ball introduction.
+		// Mission 0 is only launched by the main script when starting a new
+		// game, so loading an existing save is left untouched.
 		if (ScriptParams[0] == 0 && !m_bIsMissionScript) {
-			CTheCarGenerators::ApplyFreshGameState();
+			UnlockCorleoneWorld();
+			ApplyCompletedStoryZoneState();
 			IncreaseRedLightLeoneDensity();
+			CTheCarGenerators::ApplyCompletedGameState();
 			CPlayerPed *player = FindPlayerPed();
 			if (player) {
-				CVector pos(885.0f, -310.0f, 10.0f);
+				CVector pos(1458.688f, -187.25f, 55.0f);
 				CStreaming::LoadScene(pos);
 				pos.z = CWorld::FindGroundZForCoord(pos.x, pos.y);
 				pos.z += player->GetDistanceFromCentreOfMassToBaseOfModel();
 				player->Teleport(pos);
-				player->m_fRotationCur = player->m_fRotationDest = DEGTORAD(90.0f);
+				player->m_fRotationCur = player->m_fRotationDest = DEGTORAD(180.0f);
 				player->SetHeading(player->m_fRotationCur);
 				CTheScripts::ClearSpaceForMissionEntity(pos, player);
 				TheCamera.RestoreWithJumpCut();
 				TheCamera.SetFadeColour(0, 0, 0);
 				TheCamera.Fade(1.0f, FADE_IN);
 			}
+			return 0;
 		}
+
+#ifdef MISSION_REPLAY
+		missionRetryScriptIndex = ScriptParams[0];
+		if (missionRetryScriptIndex == 19)
+			CStats::LastMissionPassedName[0] = '\0';
+#endif
+		CTimer::Suspend();
+		int offset = CTheScripts::MultiScriptArray[ScriptParams[0]];
+#ifdef USE_DEBUG_SCRIPT_LOADER
+		int handle = CTheScripts::OpenScript();
+#else
+		CFileMgr::ChangeDir("\\");
+		int handle = CFileMgr::OpenFile("data\\main.scm", "rb");
+#endif
+		CFileMgr::Seek(handle, offset, 0);
+		CFileMgr::Read(handle, (const char*)&CTheScripts::ScriptSpace[SIZE_MAIN_SCRIPT], SIZE_MISSION_SCRIPT);
+		CFileMgr::CloseFile(handle);
+		CRunningScript* pMissionScript = CTheScripts::StartNewScript(SIZE_MAIN_SCRIPT);
+		CTimer::Resume();
+		pMissionScript->m_bIsMissionScript = true;
+		pMissionScript->m_bMissionFlag = true;
+		CTheScripts::bAlreadyRunningAMissionScript = true;
 		return 0;
 	}
 	case COMMAND_SET_OBJECT_DRAW_LAST:

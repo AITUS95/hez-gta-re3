@@ -254,7 +254,7 @@ CPlayerPed::SetInitialState(void)
 	SetPedState(PED_IDLE);
 	SetMoveState(PEDMOVE_STILL);
 	m_nLastPedState = PED_NONE;
-	m_animGroup = ASSOCGRP_PLAYER;
+	m_animGroup = ASSOCGRP_STD;
 	m_fMoveSpeed = 0.0f;
 	m_nSelectedWepSlot = WEAPONTYPE_UNARMED;
 	m_nEvadeAmount = 0;
@@ -1006,7 +1006,7 @@ CPlayerPed::ProcessAnimGroups(void)
 				groupToSet = ASSOCGRP_PLAYERBBBAT;
 			} else if (GetWeapon()->m_eWeaponType != WEAPONTYPE_COLT45 && GetWeapon()->m_eWeaponType != WEAPONTYPE_UZI) {
 				if (!GetWeapon()->IsType2Handed()) {
-					groupToSet = ASSOCGRP_PLAYER;
+					groupToSet = ASSOCGRP_STD;
 				} else {
 					groupToSet = ASSOCGRP_PLAYER2ARMED;
 				}

@@ -235,25 +235,25 @@ void CTheCarGenerators::Init()
 	CurrentActiveCount = 0;
 }
 
-void CTheCarGenerators::ApplyFreshGameState()
+void CTheCarGenerators::ApplyCompletedGameState()
 {
-	// Reproduce SWITCH_CAR_GENERATOR at the beginning of a vanilla game.
-	// Story and activity rewards stay disabled, while ordinary parked cars
-	// (including the Leone villa Sentinels) use their original generators.
+	// Mission 0 normally switches on the parked-car generators after the
+	// introduction.  The completed story later removes the Belly-Up vans
+	// from the destroyed fish factory and replaces the Colombian cars at
+	// Fort Staunton.  Joey's BF Injection remains controlled by its own
+	// time-of-day script, which is not part of completed free roam.
 	CurrentActiveCount = 0;
 	for (uint32 i = 0; i < NumOfCarGenerators; i++) {
 		CCarGenerator &generator = CarGeneratorArray[i];
-		bool disabledAtGameStart =
+		bool disabledAtStoryEnd =
 			generator.IsAt(930.875f, -267.625f) ||
-			generator.IsAt(933.6875f, -65.5625f) ||
-			generator.IsAt(339.8125f, -290.625f) ||
-			generator.IsAt(359.0625f, -291.0625f) ||
-			generator.IsAt(361.875f, -339.0625f) ||
-			generator.IsAt(568.0f, -686.0f) ||
-			generator.IsAt(132.0f, 173.875f) ||
-			generator.IsAt(-1268.438f, -528.625f);
+			generator.IsAt(978.5625f, -1093.0f) ||
+			generator.IsAt(996.25f, -1127.5f) ||
+			generator.IsAt(1012.5f, -1141.0f) ||
+			generator.IsAt(352.375f, -345.5f) ||
+			generator.IsAt(394.6875f, -171.375f);
 
-		if (disabledAtGameStart)
+		if (disabledAtStoryEnd)
 			generator.SetUsesRemaining(0);
 		else
 			generator.SwitchOn();
