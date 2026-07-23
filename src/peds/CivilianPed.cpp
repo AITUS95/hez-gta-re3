@@ -45,6 +45,33 @@ CCivilianPed::CCivilianPed(ePedType pedtype, uint32 mi) : CPed(pedtype)
 void
 CCivilianPed::CivilianAI(void)
 {
+	// Occasionally start a local fight when two different random gang
+	// members meet. This uses only peds already selected by the vanilla zone
+	// tables and never targets the player, civilians or mission characters.
+	if (IsGangMember() && CharCreatedBy == RANDOM_CHAR &&
+	    m_objective == OBJECTIVE_NONE && !InVehicle() &&
+	    ((CTimer::GetFrameCounter() + (uint8)m_randomSeed) & 0xFF) == 0 &&
+	    (CGeneral::GetRandomNumber() & 3) == 0) {
+		for (int i = 0; i < m_numNearPeds; i++) {
+			CPed *rival = m_nearPeds[i];
+			if (rival == nil || !rival->IsGangMember() ||
+			    rival->m_nPedType == m_nPedType ||
+			    rival->CharCreatedBy != RANDOM_CHAR ||
+			    rival->DyingOrDead() || !rival->IsPedInControl() ||
+			    rival->InVehicle())
+				continue;
+
+			if ((rival->GetPosition() - GetPosition()).MagnitudeSqr2D() > sq(18.0f) ||
+			    !OurPedCanSeeThisOne(rival))
+				continue;
+
+			SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, rival);
+			SetObjectiveTimer(20000);
+			SetMoveState(PEDMOVE_RUN);
+			break;
+		}
+	}
+
 	if (CTimer::GetTimeInMilliseconds() <= m_fleeTimer || m_objective != OBJECTIVE_NONE && !bRespondsToThreats
 		|| !IsPedInControl())  {
 

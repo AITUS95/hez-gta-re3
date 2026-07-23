@@ -95,20 +95,6 @@ ApplyCompletedStoryZoneState(void)
 	}
 }
 
-static void
-IncreaseRedLightLeoneDensity(void)
-{
-	int16 redLight = CTheZones::FindZoneByLabelAndReturnIndex("REDLIGH");
-	if (redLight < 0)
-		return;
-
-	// REDLIGH has no gang pedestrians in the vanilla table. Add only Leone
-	// members, keeping its original pedestrian density, police chance,
-	// civilian groups, traffic and every other gang entry unchanged.
-	CTheZones::SetZonePedInfo(redLight, 1, -1, 250, -1, -1, -1, -1, -1, -1, -1, -1, -1);
-	CTheZones::SetZonePedInfo(redLight, 0, -1, 350, -1, -1, -1, -1, -1, -1, -1, -1, -1);
-}
-
 int8 CRunningScript::ProcessCommands1000To1099(int32 command)
 {
 #if GTA_VERSION <= GTA3_PS2_160
@@ -379,7 +365,6 @@ int8 CRunningScript::ProcessCommands1000To1099(int32 command)
 		if (ScriptParams[0] == 0 && !m_bIsMissionScript) {
 			UnlockCorleoneWorld();
 			ApplyCompletedStoryZoneState();
-			IncreaseRedLightLeoneDensity();
 			CTheCarGenerators::ApplyCompletedGameState();
 			CPlayerPed *player = FindPlayerPed();
 			if (player) {
