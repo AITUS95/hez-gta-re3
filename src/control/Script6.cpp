@@ -95,6 +95,22 @@ ApplyCompletedStoryZoneState(void)
 	}
 }
 
+static void
+IncreasePortlandGangConflictDensity(void)
+{
+	const char *zoneLabels[] = { "REDLIGH", "TOWERS" };
+	for (int32 i = 0; i < ARRAY_SIZE(zoneLabels); i++) {
+		int16 zone = CTheZones::FindZoneByLabelAndReturnIndex(zoneLabels[i]);
+		if (zone < 0)
+			continue;
+
+		// Raise only Leone, Triad and Diablo presence. Keep the zone's
+		// pedestrian total, police, civilians, traffic and other gangs intact.
+		CTheZones::SetZonePedInfo(zone, 1, -1, 180, 180, 180, -1, -1, -1, -1, -1, -1, -1);
+		CTheZones::SetZonePedInfo(zone, 0, -1, 220, 220, 220, -1, -1, -1, -1, -1, -1, -1);
+	}
+}
+
 int8 CRunningScript::ProcessCommands1000To1099(int32 command)
 {
 #if GTA_VERSION <= GTA3_PS2_160
@@ -365,6 +381,7 @@ int8 CRunningScript::ProcessCommands1000To1099(int32 command)
 		if (ScriptParams[0] == 0 && !m_bIsMissionScript) {
 			UnlockCorleoneWorld();
 			ApplyCompletedStoryZoneState();
+			IncreasePortlandGangConflictDensity();
 			CTheCarGenerators::ApplyCompletedGameState();
 			CPlayerPed *player = FindPlayerPed();
 			if (player) {
