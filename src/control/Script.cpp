@@ -1362,10 +1362,18 @@ int8 CRunningScript::ProcessCommands0To99(int32 command)
 		script_assert(index < 1); /* Constant? Also no more double player glitch */
 		printf("&&&&&&&&&&&&&Creating player: %d\n", index);
 		if (!CStreaming::HasModelLoaded(MI_PLAYER)) {
-			CStreaming::RequestSpecialModel(MI_PLAYER, "mafia", STREAMFLAGS_DONT_REMOVE | STREAMFLAGS_DEPENDENCY);
+			CStreaming::RequestSpecialModel(MI_PLAYER, "player", STREAMFLAGS_DONT_REMOVE | STREAMFLAGS_DEPENDENCY);
+			CStreaming::LoadAllRequestedModels(false);
+		}
+		if (!CStreaming::HasModelLoaded(MI_GANG01)) {
+			CStreaming::RequestModel(MI_GANG01, STREAMFLAGS_DONT_REMOVE | STREAMFLAGS_DEPENDENCY);
 			CStreaming::LoadAllRequestedModels(false);
 		}
 		CPlayerPed::SetupPlayerPed(index);
+		CPlayerPed *player = CWorld::Players[index].m_pPed;
+		player->DeleteRwObject();
+		player->m_modelIndex = -1;
+		player->SetModelIndex(MI_GANG01);
 		CWorld::Players[index].m_pPed->CharCreatedBy = MISSION_CHAR;
 		CPlayerPed::DeactivatePlayerPed(index);
 		CVector pos = *(CVector*)&ScriptParams[1];
