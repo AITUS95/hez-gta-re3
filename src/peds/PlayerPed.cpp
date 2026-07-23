@@ -13,6 +13,8 @@
 #include "RpAnimBlend.h"
 #include "AnimBlendAssociation.h"
 #include "General.h"
+#include "ModelInfo.h"
+#include "PedModelInfo.h"
 #include "Pools.h"
 #include "Darkel.h"
 #include "CarCtrl.h"
@@ -957,6 +959,19 @@ void
 CPlayerPed::ProcessAnimGroups(void)
 {
 	AssocGroupId groupToSet;
+
+	// The normal player code switches to Claude-specific movement groups
+	// when a weapon is equipped. Keep the movement group declared by the
+	// Leone model instead, including while the starting Colt is selected.
+	if (GetModelIndex() == MI_GANG01) {
+		CPedModelInfo *modelInfo = (CPedModelInfo*)CModelInfo::GetModelInfo(GetModelIndex());
+		groupToSet = (AssocGroupId)modelInfo->m_animGroup;
+		if (m_animGroup != groupToSet) {
+			m_animGroup = groupToSet;
+			ReApplyMoveAnims();
+		}
+		return;
+	}
 
 #ifdef PC_PLAYER_CONTROLS
 	if ((m_fWalkAngle <= -DEGTORAD(50.0f) || m_fWalkAngle >= DEGTORAD(50.0f))
