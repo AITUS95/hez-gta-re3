@@ -451,6 +451,23 @@ CTheZones::GetZoneInfoForTimeOfDay(const CVector *pos, CZoneInfo *info)
 		info->pedGroup = night->pedGroup;
 
 	CheckZoneInfo(info);
+
+	// Corleone population profile: no ambient police, while the seven
+	// active story gangs keep a strong street presence in every district.
+	info->copDensity = 0;
+	for (int i = 0; i < NUM_GANGS; i++)
+		info->gangDensity[i] = i < 7 ? 70 : 0;
+
+	// Remove the police-car probability band and use the available part of
+	// the 0..1000 threshold range for gang vehicles.
+	info->copThreshold = info->carThreshold[5];
+	int16 gangCarWeight = Min(35, (1000 - info->copThreshold) / 7);
+	for (int i = 0; i < NUM_GANGS; i++) {
+		if (i < 7)
+			info->gangThreshold[i] = info->copThreshold + gangCarWeight * (i + 1);
+		else
+			info->gangThreshold[i] = info->gangThreshold[6];
+	}
 }
 
 void

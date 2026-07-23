@@ -1374,6 +1374,9 @@ int8 CRunningScript::ProcessCommands0To99(int32 command)
 		player->DeleteRwObject();
 		player->m_modelIndex = -1;
 		player->SetModelIndex(MI_GANG01);
+		uint32 coltSlot = player->GiveWeapon(WEAPONTYPE_COLT45, 999);
+		player->SetCurrentWeapon(coltSlot);
+		player->m_nSelectedWepSlot = coltSlot;
 		CWorld::Players[index].m_pPed->CharCreatedBy = MISSION_CHAR;
 		CPlayerPed::DeactivatePlayerPed(index);
 		CVector pos = *(CVector*)&ScriptParams[1];
