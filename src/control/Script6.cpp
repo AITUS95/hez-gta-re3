@@ -385,12 +385,13 @@ int8 CRunningScript::ProcessCommands1000To1099(int32 command)
 			CTheCarGenerators::ApplyCompletedGameState();
 			CPlayerPed *player = FindPlayerPed();
 			if (player) {
-				CVector pos(1458.688f, -187.25f, 55.0f);
+				// Leone mansion forecourt, facing the two parked Sentinels.
+				CVector pos(1425.0f, -182.0f, 55.0f);
 				CStreaming::LoadScene(pos);
 				pos.z = CWorld::FindGroundZForCoord(pos.x, pos.y);
 				pos.z += player->GetDistanceFromCentreOfMassToBaseOfModel();
 				player->Teleport(pos);
-				player->m_fRotationCur = player->m_fRotationDest = DEGTORAD(180.0f);
+				player->m_fRotationCur = player->m_fRotationDest = DEGTORAD(140.0f);
 				player->SetHeading(player->m_fRotationCur);
 				CTheScripts::ClearSpaceForMissionEntity(pos, player);
 				TheCamera.RestoreWithJumpCut();
