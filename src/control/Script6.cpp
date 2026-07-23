@@ -98,16 +98,18 @@ ApplyCompletedStoryZoneState(void)
 static void
 IncreasePortlandGangConflictDensity(void)
 {
-	const char *zoneLabels[] = { "REDLIGH", "TOWERS" };
-	for (int32 i = 0; i < ARRAY_SIZE(zoneLabels); i++) {
-		int16 zone = CTheZones::FindZoneByLabelAndReturnIndex(zoneLabels[i]);
-		if (zone < 0)
-			continue;
+	int16 redLight = CTheZones::FindZoneByLabelAndReturnIndex("REDLIGH");
+	if (redLight >= 0) {
+		// Red Light District: Leone and Triads only.
+		CTheZones::SetZonePedInfo(redLight, 1, -1, 180, 180, -1, -1, -1, -1, -1, -1, -1, -1);
+		CTheZones::SetZonePedInfo(redLight, 0, -1, 220, 220, -1, -1, -1, -1, -1, -1, -1, -1);
+	}
 
-		// Raise only Leone, Triad and Diablo presence. Keep the zone's
-		// pedestrian total, police, civilians, traffic and other gangs intact.
-		CTheZones::SetZonePedInfo(zone, 1, -1, 180, 180, 180, -1, -1, -1, -1, -1, -1, -1);
-		CTheZones::SetZonePedInfo(zone, 0, -1, 220, 220, 220, -1, -1, -1, -1, -1, -1, -1);
+	int16 hepburn = CTheZones::FindZoneByLabelAndReturnIndex("TOWERS");
+	if (hepburn >= 0) {
+		// Hepburn Heights: Leone and Diablos only.
+		CTheZones::SetZonePedInfo(hepburn, 1, -1, 180, -1, 180, -1, -1, -1, -1, -1, -1, -1);
+		CTheZones::SetZonePedInfo(hepburn, 0, -1, 220, -1, 220, -1, -1, -1, -1, -1, -1, -1);
 	}
 }
 
