@@ -1,5480 +1,1 @@
-#include "common.h"
-
-#include "main.h"
-#include "Particle.h"
-#include "RpAnimBlend.h"
-#include "Ped.h"
-#include "Wanted.h"
-#include "AnimBlendAssociation.h"
-#include "DMAudio.h"
-#include "General.h"
-#include "HandlingMgr.h"
-#include "Replay.h"
-#include "Camera.h"
-#include "PedPlacement.h"
-#include "ZoneCull.h"
-#include "Pad.h"
-#include "Pickups.h"
-#include "Train.h"
-#include "PedRoutes.h"
-#include "CopPed.h"
-#include "Script.h"
-#include "CarCtrl.h"
-#include "WaterLevel.h"
-#include "CarAI.h"
-#include "Zones.h"
-#include "Cranes.h"
-#include "Pools.h"
-#include "PlayerPed.h"
-
-CVector vecPedCarDoorAnimOffset;
-CVector vecPedCarDoorLoAnimOffset;
-CVector vecPedVanRearDoorAnimOffset;
-CVector vecPedQuickDraggedOutCarAnimOffset;
-CVector vecPedDraggedOutCarAnimOffset;
-CVector vecPedTrainDoorAnimOffset;
-
-void
-CPed::SetObjectiveTimer(int time)
-{
-	if (time == 0) {
-		m_objectiveTimer = 0;
-	} else if (CTimer::GetTimeInMilliseconds() > m_objectiveTimer) {
-		m_objectiveTimer = CTimer::GetTimeInMilliseconds() + time;
-	}
-}
-
-void
-CPed::SetStoredObjective(void)
-{
-	if (m_objective == m_prevObjective)
-		return;
-
-	switch (m_objective)
-	{
-		case OBJECTIVE_FLEE_ON_FOOT_TILL_SAFE:
-		case OBJECTIVE_KILL_CHAR_ON_FOOT:
-		case OBJECTIVE_KILL_CHAR_ANY_MEANS:
-		case OBJECTIVE_FLEE_CHAR_ON_FOOT_TILL_SAFE:
-		case OBJECTIVE_FLEE_CHAR_ON_FOOT_ALWAYS:
-		case OBJECTIVE_GOTO_CHAR_ON_FOOT:
-		case OBJECTIVE_FOLLOW_CHAR_IN_FORMATION:
-		case OBJECTIVE_LEAVE_CAR:
-		case OBJECTIVE_ENTER_CAR_AS_PASSENGER:
-		case OBJECTIVE_ENTER_CAR_AS_DRIVER:
-		case OBJECTIVE_GOTO_AREA_ON_FOOT:
-		case OBJECTIVE_RUN_TO_AREA:
-			return;
-		default:
-			m_prevObjective = m_objective;
-	}
-}
-
-void
-CPed::ForceStoredObjective(eObjective objective)
-{
-	if (objective != OBJECTIVE_ENTER_CAR_AS_DRIVER && objective != OBJECTIVE_ENTER_CAR_AS_PASSENGER) {
-		m_prevObjective = m_objective;
-		return;
-	}
-
-	switch (m_objective)
-	{
-		case OBJECTIVE_FLEE_ON_FOOT_TILL_SAFE:
-		case OBJECTIVE_KILL_CHAR_ON_FOOT:
-		case OBJECTIVE_FLEE_CHAR_ON_FOOT_TILL_SAFE:
-		case OBJECTIVE_FLEE_CHAR_ON_FOOT_ALWAYS:
-		case OBJECTIVE_GOTO_CHAR_ON_FOOT:
-		case OBJECTIVE_ENTER_CAR_AS_PASSENGER:
-		case OBJECTIVE_ENTER_CAR_AS_DRIVER:
-		case OBJECTIVE_GOTO_AREA_ON_FOOT:
-		case OBJECTIVE_RUN_TO_AREA:
-			return;
-		default:
-			m_prevObjective = m_objective;
-	}
-}
-
-bool
-CPed::IsTemporaryObjective(eObjective objective)
-{
-	return objective == OBJECTIVE_LEAVE_CAR || objective == OBJECTIVE_SET_LEADER ||
-#ifdef VC_PED_PORTS
-		objective == OBJECTIVE_LEAVE_CAR_AND_DIE ||
-#endif
-		objective == OBJECTIVE_ENTER_CAR_AS_DRIVER || objective == OBJECTIVE_ENTER_CAR_AS_PASSENGER;
-}
-
-void
-CPed::SetObjective(eObjective newObj)
-{
-	if (DyingOrDead())
-		return;
-
-	if (newObj == OBJECTIVE_NONE) {
-		if ((m_objective == OBJECTIVE_LEAVE_CAR || m_objective == OBJECTIVE_ENTER_CAR_AS_DRIVER || m_objective == OBJECTIVE_ENTER_CAR_AS_PASSENGER
-#ifdef VC_PED_PORTS
-			|| m_objective == OBJECTIVE_LEAVE_CAR_AND_DIE)
-			&& !IsPlayer()
-#else
-			)
-#endif
-			&& !IsPedInControl()) {
-
-			bStartWanderPathOnFoot = true;
-			return;
-		}
-		// Unused code from assembly...
-		/*
-		else if(m_objective == OBJECTIVE_FLEE_CAR) {
-
-		} else {
-
-		}
-		*/
-		m_objective = OBJECTIVE_NONE;
-		m_prevObjective = OBJECTIVE_NONE;
-	} else if (m_prevObjective != newObj || m_prevObjective == OBJECTIVE_NONE) {
-		SetObjectiveTimer(0);
-
-		if (m_objective == newObj)
-			return;
-
-		if (IsTemporaryObjective(m_objective)) {
-			m_prevObjective = newObj;
-		} else {
-			if (m_objective != newObj)
-				SetStoredObjective();
-
-			m_objective = newObj;
-		}
-		bObjectiveCompleted = false;
-
-		switch (newObj) {
-			case OBJECTIVE_NONE:
-				m_prevObjective = OBJECTIVE_NONE;
-				break;
-			case OBJECTIVE_HAIL_TAXI:
-				m_nWaitTimer = 0;
-				SetIdle();
-				SetMoveState(PEDMOVE_STILL);
-				break;
-			default:
-				break;
-		}
-	}
-}
-
-void
-CPed::SetObjective(eObjective newObj, void *entity)
-{
-	if (DyingOrDead())
-		return;
-
-	// No AI or mission script may turn a Leone into an enemy or follower of
-	// the player. Leone only receive a temporary combat objective against
-	// the player's attacker in MakeNearbyLeoneDefendPlayer().
-	if (m_nPedType == PEDTYPE_GANG1 &&
-	    (newObj == OBJECTIVE_KILL_CHAR_ON_FOOT ||
-	     newObj == OBJECTIVE_KILL_CHAR_ANY_MEANS ||
-	     newObj == OBJECTIVE_MUG_CHAR ||
-	     newObj == OBJECTIVE_FLEE_CHAR_ON_FOOT_TILL_SAFE ||
-	     newObj == OBJECTIVE_FLEE_CHAR_ON_FOOT_ALWAYS ||
-	     newObj == OBJECTIVE_GOTO_CHAR_ON_FOOT ||
-	     newObj == OBJECTIVE_FOLLOW_CHAR_IN_FORMATION ||
-	     newObj == OBJECTIVE_GUARD_ATTACK ||
-	     newObj == OBJECTIVE_SET_LEADER) &&
-	    entity && ((CEntity*)entity)->IsPed() && ((CPed*)entity)->IsPlayer())
-		return;
-
-	if (m_prevObjective == newObj) {
-		// Why?
-		if (m_prevObjective != OBJECTIVE_NONE)
-			return;
-	}
-
-	if (entity == this)
-		return;
-
-	SetObjectiveTimer(0);
-	if (m_objective == newObj) {
-		switch (newObj) {
-			case OBJECTIVE_KILL_CHAR_ON_FOOT:
-			case OBJECTIVE_KILL_CHAR_ANY_MEANS:
-			case OBJECTIVE_GOTO_CHAR_ON_FOOT:
-			case OBJECTIVE_FOLLOW_CHAR_IN_FORMATION:
-			case OBJECTIVE_GOTO_AREA_ANY_MEANS:
-			case OBJECTIVE_GUARD_ATTACK:
-				if (m_pedInObjective == entity)
-					return;
-
-				break;
-			case OBJECTIVE_LEAVE_CAR:
-			case OBJECTIVE_FLEE_CAR:
-#ifdef VC_PED_PORTS
-			case OBJECTIVE_LEAVE_CAR_AND_DIE:
-#endif
-				return;
-			case OBJECTIVE_ENTER_CAR_AS_PASSENGER:
-			case OBJECTIVE_ENTER_CAR_AS_DRIVER:
-			case OBJECTIVE_DESTROY_CAR:
-			case OBJECTIVE_SOLICIT_VEHICLE:
-			case OBJECTIVE_BUY_ICE_CREAM:
-				if (m_carInObjective == entity)
-					return;
-
-				break;
-			case OBJECTIVE_SET_LEADER:
-				if (m_leader == entity)
-					return;
-
-				break;
-			default:
-				break;
-		}
-	} else {
-		if ((newObj == OBJECTIVE_LEAVE_CAR
-#ifdef VC_PED_PORTS
-			|| newObj == OBJECTIVE_LEAVE_CAR_AND_DIE
-#endif
-			) && !bInVehicle)
-			return;
-	}
-
-#ifdef VC_PED_PORTS
-	ClearPointGunAt();
-#endif
-	bObjectiveCompleted = false;
-	if (IsTemporaryObjective(m_objective) && !IsTemporaryObjective(newObj)) {
-		m_prevObjective = newObj;
-	} else {
-		if (m_objective != newObj) {
-			if (IsTemporaryObjective(newObj))
-				ForceStoredObjective(newObj);
-			else
-				SetStoredObjective();
-		}
-		m_objective = newObj;
-	}
-
-	switch (newObj) {
-		case OBJECTIVE_WAIT_IN_CAR_THEN_GET_OUT:
-
-			// In this special case, entity parameter isn't CEntity, but int.
-			SetObjectiveTimer((uintptr)entity);
-			break;
-		case OBJECTIVE_KILL_CHAR_ON_FOOT:
-		case OBJECTIVE_KILL_CHAR_ANY_MEANS:
-		case OBJECTIVE_MUG_CHAR:
-			m_pNextPathNode = nil;
-			bUsePedNodeSeek = false;
-			m_vecSeekPos = CVector(0.0f, 0.0f, 0.0f);
-			m_pedInObjective = (CPed*)entity;
-			m_pedInObjective->RegisterReference((CEntity**)&m_pedInObjective);
-			m_pLookTarget = (CEntity*)entity;
-			m_pLookTarget->RegisterReference((CEntity**)&m_pLookTarget);
-			break;
-		case OBJECTIVE_FLEE_CHAR_ON_FOOT_TILL_SAFE:
-		case OBJECTIVE_FLEE_CHAR_ON_FOOT_ALWAYS:
-		case OBJECTIVE_GOTO_CHAR_ON_FOOT:
-		case OBJECTIVE_GUARD_ATTACK:
-			m_vecSeekPos = CVector(0.0f, 0.0f, 0.0f);
-			m_pedInObjective = (CPed*)entity;
-			m_pedInObjective->RegisterReference((CEntity**)&m_pedInObjective);
-			break;
-		case OBJECTIVE_FOLLOW_CHAR_IN_FORMATION:
-			m_pedInObjective = (CPed*)entity;
-			m_pedInObjective->RegisterReference((CEntity**)&m_pedInObjective);
-			m_pedFormation = FORMATION_REAR;
-			break;
-		case OBJECTIVE_LEAVE_CAR:
-#ifdef VC_PED_PORTS
-		case OBJECTIVE_LEAVE_CAR_AND_DIE:
-#endif
-		case OBJECTIVE_FLEE_CAR:
-			m_carInObjective = (CVehicle*)entity;
-			m_carInObjective->RegisterReference((CEntity **)&m_carInObjective);
-			if (m_carInObjective->bIsBus && m_leaveCarTimer == 0) {
-				for (int i = 0; i < m_carInObjective->m_nNumMaxPassengers; i++) {
-					if (m_carInObjective->pPassengers[i] == this) {
-						m_leaveCarTimer = CTimer::GetTimeInMilliseconds() + 1200 * i;
-						break;
-					}
-				}
-			}
-
-			break;
-		case OBJECTIVE_ENTER_CAR_AS_PASSENGER:
-		case OBJECTIVE_ENTER_CAR_AS_DRIVER:
-			if (m_nMoveState == PEDMOVE_STILL)
-				SetMoveState(PEDMOVE_RUN);
-
-			if (((CVehicle*)entity)->m_vehType == VEHICLE_TYPE_BOAT && !IsPlayer()) {
-				RestorePreviousObjective();
-				break;
-			}
-			// fall through
-		case OBJECTIVE_DESTROY_CAR:
-		case OBJECTIVE_SOLICIT_VEHICLE:
-		case OBJECTIVE_BUY_ICE_CREAM:
-			m_carInObjective = (CVehicle*)entity;
-			m_carInObjective->RegisterReference((CEntity**)&m_carInObjective);
-			m_pSeekTarget = m_carInObjective;
-			m_pSeekTarget->RegisterReference((CEntity**)&m_pSeekTarget);
-			m_vecSeekPos = CVector(0.0f, 0.0f, 0.0f);
-			if (newObj == OBJECTIVE_SOLICIT_VEHICLE) {
-				m_objectiveTimer = CTimer::GetTimeInMilliseconds() + 10000;
-			} else if (m_objective == OBJECTIVE_ENTER_CAR_AS_PASSENGER && CharCreatedBy == MISSION_CHAR &&
-					(m_carInObjective->GetStatus() == STATUS_PLAYER_DISABLED || CPad::GetPad(CWorld::PlayerInFocus)->ArePlayerControlsDisabled())) {
-				SetObjectiveTimer(14000);
-			} else {
-				m_objectiveTimer = 0;
-			}
-			break;
-		case OBJECTIVE_SET_LEADER:
-			SetLeader((CEntity*)entity);
-			RestorePreviousObjective();
-			break;
-		default:
-			break;
-	}
-}
-
-void
-CPed::SetObjective(eObjective newObj, CVector dest, float safeDist)
-{
-	if (DyingOrDead())
-		return;
-
-	if (m_prevObjective != OBJECTIVE_NONE && m_prevObjective == newObj)
-		return;
-
-	SetObjectiveTimer(0);
-	if (m_objective == newObj) {
-		if (newObj == OBJECTIVE_GOTO_AREA_ANY_MEANS || newObj == OBJECTIVE_GOTO_AREA_ON_FOOT || newObj == OBJECTIVE_RUN_TO_AREA) {
-			if (m_nextRoutePointPos == dest && m_distanceToCountSeekDone == safeDist)
-				return;
-		} else if (newObj == OBJECTIVE_GUARD_SPOT) {
-			if (m_vecSeekPosEx == dest && m_distanceToCountSeekDoneEx == safeDist)
-				return;
-		}
-	}
-
-#ifdef VC_PED_PORTS
-	ClearPointGunAt();
-#endif
-	bObjectiveCompleted = false;
-	if (IsTemporaryObjective(m_objective)) {
-		m_prevObjective = newObj;
-	} else {
-		if (m_objective != newObj)
-			SetStoredObjective();
-
-		m_objective = newObj;
-	}
-	
-	if (newObj == OBJECTIVE_GUARD_SPOT) {
-		m_vecSeekPosEx = dest;
-		m_distanceToCountSeekDoneEx = safeDist;
-	} else if (newObj == OBJECTIVE_GOTO_AREA_ANY_MEANS || newObj == OBJECTIVE_GOTO_AREA_ON_FOOT || newObj == OBJECTIVE_RUN_TO_AREA) {
-		m_pNextPathNode = nil;
-		m_nextRoutePointPos = dest;
-		m_vecSeekPos = m_nextRoutePointPos;
-		bUsePedNodeSeek = true;
-	}
-}
-
-// Only used in 01E1: SET_CHAR_OBJ_FOLLOW_ROUTE opcode
-// IDA fails very badly in here, puts a fake loop and ignores SetFollowRoute call...
-void
-CPed::SetObjective(eObjective newObj, int16 routePoint, int16 routeType)
-{
-	if (DyingOrDead())
-		return;
-
-	if (m_prevObjective == newObj && m_prevObjective != OBJECTIVE_NONE)
-		return;
-
-	SetObjectiveTimer(0);
-
-	if (m_objective == newObj && newObj == OBJECTIVE_FOLLOW_ROUTE && m_routeLastPoint == routePoint && m_routeType == routeType)
-		return;
-
-	bObjectiveCompleted = false;
-	if (IsTemporaryObjective(m_objective)) {
-		m_prevObjective = newObj;
-	} else {
-		if (m_objective != newObj)
-			SetStoredObjective();
-
-		m_objective = newObj;
-	}
-
-	if (newObj == OBJECTIVE_FOLLOW_ROUTE) {
-		SetFollowRoute(routePoint, routeType);
-	}
-}
-
-void
-CPed::SetObjective(eObjective newObj, CVector dest)
-{
-	if (DyingOrDead())
-		return;
-
-	if (m_prevObjective != OBJECTIVE_NONE && m_prevObjective == newObj)
-		return;
-
-	SetObjectiveTimer(0);
-	if (m_objective == newObj) {
-		if (newObj == OBJECTIVE_GOTO_AREA_ANY_MEANS || newObj == OBJECTIVE_GOTO_AREA_ON_FOOT || newObj == OBJECTIVE_RUN_TO_AREA) {
-			if (m_nextRoutePointPos == dest)
-				return;
-		} else if (newObj == OBJECTIVE_GUARD_SPOT) {
-			if (m_vecSeekPosEx == dest)
-				return;
-		}
-	}
-
-#ifdef VC_PED_PORTS
-	ClearPointGunAt();
-#endif
-	bObjectiveCompleted = false;
-	switch (newObj) {
-		case OBJECTIVE_GUARD_SPOT:
-			m_vecSeekPosEx = dest;
-			m_distanceToCountSeekDoneEx = 5.0f;
-			SetMoveState(PEDMOVE_STILL);
-			break;
-		case OBJECTIVE_GUARD_AREA:
-		case OBJECTIVE_WAIT_IN_CAR:
-		case OBJECTIVE_WAIT_IN_CAR_THEN_GET_OUT:
-		case OBJECTIVE_KILL_CHAR_ON_FOOT:
-		case OBJECTIVE_KILL_CHAR_ANY_MEANS:
-		case OBJECTIVE_FLEE_CHAR_ON_FOOT_TILL_SAFE:
-		case OBJECTIVE_FLEE_CHAR_ON_FOOT_ALWAYS:
-		case OBJECTIVE_GOTO_CHAR_ON_FOOT:
-		case OBJECTIVE_FOLLOW_CHAR_IN_FORMATION:
-		case OBJECTIVE_LEAVE_CAR:
-		case OBJECTIVE_ENTER_CAR_AS_PASSENGER:
-		case OBJECTIVE_ENTER_CAR_AS_DRIVER:
-		case OBJECTIVE_FOLLOW_CAR_IN_CAR:
-		case OBJECTIVE_FIRE_AT_OBJECT_FROM_VEHICLE:
-		case OBJECTIVE_DESTROY_OBJECT:
-		case OBJECTIVE_DESTROY_CAR:
-			break;
-		case OBJECTIVE_GOTO_AREA_ANY_MEANS:
-		case OBJECTIVE_GOTO_AREA_ON_FOOT:
-			bIsRunning = false;
-			m_pNextPathNode = nil;
-			m_nextRoutePointPos = dest;
-			m_vecSeekPos = m_nextRoutePointPos;
-			m_distanceToCountSeekDone = 0.5f;
-			bUsePedNodeSeek = true;
-			if (sq(m_distanceToCountSeekDone) > (m_nextRoutePointPos - GetPosition()).MagnitudeSqr2D())
-				return;
-			break;
-		case OBJECTIVE_RUN_TO_AREA:
-			bIsRunning = true;
-			m_pNextPathNode = nil;
-			m_nextRoutePointPos = dest;
-			m_vecSeekPos = m_nextRoutePointPos;
-			m_distanceToCountSeekDone = 0.5f;
-			bUsePedNodeSeek = true;
-			if (sq(m_distanceToCountSeekDone) > (m_nextRoutePointPos - GetPosition()).MagnitudeSqr2D())
-				return;
-			break;
-		default: break;
-	}
-
-	if (IsTemporaryObjective(m_objective)) {
-		m_prevObjective = newObj;
-	} else {
-		if (m_objective != newObj)
-			SetStoredObjective();
-
-		m_objective = newObj;
-	}
-}
-
-void
-CPed::ClearObjective(void)
-{
-	if (IsPedInControl() || m_nPedState == PED_DRIVING) {
-		m_objective = OBJECTIVE_NONE;
-#ifdef VC_PED_PORTS
-		m_pedInObjective = nil;
-		m_carInObjective = nil;
-#endif
-		if (m_nPedState == PED_DRIVING && m_pMyVehicle) {
-
-			if (m_pMyVehicle->pDriver != this) {
-#if defined VC_PED_PORTS || defined FIX_BUGS
-				if(!IsPlayer())
-#endif
-					bWanderPathAfterExitingCar = true;
-
-				SetObjective(OBJECTIVE_LEAVE_CAR, m_pMyVehicle);
-			}
-#ifdef VC_PED_PORTS
-			m_nLastPedState = PED_NONE;
-#endif
-		} else {
-			SetIdle();
-			SetMoveState(PEDMOVE_STILL);
-		}
-	} else {
-		bClearObjective = true;
-	}
-}
-
-void
-CPed::ClearLeader(void)
-{
-	if (!m_leader)
-		return;
-
-	m_leader = nil;
-	if (IsPedInControl()) {
-		SetObjective(OBJECTIVE_NONE);
-		if (CharCreatedBy == MISSION_CHAR) {
-			SetIdle();
-		} else {
-			SetWanderPath(CGeneral::GetRandomNumberInRange(0,8));
-		}
-	} else if (m_objective != OBJECTIVE_NONE) {
-		bClearObjective = true;
-	}
-}
-
-void
-CPed::UpdateFromLeader(void)
-{
-	if (CTimer::GetTimeInMilliseconds() <= m_objectiveTimer)
-		return;
-
-	if (!m_leader)
-		return;
-
-	CVector leaderDist;
-	if (m_leader->InVehicle())
-		leaderDist = m_leader->m_pMyVehicle->GetPosition() - GetPosition();
-	else
-		leaderDist = m_leader->GetPosition() - GetPosition();
-
-	if (leaderDist.Magnitude() > 30.0f) {
-		if (IsPedInControl()) {
-			SetObjective(OBJECTIVE_NONE);
-			SetIdle();
-			SetMoveState(PEDMOVE_STILL);
-		}
-		SetLeader(nil);
-		return;
-	}
-
-	if (IsPedInControl()) {
-		if (m_nWaitState == WAITSTATE_PLAYANIM_TAXI)
-			WarpPedToNearLeaderOffScreen();
-
-		if (m_leader->m_nPedState == PED_DEAD) {
-			SetLeader(nil);
-			SetObjective(OBJECTIVE_FLEE_ON_FOOT_TILL_SAFE);
-			return;
-		}
-		if (!m_leader->bInVehicle) {
-			if (m_leader->m_objective != OBJECTIVE_ENTER_CAR_AS_DRIVER) {
-				if (bInVehicle) {
-					if (m_objective != OBJECTIVE_WAIT_IN_CAR_THEN_GET_OUT && m_objective != OBJECTIVE_LEAVE_CAR)
-						SetObjective(OBJECTIVE_LEAVE_CAR, m_pMyVehicle);
-
-					return;
-				}
-				if (m_objective == OBJECTIVE_ENTER_CAR_AS_PASSENGER) {
-					RestorePreviousObjective();
-					RestorePreviousState();
-				}
-			}
-			if (m_nPedType == PEDTYPE_PROSTITUTE && CharCreatedBy == RANDOM_CHAR) {
-				SetLeader(nil);
-				return;
-			}
-		}
-		if (!bInVehicle && m_leader->bInVehicle && m_leader->m_nPedState == PED_DRIVING) {
-			if (m_objective != OBJECTIVE_ENTER_CAR_AS_PASSENGER && m_objective != OBJECTIVE_ENTER_CAR_AS_DRIVER) {
-				if (m_leader->m_pMyVehicle->m_nNumPassengers < m_leader->m_pMyVehicle->m_nNumMaxPassengers)
-					SetObjective(OBJECTIVE_ENTER_CAR_AS_PASSENGER, m_leader->m_pMyVehicle);
-			}
-		} else if (m_leader->m_objective == OBJECTIVE_NONE || (m_leader->IsPlayer() && m_leader->m_objective == OBJECTIVE_WAIT_ON_FOOT)
-			|| m_objective == m_leader->m_objective) {
-
-			if (m_leader->m_nPedState == PED_ATTACK) {
-				CEntity *lookTargetOfLeader = m_leader->m_pLookTarget;
-				if (lookTargetOfLeader && m_objective != OBJECTIVE_KILL_CHAR_ON_FOOT
-					&& lookTargetOfLeader->IsPed() && lookTargetOfLeader != this) {
-
-					SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, lookTargetOfLeader);
-					SetObjectiveTimer(8000);
-					SetLookFlag(m_leader->m_pLookTarget, false);
-					SetLookTimer(500);
-				}
-			} else {
-				if (IsPedInControl() && m_nPedState != PED_ATTACK) {
-#ifndef VC_PED_PORTS
-					SetObjective(OBJECTIVE_GOTO_CHAR_ON_FOOT, m_leader);
-					SetObjectiveTimer(0);
-#else
-					if (m_leader->m_objective == OBJECTIVE_NONE && m_objective == OBJECTIVE_NONE
-						&& m_leader->m_nPedState == PED_CHAT && m_nPedState == PED_CHAT) {
-
-						SetObjective(OBJECTIVE_NONE);
-					} else {
-						SetObjective(OBJECTIVE_GOTO_CHAR_ON_FOOT, m_leader);
-						SetObjectiveTimer(0);
-					}
-#endif
-				}
-				if (m_nPedState == PED_IDLE && m_leader->IsPlayer()) {
-					if (ScanForThreats() && m_threatEntity) {
-						m_pLookTarget = m_threatEntity;
-						m_pLookTarget->RegisterReference((CEntity **) &m_pLookTarget);
-						TurnBody();
-						if (m_attackTimer < CTimer::GetTimeInMilliseconds() && !GetWeapon()->IsTypeMelee()) {
-							SetWeaponLockOnTarget(m_threatEntity);
-							SetAttack(m_threatEntity);
-						}
-					}
-				}
-			}
-		} else {
-			switch (m_leader->m_objective) {
-				case OBJECTIVE_WAIT_ON_FOOT:
-				case OBJECTIVE_FLEE_ON_FOOT_TILL_SAFE:
-				case OBJECTIVE_WAIT_IN_CAR:
-				case OBJECTIVE_FOLLOW_ROUTE:
-					SetObjective(m_leader->m_objective);
-					m_objectiveTimer = m_leader->m_objectiveTimer;
-					break;
-				case OBJECTIVE_GUARD_SPOT:
-					SetObjective(OBJECTIVE_GUARD_SPOT, m_leader->m_vecSeekPosEx);
-					m_objectiveTimer = m_leader->m_objectiveTimer;
-					break;
-				case OBJECTIVE_KILL_CHAR_ON_FOOT:
-				case OBJECTIVE_KILL_CHAR_ANY_MEANS:
-				case OBJECTIVE_GOTO_CHAR_ON_FOOT:
-					if (m_leader->m_pedInObjective) {
-						SetObjective(m_leader->m_objective, m_leader->m_pedInObjective);
-						m_objectiveTimer = m_leader->m_objectiveTimer;
-					}
-					break;
-				case OBJECTIVE_ENTER_CAR_AS_PASSENGER:
-				case OBJECTIVE_ENTER_CAR_AS_DRIVER:
-					if (m_leader->m_carInObjective) {
-						SetObjective(OBJECTIVE_ENTER_CAR_AS_PASSENGER, m_leader->m_carInObjective);
-						return;
-					}
-					break;
-				case OBJECTIVE_GUARD_ATTACK:
-					return;
-				case OBJECTIVE_HAIL_TAXI:
-					m_leader = nil;
-					SetObjective(OBJECTIVE_NONE);
-					break;
-				default:
-					SetObjective(OBJECTIVE_GOTO_CHAR_ON_FOOT, m_leader);
-					SetObjectiveTimer(0);
-					break;
-			}
-		}
-	} else if (bInVehicle) {
-		if ((!m_leader->bInVehicle || m_leader->m_nPedState == PED_EXIT_CAR) && m_objective != OBJECTIVE_WAIT_IN_CAR_THEN_GET_OUT) {
-
-			switch (m_leader->m_objective) {
-				case OBJECTIVE_ENTER_CAR_AS_PASSENGER:
-				case OBJECTIVE_ENTER_CAR_AS_DRIVER:
-					if (m_pMyVehicle == m_leader->m_pMyVehicle || m_pMyVehicle == m_leader->m_carInObjective)
-						break;
-
-					// fall through
-				default:
-					if (m_pMyVehicle && m_objective != OBJECTIVE_LEAVE_CAR) {
-#ifdef VC_PED_PORTS
-						m_leaveCarTimer = CTimer::GetTimeInMilliseconds() + 250;
-#endif
-						SetObjective(OBJECTIVE_LEAVE_CAR, m_pMyVehicle);
-					}
-
-					break;
-			}
-		}
-	}
-}
-
-void
-CPed::RestorePreviousObjective(void)
-{
-	if (m_objective == OBJECTIVE_NONE)
-		return;
-
-	if (m_objective != OBJECTIVE_LEAVE_CAR && m_objective != OBJECTIVE_ENTER_CAR_AS_PASSENGER && m_objective != OBJECTIVE_ENTER_CAR_AS_DRIVER
-#if defined VC_PED_PORTS || defined FIX_BUGS
-		&& m_nPedState != PED_CARJACK
-#endif
-		)
-		m_pedInObjective = nil;
-
-	if (m_objective == OBJECTIVE_WAIT_IN_CAR_THEN_GET_OUT) {
-		m_objective = OBJECTIVE_NONE;
-		if (m_pMyVehicle)
-			SetObjective(OBJECTIVE_LEAVE_CAR, m_pMyVehicle);
-
-	} else {
-		m_objective = m_prevObjective;
-		m_prevObjective = OBJECTIVE_NONE;
-	}
-	bObjectiveCompleted = false;
-}
-
-void
-CPed::ProcessObjective(void)
-{
-	if (bClearObjective && (IsPedInControl() || m_nPedState == PED_DRIVING)) {
-		ClearObjective();
-		bClearObjective = false;
-	}
-	UpdateFromLeader();
-
-	CVector carOrOurPos;
-	CVector targetCarOrHisPos;
-	CVector distWithTarget;
-
-	if (m_objective != OBJECTIVE_NONE && (IsPedInControl() || m_nPedState == PED_DRIVING)) {
-		if (bInVehicle) {
-			if (!m_pMyVehicle) {
-				bInVehicle = false;
-				return;
-			}
-			carOrOurPos = m_pMyVehicle->GetPosition();
-		} else {
-			carOrOurPos = GetPosition();
-		}
-
-		if (m_pedInObjective) {
-			if (m_pedInObjective->InVehicle() && m_pedInObjective->m_nPedState != PED_DRAG_FROM_CAR) {
-				targetCarOrHisPos = m_pedInObjective->m_pMyVehicle->GetPosition();
-			} else {
-				targetCarOrHisPos = m_pedInObjective->GetPosition();
-			}
-			distWithTarget = targetCarOrHisPos - carOrOurPos;
-		} else if (m_carInObjective) {
-			targetCarOrHisPos = m_carInObjective->GetPosition();
-			distWithTarget = targetCarOrHisPos - carOrOurPos;
-		}
-
-		switch (m_objective) {
-			case OBJECTIVE_NONE:
-			case OBJECTIVE_GUARD_AREA:
-			case OBJECTIVE_FOLLOW_CAR_IN_CAR:
-			case OBJECTIVE_FIRE_AT_OBJECT_FROM_VEHICLE:
-			case OBJECTIVE_DESTROY_OBJECT:
-			case OBJECTIVE_GOTO_AREA_IN_CAR:
-			case OBJECTIVE_FOLLOW_CAR_ON_FOOT_WITH_OFFSET:
-			case OBJECTIVE_SET_LEADER:
-				break;
-			case OBJECTIVE_WAIT_ON_FOOT:
-				SetIdle();
-				m_objective = OBJECTIVE_NONE;
-				SetMoveState(PEDMOVE_STILL);
-				break;
-			case OBJECTIVE_FLEE_ON_FOOT_TILL_SAFE:
-				if (InVehicle()) {
-					SetObjective(OBJECTIVE_LEAVE_CAR, m_pMyVehicle);
-					bFleeAfterExitingCar = true;
-				} else if (m_nPedState != PED_FLEE_POS) {
-					CVector2D fleePos = GetPosition();
-					SetFlee(fleePos, 10000);
-					bUsePedNodeSeek = true;
-					m_pNextPathNode = nil;
-				}
-				break;
-			case OBJECTIVE_GUARD_SPOT:
-			{
-				distWithTarget = m_vecSeekPosEx - GetPosition();
-				if (m_pedInObjective) {
-					SetLookFlag(m_pedInObjective, true);
-					m_pLookTarget = m_pedInObjective;
-					m_pLookTarget->RegisterReference((CEntity **) &m_pLookTarget);
-					TurnBody();
-				}
-				float distWithTargetSc = distWithTarget.Magnitude();
-				if (2.0f * m_distanceToCountSeekDoneEx >= distWithTargetSc) {
-					if (m_pedInObjective) {
-						if (distWithTargetSc <= m_distanceToCountSeekDoneEx)
-							SetIdle();
-						else
-							SetSeek(m_vecSeekPosEx, m_distanceToCountSeekDoneEx);
-					} else if (CTimer::GetTimeInMilliseconds() > m_lookTimer) {
-						int threatType = ScanForThreats();
-						SetLookTimer(CGeneral::GetRandomNumberInRange(500, 1500));
-
-						// Second condition is pointless and isn't there in Mobile.
-						if (threatType == PED_FLAG_GUN || (threatType == PED_FLAG_EXPLOSION && m_threatEntity) || m_threatEntity) {
-							if (m_threatEntity->IsPed())
-								SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, m_threatEntity);
-						}
-					}
-				} else {
-					SetSeek(m_vecSeekPosEx, m_distanceToCountSeekDoneEx);
-				}
-				break;
-			}
-			case OBJECTIVE_WAIT_IN_CAR:
-				SetPedState(PED_DRIVING);
-				break;
-			case OBJECTIVE_WAIT_IN_CAR_THEN_GET_OUT:
-				SetPedState(PED_DRIVING);
-				break;
-			case OBJECTIVE_KILL_CHAR_ANY_MEANS:
-			{
-				if (m_pedInObjective) {
-					if (m_pedInObjective->IsPlayer() && CharCreatedBy != MISSION_CHAR
-						&& m_nPedType != PEDTYPE_COP && FindPlayerPed()->m_pWanted->m_CurrentCops != 0
-						&& !bKindaStayInSamePlace) {
-
-						SetObjective(OBJECTIVE_FLEE_ON_FOOT_TILL_SAFE);
-						break;
-					}
-					if (InVehicle()) {
-						if (distWithTarget.Magnitude() >= 20.0f
-							|| m_pMyVehicle->m_vecMoveSpeed.MagnitudeSqr() >= sq(0.02f)) {
-							if (m_pMyVehicle->pDriver == this
-								&& !m_pMyVehicle->m_nGettingInFlags) {
-								m_pMyVehicle->SetStatus(STATUS_PHYSICS);
-								m_pMyVehicle->AutoPilot.m_nPrevRouteNode = 0;
-								if (m_nPedType == PEDTYPE_COP) {
-									m_pMyVehicle->AutoPilot.m_nCruiseSpeed = (FindPlayerPed()->m_pWanted->GetWantedLevel() * 0.1f + 0.6f) * (GAME_SPEED_TO_CARAI_SPEED * m_pMyVehicle->pHandling->Transmission.fMaxCruiseVelocity);
-									m_pMyVehicle->AutoPilot.m_nCarMission = CCarAI::FindPoliceCarMissionForWantedLevel();
-								} else {
-									m_pMyVehicle->AutoPilot.m_nCruiseSpeed = GAME_SPEED_TO_CARAI_SPEED * m_pMyVehicle->pHandling->Transmission.fMaxCruiseVelocity * 0.8f;
-									m_pMyVehicle->AutoPilot.m_nCarMission = MISSION_RAMPLAYER_FARAWAY;
-								}
-								m_pMyVehicle->AutoPilot.m_nDrivingStyle = DRIVINGSTYLE_AVOID_CARS;
-							}
-						} else {
-							bool targetHasVeh = m_pedInObjective->bInVehicle;
-							if (!targetHasVeh
-								|| targetHasVeh && m_pedInObjective->m_pMyVehicle->CanPedExitCar()) {
-								m_pMyVehicle->AutoPilot.m_nCruiseSpeed = 0;
-								m_pMyVehicle->AutoPilot.m_nCarMission = MISSION_NONE;
-								SetObjective(OBJECTIVE_LEAVE_CAR, m_pMyVehicle);
-							}
-						}
-						break;
-					}
-					if (distWithTarget.Magnitude() > 30.0f && !bKindaStayInSamePlace) {
-						if (m_pMyVehicle) {
-							m_pMyVehicle->AutoPilot.m_nCruiseSpeed = 0;
-							SetObjective(OBJECTIVE_ENTER_CAR_AS_DRIVER, m_pMyVehicle);
-						} else {
-							float closestVehDist = 60.0f;
-							int16 lastVehicle;
-							CEntity* vehicles[8];
-							CWorld::FindObjectsInRange(GetPosition(), 25.0f, true, &lastVehicle, 6, vehicles, false, true, false, false, false);
-							CVehicle *foundVeh = nil;
-							for(int i = 0; i < lastVehicle; i++) {
-								CVehicle *nearVeh = (CVehicle*)vehicles[i];
-								/*
-								Not used.
-								CVector vehSpeed = nearVeh->GetSpeed();
-								CVector ourSpeed = GetSpeed();
-								*/
-								CVector vehDistVec = nearVeh->GetPosition() - GetPosition();
-								if (vehDistVec.Magnitude() < closestVehDist && m_pedInObjective->m_pMyVehicle != nearVeh
-									&& nearVeh->CanPedOpenLocks(this)) {
-
-									foundVeh = nearVeh;
-									closestVehDist = vehDistVec.Magnitude();
-								}
-							}
-							m_pMyVehicle = foundVeh;
-							if (m_pMyVehicle) {
-								m_pMyVehicle->RegisterReference((CEntity **) &m_pMyVehicle);
-								m_pMyVehicle->AutoPilot.m_nCruiseSpeed = 0;
-								SetObjective(OBJECTIVE_ENTER_CAR_AS_DRIVER, m_pMyVehicle);
-							} else if (!GetIsOnScreen()) {
-								CVector ourPos = GetPosition();
-								int closestNode = ThePaths.FindNodeClosestToCoors(ourPos, PATH_CAR, 20.0f);
-								if (closestNode >= 0) {
-									int16 colliding;
-									CWorld::FindObjectsKindaColliding(
-										ThePaths.m_pathNodes[closestNode].GetPosition(), 10.0f, true, &colliding, 2, nil, false, true, true, false, false);
-									if (!colliding) {
-										CZoneInfo zoneInfo;
-										int chosenCarClass;
-										CTheZones::GetZoneInfoForTimeOfDay(&ourPos, &zoneInfo);
-										int chosenModel = CCarCtrl::ChooseModel(&zoneInfo, &ourPos, &chosenCarClass);
-										CAutomobile *newVeh = new CAutomobile(chosenModel, RANDOM_VEHICLE);
-										if (newVeh) {
-										    newVeh->GetMatrix().GetPosition() = ThePaths.m_pathNodes[closestNode].GetPosition();
-										    newVeh->GetMatrix().GetPosition().z += 4.0f;
-											newVeh->SetHeading(DEGTORAD(200.0f));
-											newVeh->SetStatus(STATUS_ABANDONED);
-											newVeh->m_nDoorLock = CARLOCK_UNLOCKED;
-											CWorld::Add(newVeh);
-											m_pMyVehicle = newVeh;
-											if (m_pMyVehicle) {
-												m_pMyVehicle->RegisterReference((CEntity **) &m_pMyVehicle);
-												m_pMyVehicle->AutoPilot.m_nCruiseSpeed = 0;
-												SetObjective(OBJECTIVE_ENTER_CAR_AS_DRIVER, m_pMyVehicle);
-											}
-										}
-									}
-								}
-							}
-						}
-						break;
-					}
-				} else {
-					ClearLookFlag();
-					bObjectiveCompleted = true;
-				}
-			}
-			case OBJECTIVE_KILL_CHAR_ON_FOOT:
-			{
-				bool killPlayerInNoPoliceZone = false;
-				if (m_objective == OBJECTIVE_KILL_CHAR_ON_FOOT && InVehicle()) {
-					SetObjective(OBJECTIVE_LEAVE_CAR, m_pMyVehicle);
-					break;
-				}
-				if (!m_pedInObjective || m_pedInObjective->DyingOrDead()) {
-					ClearLookFlag();
-					bObjectiveCompleted = true;
-					SetMoveAnim();
-					break;
-				}
-				if (m_pedInObjective->IsPlayer() && CCullZones::NoPolice())
-					killPlayerInNoPoliceZone = true;
-
-				if (!bNotAllowedToDuck || killPlayerInNoPoliceZone) {
-					if (m_nPedType == PEDTYPE_COP && !m_pedInObjective->GetWeapon()->IsTypeMelee() && !GetWeapon()->IsTypeMelee())
-						bNotAllowedToDuck = true;
-				} else {
-					if (!m_pedInObjective->bInVehicle) {
-						if (m_pedInObjective->GetWeapon()->IsTypeMelee() || GetWeapon()->IsTypeMelee()) {
-							bNotAllowedToDuck = false;
-							bCrouchWhenShooting = false;
-						} else if (DuckAndCover()) {
-							break;
-						}
-					} else {
-						bNotAllowedToDuck = false;
-						bCrouchWhenShooting = false;
-					}
-				}
-				if (m_leaveCarTimer > CTimer::GetTimeInMilliseconds() && !bKindaStayInSamePlace) {
-					SetMoveState(PEDMOVE_STILL);
-					break;
-				}
-				if (m_pedInObjective->IsPlayer()) {
-					CPlayerPed *player = FindPlayerPed();
-					if (m_nPedType == PEDTYPE_COP && player->m_pWanted->m_bIgnoredByCops
-						|| player->m_pWanted->m_bIgnoredByEveryone
-						|| m_pedInObjective->bIsInWater
-						|| m_pedInObjective->m_nPedState == PED_ARRESTED) {
-
-						if (m_nPedState != PED_ARREST_PLAYER)
-							SetIdle();
-
-						break;
-					}
-				}
-				CWeaponInfo *wepInfo = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType);
-				float wepRange = wepInfo->m_fRange;
-				float maxDistToKeep;
-				if (GetWeapon()->m_eWeaponType != WEAPONTYPE_UNARMED) {
-					maxDistToKeep = wepRange / 3.0f;
-				} else {
-					if (m_nPedState == PED_FIGHT) {
-						if (!IsPlayer() && !(m_pedStats->m_flags & STAT_CAN_KICK))
-							wepRange = 2.0f;
-					} else {
-						wepRange = 1.3f;
-					}
-					maxDistToKeep = wepRange;
-				}
-				if (m_pedInObjective->m_getUpTimer > CTimer::GetTimeInMilliseconds() && maxDistToKeep < 2.5f) {
-					maxDistToKeep = 2.5f;
-				}
-				if (m_pedInObjective->IsPlayer() && m_nPedType != PEDTYPE_COP
-					&& CharCreatedBy != MISSION_CHAR && FindPlayerPed()->m_pWanted->m_CurrentCops) {
-					SetObjective(OBJECTIVE_FLEE_ON_FOOT_TILL_SAFE);
-					break;
-				}
-				if (m_pedInObjective->m_fHealth <= 0.0f) {
-					bObjectiveCompleted = true;
-					bScriptObjectiveCompleted = true;
-					SetMoveAnim();
-					break;
-				}
-				float distWithTargetSc = distWithTarget.Magnitude();
-				if (m_pedInObjective->bInVehicle && m_pedInObjective->m_nPedState != PED_DRAG_FROM_CAR) {
-					CVehicle *vehOfTarget = m_pedInObjective->m_pMyVehicle;
-					if (vehOfTarget->bIsInWater || vehOfTarget->GetStatus() == STATUS_PLAYER_DISABLED
-						|| m_pedInObjective->IsPlayer() && CPad::GetPad(0)->ArePlayerControlsDisabled()) {
-						SetIdle();
-						return;
-					}
-					SetLookFlag(vehOfTarget, false);
-					if (m_nPedState != PED_CARJACK) {
-						if (m_pedInObjective->m_nPedState != PED_ARRESTED) {
-							if (m_attackTimer < CTimer::GetTimeInMilliseconds() && wepInfo->m_eWeaponFire != WEAPON_FIRE_MELEE
-								&& distWithTargetSc < wepRange && distWithTargetSc > 3.0f) {
-
-								// I hope so
-								CVector ourHead = GetMatrix() * CVector(0.5f, 0.0f, 0.6f);
-								CVector maxShotPos = vehOfTarget->GetPosition() - ourHead;
-								maxShotPos *= wepInfo->m_fRange / maxShotPos.Magnitude();
-								maxShotPos += ourHead;
-
-								CColPoint foundCol;
-								CEntity *foundEnt;
-
-								CWorld::bIncludeDeadPeds = true;
-								CWorld::ProcessLineOfSight(ourHead, maxShotPos, foundCol, foundEnt, true, true, true, true, false, true, false);
-								CWorld::bIncludeDeadPeds = false;
-								if (foundEnt == vehOfTarget) {
-									SetAttack(vehOfTarget);
-									SetWeaponLockOnTarget(vehOfTarget);
-									SetShootTimer(CGeneral::GetRandomNumberInRange(500, 2000));
-									if (distWithTargetSc <= m_distanceToCountSeekDone) {
-										SetAttackTimer(CGeneral::GetRandomNumberInRange(200, 500));
-										SetMoveState(PEDMOVE_STILL);
-									} else {
-										SetAttackTimer(CGeneral::GetRandomNumberInRange(2000, 5000));
-									}
-								}
-							} else if (m_nPedState != PED_ATTACK && !bKindaStayInSamePlace && !killPlayerInNoPoliceZone) {
-								if (vehOfTarget) {
-									if (m_nPedType == PEDTYPE_COP || vehOfTarget->bIsBus) {
-										GoToNearestDoor(vehOfTarget);
-									} else {
-										m_vehDoor = 0;
-										if (m_pedInObjective == vehOfTarget->pDriver || vehOfTarget->bIsBus) {
-											m_vehDoor = CAR_DOOR_LF;
-										} else if (m_pedInObjective == vehOfTarget->pPassengers[0]) {
-											m_vehDoor = CAR_DOOR_RF;
-										} else if (m_pedInObjective == vehOfTarget->pPassengers[1]) {
-											m_vehDoor = CAR_DOOR_LR;
-										} else if (m_pedInObjective == vehOfTarget->pPassengers[2]) {
-											m_vehDoor = CAR_DOOR_RR;
-										}
-										// Unused
-										// GetPositionToOpenCarDoor(vehOfTarget, m_vehDoor);
-										SetSeekCar(vehOfTarget, m_vehDoor);
-										SetMoveState(PEDMOVE_RUN);
-									}
-								}
-							}
-						}
-					}
-					SetMoveAnim();
-					break;
-				}
-				if (m_nMoveState == PEDMOVE_STILL && IsPedInControl()) {
-					SetLookFlag(m_pedInObjective, false);
-					TurnBody();
-				}
-				if (m_nPedType == PEDTYPE_COP && distWithTargetSc < 1.5f && m_pedInObjective->IsPlayer()) {
-					if (m_pedInObjective->m_getUpTimer > CTimer::GetTimeInMilliseconds()
-						|| m_pedInObjective->m_nPedState == PED_DRAG_FROM_CAR) {
-
-						((CCopPed*)this)->SetArrestPlayer(m_pedInObjective);
-						return;
-					}
-				}
-				if (!bKindaStayInSamePlace && !bStopAndShoot && m_nPedState != PED_ATTACK && !killPlayerInNoPoliceZone) {
-					if (distWithTargetSc > wepRange
-						|| m_pedInObjective->m_getUpTimer > CTimer::GetTimeInMilliseconds()
-						|| m_pedInObjective->m_nPedState == PED_ARRESTED
-						|| m_pedInObjective->EnteringCar() && distWithTargetSc < 3.0f
-						|| distWithTargetSc > m_distanceToCountSeekDone && !CanSeeEntity(m_pedInObjective)) {
-
-						if (m_pedInObjective->EnteringCar())
-							maxDistToKeep = 2.0f;
-
-						if (bUsePedNodeSeek) {
-							CVector bestCoords(0.0f, 0.0f, 0.0f);
-							m_vecSeekPos = m_pedInObjective->GetPosition();
-
-							if (!m_pNextPathNode)
-								FindBestCoordsFromNodes(m_vecSeekPos, &bestCoords);
-
-							if (m_pNextPathNode)
-								m_vecSeekPos = m_pNextPathNode->GetPosition();
-
-							SetSeek(m_vecSeekPos, m_distanceToCountSeekDone);
-						} else {
-							SetSeek(m_pedInObjective, maxDistToKeep);
-						}
-						bCrouchWhenShooting = false;
-						if (m_pedInObjective->m_pCurrentPhysSurface && distWithTargetSc < 5.0f) {
-							if (wepRange <= 5.0f) {
-								if (m_pedInObjective->IsPlayer()
-									&& FindPlayerPed()->m_bSpeedTimerFlag
-									&& (IsGangMember() || m_nPedType == PEDTYPE_COP)
-									&& GetWeapon()->m_eWeaponType == WEAPONTYPE_UNARMED) {
-									GiveWeapon(WEAPONTYPE_COLT45, 1000);
-									SetCurrentWeapon(WEAPONTYPE_COLT45);
-								}
-							} else {
-								bStopAndShoot = true;
-							}
-							SetMoveState(PEDMOVE_STILL);
-							SetMoveAnim();
-							break;
-						}
-						bStopAndShoot = false;
-						SetMoveAnim();
-						break;
-					}
-				}
-				if (m_attackTimer < CTimer::GetTimeInMilliseconds()
-					&& distWithTargetSc < wepRange && m_pedInObjective->m_nPedState != PED_GETUP && m_pedInObjective->m_nPedState != PED_DRAG_FROM_CAR) {
-					if (bIsDucking) {
-						CAnimBlendAssociation *duckAnim = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_DUCK_DOWN);
-						if (duckAnim) {
-							duckAnim->blendDelta = -2.0f;
-							break;
-						}
-						bIsDucking = false;
-					} else if (wepRange <= 5.0f) {
-						SetMoveState(PEDMOVE_STILL);
-						SetAttack(m_pedInObjective);
-						m_fRotationDest = CGeneral::GetRadianAngleBetweenPoints(
-							m_pedInObjective->GetPosition().x, m_pedInObjective->GetPosition().y,
-							GetPosition().x, GetPosition().y);
-						SetShootTimer(CGeneral::GetRandomNumberInRange(0.0f, 500.0f));
-						SetAttackTimer(CGeneral::GetRandomNumberInRange(0.0f, 1500.0f));
-						bObstacleShowedUpDuringKillObjective = false;
-
-					} else {
-						CVector target;
-						CVector ourHead = GetMatrix() * CVector(0.5f, 0.0f, 0.6f);
-						if (m_pedInObjective->IsPed())
-							m_pedInObjective->m_pedIK.GetComponentPosition(target, PED_MID);
-						else
-							target = m_pedInObjective->GetPosition();
-
-						target -= ourHead;
-						target *= wepInfo->m_fRange / target.Magnitude();
-						target += ourHead;
-
-						CColPoint foundCol;
-						CEntity *foundEnt = nil;
-
-						CWorld::bIncludeDeadPeds = true;
-						CWorld::ProcessLineOfSight(ourHead, target, foundCol, foundEnt, true, true, true, true, false, true, false);
-						CWorld::bIncludeDeadPeds = false;
-						if (foundEnt == m_pedInObjective) {
-							SetAttack(m_pedInObjective);
-							SetWeaponLockOnTarget(m_pedInObjective);
-							SetShootTimer(CGeneral::GetRandomNumberInRange(500.0f, 2000.0f));
-
-							int time;
-							if (distWithTargetSc <= maxDistToKeep)
-								time = CGeneral::GetRandomNumberInRange(100.0f, 500.0f);
-							else
-								time = CGeneral::GetRandomNumberInRange(1500.0f, 3000.0f);
-
-							SetAttackTimer(time);
-							bObstacleShowedUpDuringKillObjective = false;
-
-						} else {
-							if (foundEnt) {
-								if (foundEnt->IsPed()) {
-									SetAttackTimer(CGeneral::GetRandomNumberInRange(500.0f, 1000.0f));
-									bObstacleShowedUpDuringKillObjective = false;
-								} else {
-									if (foundEnt->IsObject()) {
-										SetAttackTimer(CGeneral::GetRandomNumberInRange(200.0f, 400.0f));
-										bObstacleShowedUpDuringKillObjective = true;
-									} else if (foundEnt->IsVehicle()) {
-										SetAttackTimer(CGeneral::GetRandomNumberInRange(400.0f, 600.0f));
-										bObstacleShowedUpDuringKillObjective = true;
-									} else {
-										SetAttackTimer(CGeneral::GetRandomNumberInRange(700.0f, 1200.0f));
-										bObstacleShowedUpDuringKillObjective = true;
-									}
-								}
-
-								m_fleeFrom = foundEnt;
-								m_fleeFrom->RegisterReference((CEntity**) &m_fleeFrom);
-							}
-							SetPointGunAt(m_pedInObjective);
-						}
-					}
-				} else {
-					if (!m_pedInObjective->m_pCurrentPhysSurface)
-						bStopAndShoot = false;
-
-					if (m_nPedState != PED_ATTACK && m_nPedState != PED_FIGHT) {
-
-						// This is weird...
-						if (bNotAllowedToDuck && bKindaStayInSamePlace) {
-							if (!bIsDucking) {
-								CAnimBlendAssociation* duckAnim = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_DUCK_DOWN);
-								if (!duckAnim || duckAnim->blendDelta < 0.0f) {
-									CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_DUCK_DOWN, 4.0f);
-									bIsDucking = true;
-								}
-								break;
-							} else {
-								CAnimBlendAssociation* duckAnim = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_DUCK_DOWN);
-								if (!duckAnim || duckAnim->blendDelta < 0.0f) {
-									bIsDucking = false;
-								} else {
-									break;
-								}
-							}
-						}
-						if (bObstacleShowedUpDuringKillObjective) {
-							if (m_nPedType == PEDTYPE_COP) {
-								if (GetWeapon()->m_eWeaponType > WEAPONTYPE_COLT45
-									|| m_fleeFrom && m_fleeFrom->IsObject()) {
-									maxDistToKeep = 6.0f;
-								} else if (m_fleeFrom && m_fleeFrom->IsVehicle()) {
-									maxDistToKeep = 4.0f;
-								} else {
-									maxDistToKeep = 2.0f;
-								}
-							} else {
-								maxDistToKeep = 2.0f;
-							}
-						}
-						if (distWithTargetSc <= maxDistToKeep) {
-							SetMoveState(PEDMOVE_STILL);
-							bIsPointingGunAt = true;
-							if (m_nPedState != PED_AIM_GUN && !bDuckAndCover) {
-								m_attackTimer = CTimer::GetTimeInMilliseconds();
-								SetIdle();
-							}
-						} else {
-							if (m_nPedState != PED_SEEK_ENTITY && m_nPedState != PED_SEEK_POS
-								&& !bStopAndShoot && !killPlayerInNoPoliceZone && !bKindaStayInSamePlace) {
-								Say(SOUND_PED_ATTACK);
-								SetSeek(m_pedInObjective, maxDistToKeep);
-								bIsRunning = true;
-							}
-						}
-					}
-				}
-
-				if (distWithTargetSc < 2.5f && wepRange > 5.0f
-					&& wepInfo->m_eWeaponFire != WEAPON_FIRE_MELEE) {
-
-					SetAttack(m_pedInObjective);
-					if (m_attackTimer < CTimer::GetTimeInMilliseconds()) {
-						int time = CGeneral::GetRandomNumberInRange(500.0f, 1000.0f);
-						SetAttackTimer(time);
-						SetShootTimer(time - 500);
-					}
-					SetMoveState(PEDMOVE_STILL);
-				}
-				if (CTimer::GetTimeInMilliseconds() > m_nPedStateTimer)
-					m_fRotationDest = CGeneral::GetRadianAngleBetweenPoints(m_pedInObjective->GetPosition().x, m_pedInObjective->GetPosition().y, GetPosition().x, GetPosition().y);
-				
-				SetMoveAnim();
-				break;
-			}
-			case OBJECTIVE_FLEE_CHAR_ON_FOOT_TILL_SAFE:
-			case OBJECTIVE_FLEE_CHAR_ON_FOOT_ALWAYS:
-			{
-				if (InVehicle()) {
-					if (m_nPedState == PED_DRIVING)
-						SetObjective(OBJECTIVE_LEAVE_CAR, m_pMyVehicle);
-				} else if (m_nPedState != PED_FLEE_ENTITY) {
-					int time;
-					if (m_objective == OBJECTIVE_FLEE_CHAR_ON_FOOT_ALWAYS)
-						time = 0;
-					else
-						time = 6000;
-
-					SetFindPathAndFlee(m_pedInObjective, time);
-				}
-				break;
-			}
-			case OBJECTIVE_GOTO_CHAR_ON_FOOT:
-			{
-				if (m_pedInObjective) {
-					float safeDistance = 2.0f;
-					if (m_pedInObjective->bInVehicle)
-						safeDistance = 3.0f;
-
-					float distWithTargetSc = distWithTarget.Magnitude();
-					if (m_nPedStateTimer < CTimer::GetTimeInMilliseconds()) {
-						if (distWithTargetSc <= safeDistance) {
-							bScriptObjectiveCompleted = true;
-							if (m_nPedState != PED_ATTACK) {
-								SetIdle();
-								m_pLookTarget = m_pedInObjective;
-								m_pLookTarget->RegisterReference((CEntity **) &m_pLookTarget);
-								TurnBody();
-							}
-							if (distWithTargetSc > 2.0f)
-								SetMoveState(m_pedInObjective->m_nMoveState);
-							else
-								SetMoveState(PEDMOVE_STILL);
-						} else {
-							SetSeek(m_pedInObjective, safeDistance);
-							if (distWithTargetSc >= 5.0f) {
-								if (m_leader && m_leader->m_nMoveState == PEDMOVE_SPRINT)
-									SetMoveState(PEDMOVE_SPRINT);
-								else
-									SetMoveState(PEDMOVE_RUN);
-							} else {
-								if (m_leader && m_leader->m_nMoveState != PEDMOVE_STILL
-									&& m_leader->m_nMoveState != PEDMOVE_NONE) {
-									if (m_leader->IsPlayer()) {
-										if (distWithTargetSc >= 3.0f && FindPlayerPed()->m_fMoveSpeed >= 1.3f)
-											SetMoveState(PEDMOVE_RUN);
-										else
-											SetMoveState(PEDMOVE_WALK);
-									} else {
-										SetMoveState(m_leader->m_nMoveState);
-									}
-								} else if (distWithTargetSc <= 3.0f) {
-									SetMoveState(PEDMOVE_WALK);
-								} else {
-									SetMoveState(PEDMOVE_RUN);
-								}
-							}
-						}
-					}
-				} else {
-					SetObjective(OBJECTIVE_NONE);
-				}
-				break;
-			}
-			case OBJECTIVE_FOLLOW_CHAR_IN_FORMATION:
-			{
-				if (m_pedInObjective) {
-					CVector posToGo = GetFormationPosition();
-					distWithTarget = posToGo - carOrOurPos;
-					SetSeek(posToGo, 1.0f);
-					if (distWithTarget.Magnitude() <= 3.0f) {
-						SetSeek(posToGo, 1.0f);
-						if (m_pedInObjective->m_nMoveState != PEDMOVE_STILL)
-							SetMoveState(m_pedInObjective->m_nMoveState);
-					} else {
-						SetSeek(posToGo, 1.0f);
-						SetMoveState(PEDMOVE_RUN);
-					}
-				} else {
-					SetObjective(OBJECTIVE_NONE);
-				}
-				break;
-			}
-			case OBJECTIVE_ENTER_CAR_AS_PASSENGER:
-			{
-				if (m_carInObjective) {
-					if (!bInVehicle && m_carInObjective->m_nNumPassengers >= m_carInObjective->m_nNumMaxPassengers) {
-						RestorePreviousObjective();
-						RestorePreviousState();
-						if (IsPedInControl())
-							m_pMyVehicle = nil;
-
-						break;
-					}
-
-					if (m_prevObjective == OBJECTIVE_HAIL_TAXI && !((CAutomobile*)m_carInObjective)->bTaxiLight) {
-						RestorePreviousObjective();
-						ClearObjective();
-						SetWanderPath(CGeneral::GetRandomNumber() & 7);
-						bIsRunning = false;
-						break;
-					}
-					if (m_objectiveTimer && m_objectiveTimer < CTimer::GetTimeInMilliseconds()) {
-						if (!EnteringCar()) {
-							bool foundSeat = false;
-							if (m_carInObjective->pPassengers[0] || m_carInObjective->m_nGettingInFlags & CAR_DOOR_FLAG_RF) {
-								if (m_carInObjective->pPassengers[1] || m_carInObjective->m_nGettingInFlags & CAR_DOOR_FLAG_LR) {
-									if (m_carInObjective->pPassengers[2] || m_carInObjective->m_nGettingInFlags & CAR_DOOR_FLAG_RR) {
-										foundSeat = false;
-									} else {
-										m_vehDoor = CAR_DOOR_RR;
-										foundSeat = true;
-									}
-								} else {
-									m_vehDoor = CAR_DOOR_LR;
-									foundSeat = true;
-								}
-							} else {
-								m_vehDoor = CAR_DOOR_RF;
-								foundSeat = true;
-							}
-							for (int i = 2; i < m_carInObjective->m_nNumMaxPassengers; ++i) {
-								if (!m_carInObjective->pPassengers[i] && !(m_carInObjective->m_nGettingInFlags & CAR_DOOR_FLAG_RF)) {
-									m_vehDoor = CAR_DOOR_RF;
-									foundSeat = true;
-								}
-							}
-							if (foundSeat) {
-								SetPosition(GetPositionToOpenCarDoor(m_carInObjective, m_vehDoor));
-								SetEnterCar(m_carInObjective, m_vehDoor);
-							}
-						}
-						m_objectiveTimer = 0;
-					}
-				}
-				// fall through
-			}
-			case OBJECTIVE_ENTER_CAR_AS_DRIVER:
-			{
-				if (!m_carInObjective || bInVehicle) {
-#ifdef VC_PED_PORTS
-					if (bInVehicle && m_pMyVehicle != m_carInObjective) {
-						SetExitCar(m_pMyVehicle, 0);
-					} else
-#endif
-					{
-						bObjectiveCompleted = true;
-						bScriptObjectiveCompleted = true;
-						RestorePreviousState();
-					}
-				} else {
-					if (m_leaveCarTimer > CTimer::GetTimeInMilliseconds()) {
-						SetMoveState(PEDMOVE_STILL);
-						break;
-					}
-					if (IsPedInControl()) {
-						if (m_prevObjective == OBJECTIVE_KILL_CHAR_ANY_MEANS) {
-							if (distWithTarget.Magnitude() < 20.0f) {
-								RestorePreviousObjective();
-								RestorePreviousState();
-								return;
-							}
-							if (m_objective == OBJECTIVE_ENTER_CAR_AS_DRIVER) {
-								if (m_carInObjective->pDriver
-#ifdef VC_PED_PORTS
-									&& !IsPlayer()
-#endif
-									) {
-									if (m_carInObjective->pDriver->m_objective == OBJECTIVE_KILL_CHAR_ANY_MEANS && m_carInObjective->pDriver != m_pedInObjective) {
-										SetObjective(OBJECTIVE_ENTER_CAR_AS_PASSENGER, m_carInObjective);
-										m_carInObjective->bIsBeingCarJacked = false;
-									}
-								}
-							}
-						} else if (m_objective != OBJECTIVE_ENTER_CAR_AS_PASSENGER) {
-							if (m_carInObjective->pDriver
-#ifdef VC_PED_PORTS
-								&& (CharCreatedBy != MISSION_CHAR || m_carInObjective->pDriver->CharCreatedBy != RANDOM_CHAR)
-#endif
-								) {
-								if (m_carInObjective->pDriver->m_nPedType == m_nPedType) {
-									SetObjective(OBJECTIVE_ENTER_CAR_AS_PASSENGER, m_carInObjective);
-									m_carInObjective->bIsBeingCarJacked = false;
-								}
-							}
-						}
-						if (m_carInObjective->IsUpsideDown() && m_carInObjective->m_vehType != VEHICLE_TYPE_BIKE) {
-							RestorePreviousObjective();
-							RestorePreviousState();
-							return;
-						}
-						if (!m_carInObjective->IsBoat() || m_nPedState == PED_SEEK_IN_BOAT) {
-							if (m_nPedState != PED_SEEK_CAR)
-								SetSeekCar(m_carInObjective, 0);
-						} else {
-							SetSeekBoatPosition(m_carInObjective);
-						}
-						if (m_nMoveState == PEDMOVE_STILL && !bVehEnterDoorIsBlocked)
-							SetMoveState(PEDMOVE_RUN);
-
-						if (m_carInObjective && m_carInObjective->m_fHealth > 0.0f) {
-							distWithTarget = m_carInObjective->GetPosition() - GetPosition();
-							if (!bInVehicle) {
-								if (nEnterCarRangeMultiplier * ENTER_CAR_MAX_DIST < distWithTarget.Magnitude()) {
-									if (!m_carInObjective->pDriver && !m_carInObjective->GetIsOnScreen() && !GetIsOnScreen())
-										WarpPedToNearEntityOffScreen(m_carInObjective);
-
-									if (CharCreatedBy != MISSION_CHAR || m_prevObjective == OBJECTIVE_KILL_CHAR_ANY_MEANS
-#ifdef VC_PED_PORTS
-										|| IsPlayer() && !CPad::GetPad(0)->ArePlayerControlsDisabled()
-#endif
-										) {
-										RestorePreviousObjective();
-										RestorePreviousState();
-										if (IsPedInControl())
-											m_pMyVehicle = nil;
-									} else {
-										SetIdle();
-										SetMoveState(PEDMOVE_STILL);
-									}
-								}
-							}
-						} else if (!bInVehicle) {
-							RestorePreviousObjective();
-							RestorePreviousState();
-							if (IsPedInControl())
-								m_pMyVehicle = nil;
-						}
-					}
-				}
-				break;
-			}
-			case OBJECTIVE_DESTROY_CAR:
-			{
-				if (!m_carInObjective) {
-					ClearLookFlag();
-					bObjectiveCompleted = true;
-					break;
-				}
-				float distWithTargetSc = distWithTarget.Magnitude();
-				CWeaponInfo *wepInfo = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType);
-				float wepRange = wepInfo->m_fRange;
-				m_pLookTarget = m_carInObjective;
-				m_pLookTarget->RegisterReference((CEntity **) &m_pLookTarget);
-
-				m_pSeekTarget = m_carInObjective;
-				m_pSeekTarget->RegisterReference((CEntity**) &m_pSeekTarget);
-
-				TurnBody();
-				if (m_carInObjective->m_fHealth <= 0.0f) {
-					ClearLookFlag();
-					bScriptObjectiveCompleted = true;
-					break;
-				}
-
-				if (m_attackTimer < CTimer::GetTimeInMilliseconds() && wepInfo->m_eWeaponFire != WEAPON_FIRE_MELEE
-					&& distWithTargetSc < wepRange) {
-
-					// I hope so
-					CVector ourHead = GetMatrix() * CVector(0.5f, 0.0f, 0.6f);
-					CVector maxShotPos = m_carInObjective->GetPosition() - ourHead;
-					maxShotPos *= wepInfo->m_fRange / maxShotPos.Magnitude();
-					maxShotPos += ourHead;
-
-					CColPoint foundCol;
-					CEntity *foundEnt;
-
-					CWorld::bIncludeDeadPeds = true;
-					CWorld::ProcessLineOfSight(ourHead, maxShotPos, foundCol, foundEnt, true, true, true, true, false, true, false);
-					CWorld::bIncludeDeadPeds = false;
-					if (foundEnt == m_carInObjective) {
-						SetAttack(m_carInObjective);
-						SetWeaponLockOnTarget(m_carInObjective);
-						SetShootTimer(CGeneral::GetRandomNumberInRange(500, 2000));
-						if (distWithTargetSc > 10.0f && !bKindaStayInSamePlace) {
-							SetAttackTimer(CGeneral::GetRandomNumberInRange(2000, 5000));
-						} else {
-							SetAttackTimer(CGeneral::GetRandomNumberInRange(50, 300));
-							SetMoveState(PEDMOVE_STILL);
-						}
-					}
-				} else if (m_nPedState != PED_ATTACK && !bKindaStayInSamePlace) {
-
-					float safeDistance;
-					if (wepRange <= 5.0f)
-						safeDistance = 3.0f;
-					else
-						safeDistance = wepRange * 0.25f;
-
-					SetSeek(m_carInObjective, safeDistance);
-					SetMoveState(PEDMOVE_RUN);
-				}
-				SetLookFlag(m_carInObjective, false);
-				TurnBody();
-				break;
-			}
-			case OBJECTIVE_GOTO_AREA_ANY_MEANS:
-			{
-				distWithTarget = m_nextRoutePointPos - GetPosition();
-				distWithTarget.z = 0.0f;
-				if (InVehicle()) {
-					CCarAI::GetCarToGoToCoors(m_pMyVehicle, &m_nextRoutePointPos);
-					CCarCtrl::RegisterVehicleOfInterest(m_pMyVehicle);
-					if (distWithTarget.MagnitudeSqr() < sq(20.0f)) {
-						m_pMyVehicle->AutoPilot.m_nCruiseSpeed = 0;
-						ForceStoredObjective(OBJECTIVE_GOTO_AREA_ANY_MEANS);
-						SetObjective(OBJECTIVE_LEAVE_CAR, m_pMyVehicle);
-					}
-					break;
-				}
-				if (distWithTarget.Magnitude() > 30.0f) {
-					if (m_pMyVehicle) {
-						m_pMyVehicle->AutoPilot.m_nCruiseSpeed = 0;
-					} else {
-						float closestVehDist = SQR(60.0f);
-						int16 lastVehicle;
-						CEntity* vehicles[8];
-						CWorld::FindObjectsInRange(GetPosition(), 25.0f, true, &lastVehicle, 6, vehicles, false, true, false, false, false);
-						CVehicle* foundVeh = nil;
-						for (int i = 0; i < lastVehicle; i++) {
-							CVehicle* nearVeh = (CVehicle*)vehicles[i];
-							/*
-							Not used.
-							CVector vehSpeed = nearVeh->GetSpeed();
-							CVector ourSpeed = GetSpeed();
-							*/
-							CVector vehDistVec = nearVeh->GetPosition() - GetPosition();
-							if (vehDistVec.MagnitudeSqr() < closestVehDist
-								&& m_pedInObjective->m_pMyVehicle != nearVeh)
-							{
-								foundVeh = nearVeh;
-								closestVehDist = vehDistVec.MagnitudeSqr();
-							}
-						}
-						m_pMyVehicle = foundVeh;
-						if (m_pMyVehicle) {
-							m_pMyVehicle->RegisterReference((CEntity **) &m_pMyVehicle);
-							m_pMyVehicle->AutoPilot.m_nCruiseSpeed = 0;
-							SetObjective(OBJECTIVE_ENTER_CAR_AS_DRIVER, m_pMyVehicle);
-						}
-					}
-					break;
-				}
-				// fall through
-			}
-			case OBJECTIVE_GOTO_AREA_ON_FOOT:
-			case OBJECTIVE_RUN_TO_AREA:
-			{
-				if ((m_objective == OBJECTIVE_GOTO_AREA_ON_FOOT || m_objective == OBJECTIVE_RUN_TO_AREA)
-					&& InVehicle()) {
-					SetObjective(OBJECTIVE_LEAVE_CAR, m_pMyVehicle);
-				} else {
-					distWithTarget = m_nextRoutePointPos - GetPosition();
-					distWithTarget.z = 0.0f;
-					if (sq(m_distanceToCountSeekDone) >= distWithTarget.MagnitudeSqr()) {
-						bObjectiveCompleted = true;
-						bScriptObjectiveCompleted = true;
-						SetMoveState(PEDMOVE_STILL);
-					} else if (CTimer::GetTimeInMilliseconds() > m_nPedStateTimer || m_nPedState != PED_SEEK_POS) {
-						if (bUsePedNodeSeek) {
-							CVector bestCoords(0.0f, 0.0f, 0.0f);
-							m_vecSeekPos = m_nextRoutePointPos;
-
-							if (!m_pNextPathNode)
-								FindBestCoordsFromNodes(m_vecSeekPos, &bestCoords);
-
-							if (m_pNextPathNode)
-								m_vecSeekPos = m_pNextPathNode->GetPosition();
-						}
-						SetSeek(m_vecSeekPos, m_distanceToCountSeekDone);
-					}
-				}
-
-				break;
-			}
-			case OBJECTIVE_GUARD_ATTACK:
-			{
-				if (m_pedInObjective) {
-					SetLookFlag(m_pedInObjective, true);
-					m_pLookTarget = m_pedInObjective;
-					m_pLookTarget->RegisterReference((CEntity **) &m_pLookTarget);
-					m_lookTimer = m_attackTimer;
-					TurnBody();
-					float distWithTargetSc = distWithTarget.Magnitude();
-					if (distWithTargetSc >= 20.0f) {
-						RestorePreviousObjective();
-					} else if (m_attackTimer < CTimer::GetTimeInMilliseconds()) {
-						if (m_nPedState != PED_SEEK_ENTITY && distWithTargetSc >= 2.0f) {
-							SetSeek(m_pedInObjective, 1.0f);
-						} else {
-							SetAttack(m_pedInObjective);
-							SetShootTimer(CGeneral::GetRandomNumberInRange(500.0f, 1500.0f));
-						}
-						SetAttackTimer(1000);
-					}
-				} else {
-					RestorePreviousObjective();
-				}
-				break;
-			}
-			case OBJECTIVE_FOLLOW_ROUTE:
-				if (HaveReachedNextPointOnRoute(1.0f)) {
-					int nextPoint = GetNextPointOnRoute();
-					m_nextRoutePointPos = CRouteNode::GetPointPosition(nextPoint);
-				} else {
-					SetSeek(m_nextRoutePointPos, 0.8f);
-				}
-				break;
-			case OBJECTIVE_SOLICIT_VEHICLE:
-				if (m_carInObjective) {
-					if (m_objectiveTimer <= CTimer::GetTimeInMilliseconds()) {
-						if (!bInVehicle) {
-							SetObjective(OBJECTIVE_NONE);
-							SetWanderPath(CGeneral::GetRandomNumber() & 7);
-							m_objectiveTimer = CTimer::GetTimeInMilliseconds() + 10000;
-							if (IsPedInControl())
-								m_pMyVehicle = nil;
-						}
-					} else {
-						if (m_nPedState != PED_FLEE_ENTITY && m_nPedState != PED_SOLICIT)
-							SetSeekCar(m_carInObjective, 0);
-					}
-				} else {
-					RestorePreviousObjective();
-					RestorePreviousState();
-					if (IsPedInControl())
-						m_pMyVehicle = nil;
-				}
-				break;
-			case OBJECTIVE_HAIL_TAXI:
-				if (!RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_HAILTAXI) && CTimer::GetTimeInMilliseconds() > m_nWaitTimer) {
-					Say(SOUND_PED_TAXI_WAIT);
-					CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_HAILTAXI, 4.0f);
-					m_nWaitTimer = CTimer::GetTimeInMilliseconds() + 2000;
-				}
-				break;
-			case OBJECTIVE_CATCH_TRAIN:
-			{
-				if (m_carInObjective) {
-					SetObjective(OBJECTIVE_ENTER_CAR_AS_PASSENGER, m_carInObjective);
-				} else {
-					CVehicle* trainToEnter = nil;
-					float closestCarDist = CHECK_NEARBY_THINGS_MAX_DIST;
-					CVector pos = GetPosition();
-					int16 lastVehicle;
-					CEntity* vehicles[8];
-
-					CWorld::FindObjectsInRange(pos, 10.0f, true, &lastVehicle, 6, vehicles, false, true, false, false, false);
-					for (int i = 0; i < lastVehicle; i++) {
-						CVehicle* nearVeh = (CVehicle*)vehicles[i];
-						if (nearVeh->IsTrain()) {
-							CVector vehDistVec = GetPosition() - nearVeh->GetPosition();
-							float vehDist = vehDistVec.Magnitude();
-							if (vehDist < closestCarDist && m_pedInObjective->m_pMyVehicle != nearVeh)
-							{
-								trainToEnter = nearVeh;
-								closestCarDist = vehDist;
-							}
-						}
-					}
-					if (trainToEnter) {
-						m_carInObjective = trainToEnter;
-						m_carInObjective->RegisterReference((CEntity **) &m_carInObjective);
-					}
-				}
-				break;
-			}
-			case OBJECTIVE_BUY_ICE_CREAM:
-				if (m_carInObjective) {
-					if (m_nPedState != PED_FLEE_ENTITY && m_nPedState != PED_BUY_ICECREAM)
-						SetSeekCar(m_carInObjective, 0);
-				} else {
-					RestorePreviousObjective();
-					RestorePreviousState();
-					if (IsPedInControl())
-						m_pMyVehicle = nil;
-				}
-				break;
-			case OBJECTIVE_STEAL_ANY_CAR:
-			{
-				if (bInVehicle) {
-					bScriptObjectiveCompleted = true;
-					RestorePreviousObjective();
-				} else if (m_carJackTimer < CTimer::GetTimeInMilliseconds()) {
-					CVehicle *carToSteal = nil;
-					float closestCarDist = ENTER_CAR_MAX_DIST;
-					CVector pos = GetPosition();
-					int16 lastVehicle;
-					CEntity *vehicles[8];
-
-					// NB: This should've been ENTER_CAR_MAX_DIST actually, and is fixed in VC.
-					CWorld::FindObjectsInRange(pos, CHECK_NEARBY_THINGS_MAX_DIST, true, &lastVehicle, 6, vehicles, false, true, false, false, false);
-					for(int i = 0; i < lastVehicle; i++) {
-						CVehicle *nearVeh = (CVehicle*)vehicles[i];
-						if (nearVeh->VehicleCreatedBy != MISSION_VEHICLE) {
-							if (nearVeh->m_vecMoveSpeed.Magnitude() <= 0.1f) {
-								if (nearVeh->CanPedOpenLocks(this)) {
-									CVector vehDistVec = GetPosition() - nearVeh->GetPosition();
-									float vehDist = vehDistVec.Magnitude();
-									if (vehDist < closestCarDist) {
-										carToSteal = nearVeh;
-										closestCarDist = vehDist;
-									}
-								}
-							}
-						}
-					}
-					if (carToSteal) {
-						SetObjective(OBJECTIVE_ENTER_CAR_AS_DRIVER, carToSteal);
-						m_carJackTimer = CTimer::GetTimeInMilliseconds() + 5000;
-					} else {
-						RestorePreviousObjective();
-						RestorePreviousState();
-					}
-				}
-				break;
-			}
-			case OBJECTIVE_MUG_CHAR:
-			{
-				if (m_pedInObjective) {
-					if (m_pedInObjective->IsPlayer() || m_pedInObjective->bInVehicle || m_pedInObjective->m_fHealth <= 0.0f) {
-						ClearObjective();
-						return;
-					}
-					if (m_pedInObjective->m_nMoveState > PEDMOVE_WALK) {
-						ClearObjective();
-						return;
-					}
-					if (m_pedInObjective->m_objective == OBJECTIVE_KILL_CHAR_ON_FOOT && m_pedInObjective->m_pedInObjective == this) {
-						SetObjective(OBJECTIVE_FLEE_CHAR_ON_FOOT_TILL_SAFE, m_pedInObjective);
-						SetMoveState(PEDMOVE_SPRINT);
-						return;
-					}
-					if (m_pedInObjective->m_nPedState == PED_FLEE_ENTITY && m_fleeFrom == this
-						|| m_pedInObjective->m_objective == OBJECTIVE_FLEE_CHAR_ON_FOOT_TILL_SAFE && m_pedInObjective->m_pedInObjective == this) {
-						ClearObjective();
-						SetFindPathAndFlee(m_pedInObjective, 15000, true);
-						return;
-					}
-					float distWithTargetScSqr = distWithTarget.MagnitudeSqr();
-					if (distWithTargetScSqr <= sq(10.0f)) {
-						if (distWithTargetScSqr <= sq(1.4f)) {
-							CAnimBlendAssociation *reloadAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_AK_RELOAD);
-							m_fRotationDest = CGeneral::GetRadianAngleBetweenPoints(
-								m_pedInObjective->GetPosition().x, m_pedInObjective->GetPosition().y,
-								GetPosition().x, GetPosition().y);
-
-							if (reloadAssoc || !m_pedInObjective->IsPedShootable()) {
-								if (reloadAssoc &&
-									(!reloadAssoc->IsRunning() || reloadAssoc->currentTime / reloadAssoc->hierarchy->totalLength > 0.8f)) {
-									CAnimBlendAssociation *punchAssoc = CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_PARTIAL_PUNCH, 8.0f);
-									punchAssoc->flags |= ASSOC_DELETEFADEDOUT;
-									punchAssoc->flags |= ASSOC_FADEOUTWHENDONE;
-									CVector2D offset(distWithTarget.x, distWithTarget.y);
-									int dir = m_pedInObjective->GetLocalDirection(offset);
-									m_pedInObjective->StartFightDefend(dir, HITLEVEL_HIGH, 5);
-									m_pedInObjective->ReactToAttack(this);
-									m_pedInObjective->Say(SOUND_PED_ROBBED);
-									Say(SOUND_PED_MUGGING);
-									bRichFromMugging = true;
-
-									// VC FIX: ClearObjective() clears m_pedInObjective in VC (also same with VC_PED_PORTS), so get it before call
-									CPed *victim = m_pedInObjective;
-									ClearObjective();
-									if (victim->m_objective != OBJECTIVE_KILL_CHAR_ON_FOOT
-										|| victim->m_pedInObjective != this) {
-										SetFindPathAndFlee(victim, 15000, true);
-										m_nLastPedState = PED_WANDER_PATH;
-									} else {
-										SetObjective(OBJECTIVE_FLEE_CHAR_ON_FOOT_TILL_SAFE, victim);
-										SetMoveState(PEDMOVE_SPRINT);
-										m_nLastPedState = PED_WANDER_PATH;
-									}
-								}
-							} else {
-								eWeaponType weaponType = GetWeapon()->m_eWeaponType;
-								if (weaponType != WEAPONTYPE_UNARMED && weaponType != WEAPONTYPE_BASEBALLBAT)
-									SetCurrentWeapon(WEAPONTYPE_UNARMED);
-
-								CAnimBlendAssociation *newReloadAssoc = CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_AK_RELOAD, 8.0f);
-								newReloadAssoc->flags |= ASSOC_DELETEFADEDOUT;
-								newReloadAssoc->flags |= ASSOC_FADEOUTWHENDONE;
-							}
-						} else {
-							SetSeek(m_pedInObjective, 1.0f);
-							CAnimBlendAssociation *walkAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_WALK);
-
-							if (walkAssoc)
-								walkAssoc->speed = 1.3f;
-						}
-					} else {
-						ClearObjective();
-						SetWanderPath(CGeneral::GetRandomNumber() & 7);
-					}
-				} else {
-#ifdef VC_PED_PORTS
-					m_objective = OBJECTIVE_NONE;
-#endif
-					ClearObjective();
-				}
-				break;
-			}
-			case OBJECTIVE_FLEE_CAR:
-				if (!bInVehicle && m_nPedState != PED_FLEE_ENTITY && m_pMyVehicle) {
-					RestorePreviousObjective();
-					SetFlee(m_pMyVehicle, 6000);
-					break;
-				}
-				// fall through
-			case OBJECTIVE_LEAVE_CAR:
-				if (CTimer::GetTimeInMilliseconds() > m_leaveCarTimer) {
-					if (InVehicle()
-#ifdef VC_PED_PORTS
-						&& (FindPlayerPed() != this || !CPad::GetPad(0)->GetAccelerate()
-							|| bBusJacked)
-#endif
-						) {
-						if (m_nPedState != PED_EXIT_CAR && m_nPedState != PED_DRAG_FROM_CAR && m_nPedState != PED_EXIT_TRAIN
-							&& (m_nPedType != PEDTYPE_COP
-#ifdef VC_PED_PORTS
-								|| m_pMyVehicle->IsBoat()
-#endif
-								|| m_pMyVehicle->m_vecMoveSpeed.MagnitudeSqr2D() < sq(0.005f))) {
-							if (m_pMyVehicle->IsTrain())
-								SetExitTrain(m_pMyVehicle);
-#ifdef VC_PED_PORTS
-							else if (m_pMyVehicle->IsBoat())
-								SetExitBoat(m_pMyVehicle);
-#endif
-							else
-								SetExitCar(m_pMyVehicle, 0);
-						}
-					} else {
-						RestorePreviousObjective();
-					}
-				}
-				break;
-#ifdef VC_PED_PORTS
-			case OBJECTIVE_LEAVE_CAR_AND_DIE:
-			{
-				if (CTimer::GetTimeInMilliseconds() > m_leaveCarTimer) {
-					if (InVehicle()) {
-						if (m_nPedState != PED_EXIT_CAR && m_nPedState != PED_DRAG_FROM_CAR && m_nPedState != PED_EXIT_TRAIN) {
-							if (m_pMyVehicle->IsBoat())
-								SetExitBoat(m_pMyVehicle);
-							else if (m_pMyVehicle->bIsBus)
-								SetExitCar(m_pMyVehicle, 0);
-							else {
-								eCarNodes doorNode = CAR_DOOR_LF;
-								if (m_pMyVehicle->pDriver != this) {
-									if (m_pMyVehicle->pPassengers[0] == this) {
-										doorNode = CAR_DOOR_RF;
-									} else if (m_pMyVehicle->pPassengers[1] == this) {
-										doorNode = CAR_DOOR_LR;
-									} else if (m_pMyVehicle->pPassengers[2] == this) {
-										doorNode = CAR_DOOR_RR;
-									}
-								}
-								SetBeingDraggedFromCar(m_pMyVehicle, doorNode, false);
-							}
-						}
-					}
-				}
-				break;
-			}
-#endif
-		}
-		if (bObjectiveCompleted
-			|| m_objectiveTimer > 0 && CTimer::GetTimeInMilliseconds() > m_objectiveTimer) {
-			RestorePreviousObjective();
-			if (m_objectiveTimer > CTimer::GetTimeInMilliseconds() || !m_objectiveTimer)
-				m_objectiveTimer = CTimer::GetTimeInMilliseconds() - 1;
-
-			if (CharCreatedBy != RANDOM_CHAR || bInVehicle) {
-				if (IsPedInControl())
-					RestorePreviousState();
-			} else {
-				SetWanderPath(CGeneral::GetRandomNumber() & 7);
-			}
-			ClearAimFlag();
-			ClearLookFlag();
-		}
-	}
-}
-
-void
-CPed::SetFollowRoute(int16 currentPoint, int16 routeType)
-{
-	m_routeLastPoint = currentPoint;
-	m_routeStartPoint = CRouteNode::GetRouteStart(currentPoint);
-	m_routePointsPassed = 0;
-	m_routeType = routeType;
-	m_routePointsBeingPassed = 1;
-	m_objective = OBJECTIVE_FOLLOW_ROUTE;
-	m_nextRoutePointPos = CRouteNode::GetPointPosition(GetNextPointOnRoute());
-}
-
-int
-CPed::GetNextPointOnRoute(void)
-{
-	int16 nextPoint = m_routePointsBeingPassed + m_routePointsPassed + m_routeStartPoint;
-
-	// Route is complete
-	if (nextPoint < 0 || nextPoint > NUMPEDROUTES || m_routeLastPoint != CRouteNode::GetRouteThisPointIsOn(nextPoint)) {
-
-		switch (m_routeType) {
-			case PEDROUTE_STOP_WHEN_DONE:
-				nextPoint = -1;
-				break;
-			case PEDROUTE_GO_BACKWARD_WHEN_DONE:
-				m_routePointsBeingPassed = -m_routePointsBeingPassed;
-				nextPoint = m_routePointsBeingPassed + m_routePointsPassed + m_routeStartPoint;
-				break;
-			case PEDROUTE_GO_TO_START_WHEN_DONE:
-				m_routePointsPassed = -1;
-				nextPoint = m_routePointsBeingPassed + m_routePointsPassed + m_routeStartPoint;
-				break;
-			default:
-				break;
-		}
-	}
-	return nextPoint;
-}
-
-bool
-CPed::HaveReachedNextPointOnRoute(float distToCountReached)
-{
-	if ((m_nextRoutePointPos - GetPosition()).Magnitude2D() >= distToCountReached)
-		return false;
-
-	m_routePointsPassed += m_routePointsBeingPassed;
-	return true;
-}
-
-bool
-CPed::CanSeeEntity(CEntity *entity, float threshold)
-{
-	float neededAngle = CGeneral::GetRadianAngleBetweenPoints(
-		entity->GetPosition().x,
-		entity->GetPosition().y,
-		GetPosition().x,
-		GetPosition().y);
-
-	if (neededAngle < 0.0f)
-		neededAngle += TWOPI;
-	else if (neededAngle > TWOPI)
-		neededAngle -= TWOPI;
-
-	float ourAngle = m_fRotationCur;
-	if (ourAngle < 0.0f)
-		ourAngle += TWOPI;
-	else if (ourAngle > TWOPI)
-		ourAngle -= TWOPI;
-
-	float neededTurn = Abs(neededAngle - ourAngle);
-
-	return neededTurn < threshold || TWOPI - threshold < neededTurn;
-}
-
-// Only used while deciding which gun ped should switch to, if no ammo left.
-bool
-CPed::SelectGunIfArmed(void)
-{
-	for (int i = 0; i < m_maxWeaponTypeAllowed; i++) {
-		if (GetWeapon(i).m_nAmmoTotal > 0) {
-			eWeaponType weaponType = GetWeapon(i).m_eWeaponType;
-			if (weaponType == WEAPONTYPE_BASEBALLBAT || weaponType == WEAPONTYPE_COLT45 || weaponType == WEAPONTYPE_UZI || weaponType == WEAPONTYPE_SHOTGUN ||
-				weaponType == WEAPONTYPE_M16 || weaponType == WEAPONTYPE_SNIPERRIFLE || weaponType == WEAPONTYPE_ROCKETLAUNCHER) {
-				SetCurrentWeapon(i);
-				return true;
-			}
-		}
-	}
-	SetCurrentWeapon(WEAPONTYPE_UNARMED);
-	return false;
-}
-
-void
-CPed::ReactToPointGun(CEntity *entWithGun)
-{
-	if (m_nPedType == PEDTYPE_GANG1 && entWithGun && entWithGun->IsPed() &&
-	    ((CPed*)entWithGun)->IsPlayer())
-		return;
-
-	CPed *pedWithGun = (CPed*)entWithGun;
-	int waitTime;
-
-	if (IsPlayer() || !IsPedInControl() || CharCreatedBy == MISSION_CHAR)
-		return;
-
-	if (m_leader == pedWithGun)
-		return;
-
-	if (m_nWaitState == WAITSTATE_PLAYANIM_HANDSUP || m_nWaitState == WAITSTATE_PLAYANIM_HANDSCOWER ||
-		(GetPosition() - pedWithGun->GetPosition()).MagnitudeSqr2D() > 225.0f)
-		return;
-
-	if (m_leader) {
-		if (FindPlayerPed() == m_leader)
-			return;
-
-		ClearLeader();
-	}
-	if (m_pedStats->m_flags & STAT_GUN_PANIC
-		&& (m_nPedState != PED_ATTACK || GetWeapon()->IsTypeMelee())
-		&& m_nPedState != PED_FLEE_ENTITY && m_nPedState != PED_AIM_GUN) {
-
-		waitTime = CGeneral::GetRandomNumberInRange(3000, 6000);
-		SetWaitState(WAITSTATE_PLAYANIM_HANDSCOWER, &waitTime);
-		Say(SOUND_PED_HANDS_COWER);
-		m_pLookTarget = pedWithGun;
-		m_pLookTarget->RegisterReference((CEntity **) &m_pLookTarget);
-		SetMoveState(PEDMOVE_NONE);
-
-	} else if (m_nPedType != pedWithGun->m_nPedType) {
-		if (IsGangMember() || m_nPedType == PEDTYPE_EMERGENCY || m_nPedType == PEDTYPE_FIREMAN) {
-			RegisterThreatWithGangPeds(pedWithGun);
-		}
-
-		if (m_nPedType == PEDTYPE_COP) {
-			if (pedWithGun->IsPlayer()) {
-				((CPlayerPed*)pedWithGun)->m_pWanted->SetWantedLevelNoDrop(2);
-				if (bCrouchWhenShooting || bKindaStayInSamePlace) {
-					SetDuck(CGeneral::GetRandomNumberInRange(1000, 3000));
-					return;
-				}
-			}
-		}
-
-		if (m_nPedType != PEDTYPE_COP
-			&& (m_nPedState != PED_ATTACK || GetWeapon()->IsTypeMelee())
-			&& (m_nPedState != PED_FLEE_ENTITY || pedWithGun->IsPlayer() && m_fleeFrom != pedWithGun)
-			&& m_nPedState != PED_AIM_GUN && m_objective != OBJECTIVE_KILL_CHAR_ON_FOOT) {
-
-			waitTime = CGeneral::GetRandomNumberInRange(3000, 6000);
-			SetWaitState(WAITSTATE_PLAYANIM_HANDSUP, &waitTime);
-			Say(SOUND_PED_HANDS_UP);
-			m_pLookTarget = pedWithGun;
-			m_pLookTarget->RegisterReference((CEntity **) &m_pLookTarget);
-			SetMoveState(PEDMOVE_NONE);
-			if (m_nPedState == PED_FLEE_ENTITY) {
-				m_fleeFrom = pedWithGun;
-				m_fleeFrom->RegisterReference((CEntity **) &m_fleeFrom);
-			}
-
-			if (FindPlayerPed() == pedWithGun && bRichFromMugging) {
-				int money = CGeneral::GetRandomNumberInRange(100, 300);
-				int pickupCount = money / 40 + 1;
-				int moneyPerPickup = money / pickupCount;
-
-				for (int i = 0; i < pickupCount; i++) {
-					float pickupX = 1.5f * Sin((CGeneral::GetRandomNumber() % 256)/256.0f * TWOPI) + GetPosition().x;
-					float pickupY = 1.5f * Cos((CGeneral::GetRandomNumber() % 256)/256.0f * TWOPI) + GetPosition().y;
-					bool found = false;
-					float groundZ = CWorld::FindGroundZFor3DCoord(pickupX, pickupY, GetPosition().z, &found) + 0.5f;
-					if (found) {
-						CPickups::GenerateNewOne(CVector(pickupX, pickupY, groundZ), MI_MONEY, PICKUP_MONEY, moneyPerPickup + (CGeneral::GetRandomNumber() & 7));
-					}
-				}
-				bRichFromMugging = false;
-			}
-		}
-	}
-}
-
-static void
-MakeNearbyLeoneDefendPlayer(CEntity *target)
-{
-	if (target == nil || !target->IsPed())
-		return;
-
-	CPlayerPed *player = FindPlayerPed();
-	CPed *enemy = (CPed*)target;
-	if (player == nil || enemy == player || enemy->m_nPedType == PEDTYPE_GANG1)
-		return;
-
-	CPedPool *pool = CPools::GetPedPool();
-	for (int32 i = 0; i < pool->GetSize(); i++) {
-		CPed *leone = pool->GetSlot(i);
-		if (leone == nil || leone == player ||
-		    leone->m_nPedType != PEDTYPE_GANG1 ||
-		    leone->DyingOrDead() || !leone->IsPedInControl())
-			continue;
-
-		if ((leone->GetPosition() - player->GetPosition()).MagnitudeSqr() > SQR(40.0f))
-			continue;
-
-		if (leone->m_leader == player)
-			leone->ClearLeader();
-		leone->SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, enemy);
-		leone->SetObjectiveTimer(30000);
-		leone->SetMoveState(PEDMOVE_RUN);
-	}
-}
-
-void
-CPed::ReactToAttack(CEntity *attacker)
-{
-	if (attacker && attacker->IsPed()) {
-		CPed *attackerPed = (CPed*)attacker;
-
-		// When the player attacks a non-Leone ped, nearby Leone join the fight.
-		if (attackerPed->IsPlayer() && m_nPedType != PEDTYPE_GANG1)
-			MakeNearbyLeoneDefendPlayer(this);
-
-		// Leone never retaliate, flee from, or target the player.
-		if (m_nPedType == PEDTYPE_GANG1 && attackerPed->IsPlayer()) {
-			if (m_objective == OBJECTIVE_KILL_CHAR_ON_FOOT ||
-			    m_objective == OBJECTIVE_KILL_CHAR_ANY_MEANS ||
-			    m_objective == OBJECTIVE_FLEE_CHAR_ON_FOOT_TILL_SAFE ||
-			    m_objective == OBJECTIVE_FLEE_CHAR_ON_FOOT_ALWAYS) {
-				ClearObjective();
-				RestorePreviousState();
-			}
-			ClearLookFlag();
-			ClearPointGunAt();
-			return;
-		}
-	}
-
-	if (IsPlayer() && attacker->IsPed()) {
-		MakeNearbyLeoneDefendPlayer(attacker);
-		InformMyGangOfAttack(attacker);
-		SetLookFlag(attacker, true);
-		SetLookTimer(700);
-		return;
-	}
-
-#ifdef VC_PED_PORTS
-	if (m_nPedState == PED_DRIVING && InVehicle()
-		&& (m_pMyVehicle->pDriver == this || m_pMyVehicle->pDriver && m_pMyVehicle->pDriver->m_nPedState == PED_DRIVING && m_pMyVehicle->pDriver->m_objective != OBJECTIVE_LEAVE_CAR_AND_DIE)) {
-
-		if (m_pMyVehicle->VehicleCreatedBy == RANDOM_VEHICLE
-			&& (m_pMyVehicle->GetStatus() == STATUS_SIMPLE || m_pMyVehicle->GetStatus() == STATUS_PHYSICS)
-			&& m_pMyVehicle->AutoPilot.m_nCarMission == MISSION_CRUISE) {
-
-			CCarCtrl::SwitchVehicleToRealPhysics(m_pMyVehicle);
-			m_pMyVehicle->AutoPilot.m_nDrivingStyle = DRIVINGSTYLE_AVOID_CARS;
-			m_pMyVehicle->AutoPilot.m_nCruiseSpeed = GAME_SPEED_TO_CARAI_SPEED * m_pMyVehicle->pHandling->Transmission.fMaxCruiseVelocity;
-			m_pMyVehicle->SetStatus(STATUS_PHYSICS);
-		}
-	} else
-#endif
-	if (IsPedInControl() && (CharCreatedBy != MISSION_CHAR || bRespondsToThreats)) {
-		CPed *ourLeader = m_leader;
-		if (ourLeader != attacker && (!ourLeader || FindPlayerPed() != ourLeader)
-			&& attacker->IsPed()) {
-
-			CPed *attackerPed = (CPed*)attacker; 
-			if (bNotAllowedToDuck) {
-				if (!attackerPed->GetWeapon()->IsTypeMelee()) {
-					m_duckAndCoverTimer = CTimer::GetTimeInMilliseconds();
-					return;
-				}
-			} else if (bCrouchWhenShooting || bKindaStayInSamePlace) {
-				SetDuck(CGeneral::GetRandomNumberInRange(1000, 3000));
-				return;
-			}
-
-			if (m_pedStats->m_fear <= 100 - attackerPed->m_pedStats->m_temper) {
-				if (m_pedStats != attackerPed->m_pedStats) {
-					if (IsGangMember() || m_nPedType == PEDTYPE_EMERGENCY || m_nPedType == PEDTYPE_FIREMAN) {
-						RegisterThreatWithGangPeds(attackerPed);
-					}
-					if (!attackerPed->GetWeapon()->IsTypeMelee() && GetWeapon()->IsTypeMelee()) {
-						SetObjective(OBJECTIVE_FLEE_CHAR_ON_FOOT_TILL_SAFE, attacker);
-						SetMoveState(PEDMOVE_RUN);
-					} else {
-						SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, attacker);
-						SetObjectiveTimer(20000);
-					}
-				}
-			} else {
-				SetObjective(OBJECTIVE_FLEE_CHAR_ON_FOOT_TILL_SAFE, attackerPed);
-				SetMoveState(PEDMOVE_RUN);
-				if (attackerPed->GetWeapon()->IsTypeMelee())
-					Say(SOUND_PED_FLEE_RUN);
-			}
-		}
-	}
-}
-
-void
-CPed::PedAnimAlignCB(CAnimBlendAssociation *animAssoc, void *arg)
-{
-	CPed *ped = (CPed*)arg;
-
-	CVehicle *veh = ped->m_pMyVehicle;
-	if (animAssoc)
-		animAssoc->blendDelta = -1000.0f;
-
-	if (!ped->IsNotInWreckedVehicle())
-		return;
-
-	if (!ped->EnteringCar()) {
-#ifdef VC_PED_PORTS
-		if (ped->m_nPedState != PED_DRIVING)
-#endif
-			ped->QuitEnteringCar();
-
-		return;
-	}
-	if (ped->m_fHealth == 0.0f) {
-		ped->QuitEnteringCar();
-		return;
-	}
-	bool itsVan = !!veh->bIsVan;
-	bool itsBus = !!veh->bIsBus;
-#ifdef FIX_BUGS
-	bool itsLow = !!veh->bLowVehicle;
-#endif
-	eDoors enterDoor;
-	AnimationId enterAnim;
-
-	switch (ped->m_vehDoor) {
-		case CAR_DOOR_RF:
-			itsVan = false;
-			enterDoor = DOOR_FRONT_RIGHT;
-			break;
-		case CAR_DOOR_RR:
-			enterDoor = DOOR_REAR_RIGHT;
-			break;
-		case CAR_DOOR_LF:
-			itsVan = false;
-			enterDoor = DOOR_FRONT_LEFT;
-			break;
-		case CAR_DOOR_LR:
-			enterDoor = DOOR_REAR_LEFT;
-			break;
-		default:
-			break;
-	}
-
-	if (veh->IsDoorMissing(enterDoor) || veh->IsDoorFullyOpen(enterDoor)) {
-
-		veh->AutoPilot.m_nCruiseSpeed = 0;
-		if (ped->m_nPedState == PED_CARJACK) {
-			ped->PedAnimDoorOpenCB(nil, ped);
-			return;
-		}
-		if (enterDoor != DOOR_FRONT_LEFT && enterDoor != DOOR_REAR_LEFT) {
-			if (itsVan) {
-				enterAnim = ANIM_STD_VAN_GET_IN_REAR_RHS;
-			} else if (itsBus) {
-				enterAnim = ANIM_STD_COACH_GET_IN_RHS;
-#ifdef FIX_BUGS
-			} else if (itsLow) {
-				enterAnim = ANIM_STD_CAR_GET_IN_LO_RHS;
-#endif
-			} else {
-				enterAnim = ANIM_STD_CAR_GET_IN_RHS;
-			}
-		} else if (itsVan) {
-			enterAnim = ANIM_STD_VAN_GET_IN_REAR_LHS;
-		} else if (itsBus) {
-			enterAnim = ANIM_STD_COACH_GET_IN_LHS;
-#ifdef FIX_BUGS
-		} else if (itsLow) {
-			enterAnim = ANIM_STD_CAR_GET_IN_LO_LHS;
-#endif
-		} else {
-			enterAnim = ANIM_STD_CAR_GET_IN_LHS;
-		}
-		ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, enterAnim);
-		ped->m_pVehicleAnim->SetFinishCallback(PedAnimGetInCB, ped);
-
-	} else if (veh->CanPedOpenLocks(ped)) {
-
-		veh->AutoPilot.m_nCruiseSpeed = 0;
-		if (enterDoor != DOOR_FRONT_LEFT && enterDoor != DOOR_REAR_LEFT) {
-			if (itsVan) {
-				ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_VAN_OPEN_DOOR_REAR_RHS);
-			} else if (itsBus) {
-				ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_COACH_OPEN_RHS);
-			} else {
-				ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_CAR_OPEN_DOOR_RHS);
-			}
-		} else if (itsVan) {
-			ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_VAN_OPEN_DOOR_REAR_LHS);
-		} else if (itsBus) {
-			ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_COACH_OPEN_LHS);
-		} else {
-
-			// Give the Corleone player the same quick driver pull-out used by Leone AI.
-			if ((ped->IsPlayer() || ped->m_objective == OBJECTIVE_ENTER_CAR_AS_DRIVER) && veh->pDriver) {
-
-				if (!veh->bLowVehicle
-					&& veh->pDriver->CharCreatedBy != MISSION_CHAR
-					&& veh->pDriver->m_nPedState == PED_DRIVING) {
-
-					ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_QUICKJACK);
-					ped->m_pVehicleAnim->SetFinishCallback(PedAnimGetInCB, ped);
-					veh->pDriver->SetBeingDraggedFromCar(veh, ped->m_vehDoor, true);
-
-					if (veh->pDriver->IsGangMember())
-						veh->pDriver->RegisterThreatWithGangPeds(ped);
-					return;
-				}
-			}
-			ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_CAR_OPEN_DOOR_LHS);
-		}
-		ped->m_pVehicleAnim->SetFinishCallback(PedAnimDoorOpenCB, ped);
-
-	} else {
-		if (enterDoor != DOOR_FRONT_LEFT && enterDoor != DOOR_REAR_LEFT)
-			ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_CARDOOR_LOCKED_RHS);
-		else
-			ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_CARDOOR_LOCKED_LHS);
-
-		ped->bCancelEnteringCar = true;
-		ped->m_pVehicleAnim->SetFinishCallback(PedAnimDoorOpenCB, ped);
-	}
-}
-
-void
-CPed::PedAnimDoorOpenCB(CAnimBlendAssociation* animAssoc, void* arg)
-{
-	CPed* ped = (CPed*)arg;
-
-	CVehicle* veh = ped->m_pMyVehicle;
-
-	if (animAssoc)
-		animAssoc->blendDelta = -1000.0f;
-
-	if (!ped->IsNotInWreckedVehicle())
-		return;
-
-	if (!ped->EnteringCar()) {
-#ifdef VC_PED_PORTS
-		if (ped->m_nPedState != PED_DRIVING)
-#endif
-			ped->QuitEnteringCar();
-
-		return;
-	}
-
-	eDoors door;
-	CPed *pedInSeat = nil;
-	switch (ped->m_vehDoor) {
-		case CAR_DOOR_RF: door = DOOR_FRONT_RIGHT; pedInSeat = veh->pPassengers[0]; break;
-		case CAR_DOOR_RR: door = DOOR_REAR_RIGHT; pedInSeat = veh->pPassengers[2]; break;
-		case CAR_DOOR_LF: door = DOOR_FRONT_LEFT; pedInSeat = veh->pDriver; break;
-		case CAR_DOOR_LR: door = DOOR_REAR_LEFT; pedInSeat = veh->pPassengers[1]; break;
-		default: assert(0);
-	}
-
-	if (ped->m_fHealth == 0.0f || CPad::GetPad(0)->ArePlayerControlsDisabled() && pedInSeat && pedInSeat->IsPlayer()) {
-		ped->QuitEnteringCar();
-		return;
-	}
-
-	bool isVan = veh->bIsVan;
-	bool isBus = veh->bIsBus;
-	bool isLow = veh->bLowVehicle;
-	bool vehUpsideDown = veh->IsUpsideDown();
-	if (ped->bCancelEnteringCar) {
-		if (ped->IsPlayer()) {
-			if (veh->pDriver) {
-				if (veh->pDriver->m_nPedType == PEDTYPE_COP) {
-					FindPlayerPed()->SetWantedLevelNoDrop(1);
-				}
-			}
-		}
-#ifdef CANCELLABLE_CAR_ENTER
-		if (!veh->IsDoorMissing(door) && veh->CanPedOpenLocks(ped) && veh->IsCar()) {
-			((CAutomobile*)veh)->Damage.SetDoorStatus(door, DOOR_STATUS_SWINGING);
-		}
-#endif
-		ped->QuitEnteringCar();
-		ped->RestorePreviousObjective();
-		ped->bCancelEnteringCar = false;
-		return;
-	}
-	if (!veh->IsDoorMissing(door) && veh->IsCar()) {
-		((CAutomobile*)veh)->Damage.SetDoorStatus(door, DOOR_STATUS_SWINGING);
-	}
-
-	if (veh->m_vecMoveSpeed.Magnitude() > 0.2f) {
-		ped->QuitEnteringCar();
-		if (ped->m_vehDoor != CAR_DOOR_LF && ped->m_vehDoor != CAR_DOOR_LR)
-			ped->SetFall(1000, ANIM_STD_HIGHIMPACT_LEFT, false);
-		else
-			ped->SetFall(1000, ANIM_STD_HIGHIMPACT_RIGHT, false);
-		
-		return;
-	}
-	veh->ProcessOpenDoor(ped->m_vehDoor, ANIM_STD_CAR_OPEN_DOOR_LHS, 1.0f);
-
-	if (ped->m_vehDoor == CAR_DOOR_LF || ped->m_vehDoor == CAR_DOOR_RF)
-		isVan = false;
-
-	if (ped->m_nPedState != PED_CARJACK || isBus) {
-		AnimationId animToPlay;
-		if (ped->m_vehDoor != CAR_DOOR_LF && ped->m_vehDoor != CAR_DOOR_LR) {
-
-			if (isVan) {
-				animToPlay = ANIM_STD_VAN_GET_IN_REAR_RHS;
-			} else if (isBus) {
-				animToPlay = ANIM_STD_COACH_GET_IN_RHS;
-			} else if (isLow) {
-				animToPlay = ANIM_STD_CAR_GET_IN_LO_RHS;
-			} else {
-				animToPlay = ANIM_STD_CAR_GET_IN_RHS;
-			}
-		} else if (isVan) {
-			animToPlay = ANIM_STD_VAN_GET_IN_REAR_LHS;
-		} else if (isBus) {
-			animToPlay = ANIM_STD_COACH_GET_IN_LHS;
-		} else if (isLow) {
-			animToPlay = ANIM_STD_CAR_GET_IN_LO_LHS;
-		} else {
-			animToPlay = ANIM_STD_CAR_GET_IN_LHS;
-		}
-		ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, animToPlay);
-		ped->m_pVehicleAnim->SetFinishCallback(PedAnimGetInCB, ped);
-	} else {
-		CPed *pedToDragOut = nil;
-		switch (ped->m_vehDoor) {
-			case CAR_DOOR_RF: pedToDragOut = veh->pPassengers[0]; break;
-			case CAR_DOOR_RR: pedToDragOut = veh->pPassengers[2]; break;
-			case CAR_DOOR_LF: pedToDragOut = veh->pDriver; break;
-			case CAR_DOOR_LR: pedToDragOut = veh->pPassengers[1]; break;
-			default: assert(0);
-		}
-
-		if (vehUpsideDown) {
-			ped->QuitEnteringCar();
-			if (ped->m_nPedType == PEDTYPE_COP)
-				((CCopPed*)ped)->SetArrestPlayer(ped->m_pedInObjective);
-		}
-
-		if (ped->m_vehDoor != CAR_DOOR_LF && ped->m_vehDoor != CAR_DOOR_LR) {
-			if (pedToDragOut && !pedToDragOut->bDontDragMeOutCar) {
-				if (pedToDragOut->m_nPedState != PED_DRIVING) {
-					ped->QuitEnteringCar();
-					pedToDragOut = nil;
-				} else {
-					if (isLow)
-						ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_CAR_PULL_OUT_PED_LO_RHS);
-					else
-						ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_CAR_PULL_OUT_PED_RHS);
-
-					ped->m_pVehicleAnim->SetFinishCallback(PedAnimPullPedOutCB, ped);
-				}
-			} else if (ped->m_nPedType == PEDTYPE_COP) {
-				ped->QuitEnteringCar();
-				if (ped->m_pedInObjective && ped->m_pedInObjective->m_nPedState == PED_DRIVING) {
-					veh->SetStatus(STATUS_PLAYER_DISABLED);
-					((CCopPed*)ped)->SetArrestPlayer(ped->m_pedInObjective);
-				} else if (!veh->IsDoorMissing(DOOR_FRONT_RIGHT)) {
-					((CAutomobile*)veh)->Damage.SetDoorStatus(DOOR_FRONT_RIGHT, DOOR_STATUS_SWINGING);
-				}
-			} else {
-				// BUG: Probably we will sit on top of the passenger if his m_ped_flagF4 is true.
-				if (isLow)
-					ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_CAR_GET_IN_LO_LHS);
-				else
-					ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_CAR_GET_IN_LHS);
-
-				ped->m_pVehicleAnim->SetFinishCallback(PedAnimGetInCB, ped);
-			}
-		} else {
-			if (pedToDragOut) {
-				if (pedToDragOut->m_nPedState != PED_DRIVING || pedToDragOut->bDontDragMeOutCar) {
-
-					// BUG: Player freezes in that condition due to its objective isn't restored. It's an unfinished feature, used in VC.
-					ped->QuitEnteringCar();
-					pedToDragOut = nil;
-				} else {
-					if (isLow)
-						ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_CAR_PULL_OUT_PED_LO_LHS);
-					else
-						ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_CAR_PULL_OUT_PED_LHS);
-					
-					ped->m_pVehicleAnim->SetFinishCallback(PedAnimPullPedOutCB, ped);
-				}
-			} else {
-				if (isLow)
-					ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_CAR_GET_IN_LO_LHS);
-				else
-					ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_CAR_GET_IN_LHS);
-
-				ped->m_pVehicleAnim->SetFinishCallback(PedAnimGetInCB, ped);
-			}
-		}
-
-		if (pedToDragOut) {
-			pedToDragOut->SetBeingDraggedFromCar(veh, ped->m_vehDoor, false);
-			if (pedToDragOut->IsGangMember())
-				pedToDragOut->RegisterThreatWithGangPeds(ped);
-		}
-	}
-
-	if (veh->pDriver && ped) {
-		veh->pDriver->SetLookFlag(ped, true);
-		veh->pDriver->SetLookTimer(1000);
-	}
-	return;
-}
-
-void
-CPed::PedAnimPullPedOutCB(CAnimBlendAssociation* animAssoc, void* arg)
-{
-	CPed* ped = (CPed*)arg;
-
-	CVehicle* veh = ped->m_pMyVehicle;
-	if (animAssoc)
-		animAssoc->blendDelta = -1000.0f;
-
-	if (ped->EnteringCar()) {
-		if (!ped->IsNotInWreckedVehicle())
-			return;
-
-#ifdef CANCELLABLE_CAR_ENTER
-		if (ped->bCancelEnteringCar) {
-			ped->QuitEnteringCar();
-			ped->RestorePreviousObjective();
-			ped->bCancelEnteringCar = false;
-			return;
-		}
-#endif
-
-		bool isLow = !!veh->bLowVehicle;
-
-		int padNo;
-		if (ped->IsPlayer()) {
-
-			// BUG? This will cause crash if m_nPedType is bigger then 1, there are only 2 pads
-			switch (ped->m_nPedType) {
-				case PEDTYPE_PLAYER1:
-					padNo = 0;
-					break;
-				case PEDTYPE_PLAYER2:
-					padNo = 1;
-					break;
-				case PEDTYPE_PLAYER3:
-					padNo = 2;
-					break;
-				case PEDTYPE_PLAYER4:
-					padNo = 3;
-					break;
-			}
-			CPad *pad = CPad::GetPad(padNo);
-
-			if (!pad->ArePlayerControlsDisabled()) {
-
-				if (pad->GetTarget()
-					|| pad->NewState.LeftStickX
-					|| pad->NewState.LeftStickY
-					|| pad->NewState.DPadUp
-					|| pad->NewState.DPadDown
-					|| pad->NewState.DPadLeft
-					|| pad->NewState.DPadRight) {
-					ped->QuitEnteringCar();
-					ped->RestorePreviousObjective();
-					return;
-				}
-			}
-		}
-
-		if (ped->m_objective == OBJECTIVE_ENTER_CAR_AS_DRIVER) {
-			AnimationId animToPlay;
-			if (ped->m_vehDoor != CAR_DOOR_LF && ped->m_vehDoor != CAR_DOOR_LR) {
-				if (isLow)
-					animToPlay = ANIM_STD_CAR_GET_IN_LO_RHS;
-				else
-					animToPlay = ANIM_STD_CAR_GET_IN_RHS;
-			} else if (isLow) {
-				animToPlay = ANIM_STD_CAR_GET_IN_LO_LHS;
-			} else {
-				animToPlay = ANIM_STD_CAR_GET_IN_LHS;
-			}
-			ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, animToPlay);
-			ped->m_pVehicleAnim->SetFinishCallback(PedAnimGetInCB, ped);
-		} else {
-			ped->QuitEnteringCar();
-		}
-	} else {
-		ped->QuitEnteringCar();
-	}
-}
-
-void
-CPed::PedAnimGetInCB(CAnimBlendAssociation *animAssoc, void *arg)
-{
-	CPed *ped = (CPed*) arg;
-
-	CVehicle *veh = ped->m_pMyVehicle;
-	if (animAssoc)
-		animAssoc->blendDelta = -1000.0f;
-
-	if (!ped->IsNotInWreckedVehicle() || ped->DyingOrDead())
-		return;
-
-	if (!ped->EnteringCar()) {
-#ifdef VC_PED_PORTS
-		if(ped->m_nPedState != PED_DRIVING)
-#endif
-			ped->QuitEnteringCar();
-		return;
-	}
-
-	if (ped->IsPlayer() && ped->bGonnaKillTheCarJacker && ((CPlayerPed*)ped)->m_pArrestingCop) {
-		PedSetInCarCB(nil, ped);
-		ped->m_nLastPedState = ped->m_nPedState;
-		ped->SetPedState(PED_ARRESTED);
-		ped->bGonnaKillTheCarJacker = false;
-		if (veh) {
-			veh->m_nNumGettingIn = 0;
-			veh->m_nGettingInFlags = 0;	
-			veh->bIsHandbrakeOn = true;
-			veh->SetStatus(STATUS_PLAYER_DISABLED);
-		}
-		return;
-	}
-	if (ped->IsPlayer() && ped->m_vehDoor == CAR_DOOR_LF
-		&& (Pads[0].GetAccelerate() >= 255.0f || Pads[0].GetBrake() >= 255.0f)
-		&& veh->IsCar()) {
-		if (((CAutomobile*)veh)->Damage.GetDoorStatus(DOOR_FRONT_LEFT) != DOOR_STATUS_MISSING)
-			((CAutomobile*)veh)->Damage.SetDoorStatus(DOOR_FRONT_LEFT, DOOR_STATUS_SWINGING);
-
-		PedSetInCarCB(nil, ped);
-		return;
-	}
-	bool isVan = !!veh->bIsVan;
-	bool isBus = !!veh->bIsBus;
-	bool isLow = !!veh->bLowVehicle;
-	eDoors enterDoor;
-	switch (ped->m_vehDoor) {
-		case CAR_DOOR_RF:
-			isVan = false;
-			enterDoor = DOOR_FRONT_RIGHT;
-			break;
-		case CAR_DOOR_RR:
-			enterDoor = DOOR_REAR_RIGHT;
-			break;
-		case CAR_DOOR_LF:
-			isVan = false;
-			enterDoor = DOOR_FRONT_LEFT;
-			break;
-		case CAR_DOOR_LR:
-			enterDoor = DOOR_REAR_LEFT;
-			break;
-		default:
-			break;
-	}
-	if (!veh->IsDoorMissing(enterDoor)) {
-		if (veh->IsCar())
-			((CAutomobile*)veh)->Damage.SetDoorStatus(enterDoor, DOOR_STATUS_SWINGING);
-	}
-	CPed *driver = veh->pDriver;
-	if (driver && (ped->m_objective == OBJECTIVE_ENTER_CAR_AS_DRIVER || ped->m_nPedState == PED_CARJACK)) {
-		if (veh->bIsBus) {
-			driver->SetObjective(OBJECTIVE_LEAVE_CAR, veh);
-			if (driver->IsPlayer()) {
-				veh->bIsHandbrakeOn = true;
-				veh->SetStatus(STATUS_PLAYER_DISABLED);
-			}
-			driver->bBusJacked = true;
-			veh->bIsBeingCarJacked = false;
-			PedSetInCarCB(nil, ped);
-			if (ped->m_nPedType == PEDTYPE_COP
-				|| ped->m_objective == OBJECTIVE_KILL_CHAR_ON_FOOT
-				|| ped->m_objective == OBJECTIVE_KILL_CHAR_ANY_MEANS) {
-				ped->SetObjective(OBJECTIVE_LEAVE_CAR, veh);
-			}
-			ped->m_leaveCarTimer = CTimer::GetTimeInMilliseconds() + 400;
-			return;
-		}
-		if (driver != ped && ped->m_vehDoor != CAR_DOOR_LF) {
-			if (!driver->IsPlayer()) {
-				driver->bUsePedNodeSeek = true;
-				driver->m_pLastPathNode = nil;
-				if (driver->m_pedStats->m_temper <= driver->m_pedStats->m_fear
-					|| driver->CharCreatedBy == MISSION_CHAR
-					|| veh->VehicleCreatedBy == MISSION_VEHICLE) {
-					driver->bFleeAfterExitingCar = true;
-				} else {
-					driver->bGonnaKillTheCarJacker = true;
-					veh->pDriver->SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, ped);
-
-					if (veh->pDriver->m_nPedType == PEDTYPE_COP && ped->IsPlayer()) {
-						FindPlayerPed()->SetWantedLevelNoDrop(1);
-					}
-				}
-			}
-			if ((ped->m_nPedType != PEDTYPE_EMERGENCY || veh->pDriver->m_nPedType != PEDTYPE_EMERGENCY)
-				&& (ped->m_nPedType != PEDTYPE_COP || veh->pDriver->m_nPedType != PEDTYPE_COP)) {
-				veh->pDriver->SetObjective(OBJECTIVE_LEAVE_CAR, veh);
-				veh->pDriver->Say(SOUND_PED_CAR_JACKED);
-#ifdef VC_PED_PORTS
-				veh->pDriver->SetRadioStation();
-#endif
-			} else {
-				ped->m_objective = OBJECTIVE_ENTER_CAR_AS_PASSENGER;
-			}
-		}
-	}
-	if (veh->IsDoorMissing(enterDoor) || isBus) {
-		PedAnimDoorCloseCB(nil, ped);
-	} else {
-		AnimationId animToPlay;
-		if (enterDoor != DOOR_FRONT_LEFT && enterDoor != DOOR_REAR_LEFT) {
-			if (isVan) {
-				animToPlay = ANIM_STD_VAN_CLOSE_DOOR_REAR_RHS;
-			} else if (isLow) {
-				animToPlay = ANIM_STD_CAR_CLOSE_DOOR_LO_RHS;
-			} else {
-				animToPlay = ANIM_STD_CAR_CLOSE_DOOR_RHS;
-			}
-		} else if (isVan) {
-			animToPlay = ANIM_STD_VAN_CLOSE_DOOR_REAR_LHS;
-		} else if (isLow) {
-			animToPlay = ANIM_STD_CAR_CLOSE_DOOR_LO_LHS;
-		} else {
-			animToPlay = ANIM_STD_CAR_CLOSE_DOOR_LHS;
-		}
-		ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, animToPlay);
-		ped->m_pVehicleAnim->SetFinishCallback(PedAnimDoorCloseCB, ped);
-	}
-}
-
-void
-CPed::PedAnimDoorCloseCB(CAnimBlendAssociation *animAssoc, void *arg)
-{
-	CPed *ped = (CPed*)arg;
-
-	CAutomobile *veh = (CAutomobile*)(ped->m_pMyVehicle);
-	
-	if (!ped->IsNotInWreckedVehicle() || ped->DyingOrDead())
-		return;
-
-	if (ped->EnteringCar()) {
-		bool isLow = !!veh->bLowVehicle;
-
-		if (!veh->bIsBus)
-			veh->ProcessOpenDoor(ped->m_vehDoor, ANIM_STD_CAR_CLOSE_DOOR_LHS, 1.0f);
-
-		eDoors door;
-		switch (ped->m_vehDoor) {
-			case CAR_DOOR_RF: door = DOOR_FRONT_RIGHT; break;
-			case CAR_DOOR_RR: door = DOOR_REAR_RIGHT; break;
-			case CAR_DOOR_LF: door = DOOR_FRONT_LEFT; break;
-			case CAR_DOOR_LR: door = DOOR_REAR_LEFT; break;
-			default: assert(0);
-		}
-
-		if (veh->Damage.GetDoorStatus(door) == DOOR_STATUS_SWINGING)
-			veh->Damage.SetDoorStatus(door, DOOR_STATUS_OK);
-
-		if (door == DOOR_FRONT_LEFT || ped->m_objective == OBJECTIVE_ENTER_CAR_AS_PASSENGER || veh->bIsBus) {
-			PedSetInCarCB(nil, ped);
-		} else if (ped->m_vehDoor == CAR_DOOR_RF
-				&& (veh->m_nGettingInFlags & CAR_DOOR_FLAG_LF ||
-					(veh->pDriver != nil && 
-						(veh->pDriver->m_objective != OBJECTIVE_LEAVE_CAR
-#ifdef VC_PED_PORTS
-							&& veh->pDriver->m_objective != OBJECTIVE_LEAVE_CAR_AND_DIE
-#endif
-							|| !veh->IsRoomForPedToLeaveCar(CAR_DOOR_LF, nil))))) {
-
-			if (ped->m_objective == OBJECTIVE_ENTER_CAR_AS_DRIVER
-#if defined VC_PED_PORTS || defined FIX_BUGS
-				|| ped->m_nPedState == PED_CARJACK
-#endif
-				)
-				veh->bIsBeingCarJacked = false;
-
-			ped->m_objective = OBJECTIVE_ENTER_CAR_AS_PASSENGER;
-			PedSetInCarCB(nil, ped);
-
-			ped->SetObjective(OBJECTIVE_LEAVE_CAR, veh);
-			if (!ped->IsPlayer())
-				ped->bFleeAfterExitingCar = true;
-
-			ped->bUsePedNodeSeek = true;
-			ped->m_pNextPathNode = nil;
-
-		} else {
-			if (animAssoc)
-				animAssoc->blendDelta = -1000.0f;
-
-			if (isLow)
-				ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_CAR_SHUFFLE_LO_RHS);
-			else
-				ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_CAR_SHUFFLE_RHS);
-
-			ped->m_pVehicleAnim->SetFinishCallback(PedSetInCarCB, ped);
-		}
-	} else {
-#ifdef VC_PED_PORTS
-		if (ped->m_nPedState != PED_DRIVING)
-#endif
-			ped->QuitEnteringCar();
-	}
-}
-
-void
-CPed::SetFormation(eFormation type)
-{
-	// FIX: Formations in GetFormationPosition were in range 1-8, whereas in here it's 0-7.
-	//      To not change the behaviour, range in here tweaked by 1 with the use of enum.
-
-	switch (m_pedFormation) {
-		case FORMATION_REAR:
-		case FORMATION_REAR_LEFT:
-		case FORMATION_REAR_RIGHT:
-		case FORMATION_FRONT_LEFT:
-		case FORMATION_FRONT_RIGHT:
-		case FORMATION_LEFT:
-		case FORMATION_RIGHT:
-		case FORMATION_FRONT:
-			break;
-		default:
-			Error("Unknown formation type, PedAI.cpp");
-			break;
-	}
-	m_pedFormation = type;
-}
-
-CVector
-CPed::GetFormationPosition(void)
-{
-	if (m_pedInObjective->m_nPedState == PED_DEAD) {
-		if (!m_pedInObjective->m_pedInObjective) {
-			m_pedInObjective = nil;
-			return GetPosition();
-		}
-		m_pedInObjective = m_pedInObjective->m_pedInObjective;
-	}
-
-	CVector formationOffset;
-	switch (m_pedFormation) {
-		case FORMATION_REAR:
-			formationOffset = CVector(0.0f, -1.5f, 0.0f);
-			break;
-		case FORMATION_REAR_LEFT:
-			formationOffset = CVector(-1.5f, -1.5f, 0.0f);
-			break;
-		case FORMATION_REAR_RIGHT:
-			formationOffset = CVector(1.5f, -1.5f, 0.0f);
-			break;
-		case FORMATION_FRONT_LEFT:
-			formationOffset = CVector(-1.5f, 1.5f, 0.0f);
-			break;
-		case FORMATION_FRONT_RIGHT:
-			formationOffset = CVector(1.5f, 1.5f, 0.0f);
-			break;
-		case FORMATION_LEFT:
-			formationOffset = CVector(-1.5f, 0.0f, 0.0f);
-			break;
-		case FORMATION_RIGHT:
-			formationOffset = CVector(1.5f, 0.0f, 0.0f);
-			break;
-		case FORMATION_FRONT:
-			formationOffset = CVector(0.0f, 1.5f, 0.0f);
-			break;
-		default:
-			formationOffset = CVector(0.0f, 0.0f, 0.0f);
-			break;
-	}
-	return formationOffset + m_pedInObjective->GetPosition();
-}
-
-void
-CPed::PedAnimStepOutCarCB(CAnimBlendAssociation* animAssoc, void* arg)
-{
-	CPed* ped = (CPed*)arg;
-
-	CVehicle* veh = ped->m_pMyVehicle;
-	if (animAssoc)
-		animAssoc->blendDelta = -1000.0f;
-
-	if (!veh) {
-		PedSetOutCarCB(nil, ped);
-		return;
-	}
-#ifdef VC_PED_PORTS
-	CVector posForZ = ped->GetPosition();
-	CPedPlacement::FindZCoorForPed(&posForZ);
-	if (ped->GetPosition().z - 0.5f > posForZ.z) {
-		PedSetOutCarCB(nil, ped);
-		return;
-	}
-#endif
-	veh->m_nStaticFrames = 0;
-	veh->m_vecMoveSpeed += CVector(0.001f, 0.001f, 0.001f);
-	veh->m_vecTurnSpeed += CVector(0.001f, 0.001f, 0.001f);
-	if (!veh->bIsBus)
-		veh->ProcessOpenDoor(ped->m_vehDoor, ANIM_STD_GETOUT_LHS, 1.0f);
-
-	/* 
-	// Duplicate and only in PC for some reason
-	if (!veh) {
-		PedSetOutCarCB(nil, ped);
-		return;
-	}
-	*/
-	eDoors door;
-	switch (ped->m_vehDoor) {
-		case CAR_DOOR_RF:
-			door = DOOR_FRONT_RIGHT;
-			break;
-		case CAR_DOOR_RR:
-			door = DOOR_REAR_RIGHT;
-			break;
-		case CAR_DOOR_LF:
-			door = DOOR_FRONT_LEFT;
-			break;
-		case CAR_DOOR_LR:
-			door = DOOR_REAR_LEFT;
-			break;
-		default:
-			break;
-	}
-	bool closeDoor = !veh->IsDoorMissing(door);
-
-	int padNo;
-	if (ped->IsPlayer()) {
-
-		// BUG? This will cause crash if m_nPedType is bigger then 1, there are only 2 pads
-		switch (ped->m_nPedType) {
-			case PEDTYPE_PLAYER1:
-				padNo = 0;
-				break;
-			case PEDTYPE_PLAYER2:
-				padNo = 1;
-				break;
-			case PEDTYPE_PLAYER3:
-				padNo = 2;
-				break;
-			case PEDTYPE_PLAYER4:
-				padNo = 3;
-				break;
-		}
-		CPad* pad = CPad::GetPad(padNo);
-		bool engineIsIntact = veh->IsCar() && ((CAutomobile*)veh)->Damage.GetEngineStatus() >= 225;
-		if (!pad->ArePlayerControlsDisabled() && veh->m_nDoorLock != CARLOCK_FORCE_SHUT_DOORS
-			&& (pad->GetTarget()
-				|| pad->NewState.LeftStickX
-				|| pad->NewState.LeftStickY
-				|| pad->NewState.DPadUp
-				|| pad->NewState.DPadDown
-				|| pad->NewState.DPadLeft
-				|| pad->NewState.DPadRight)
-			|| veh->bIsBus
-			|| veh->m_pCarFire
-			|| engineIsIntact) {
-			closeDoor = false;
-		}
-	}
-
-#ifdef VC_PED_PORTS
-	if (ped->m_objective == OBJECTIVE_LEAVE_CAR_AND_DIE)
-		closeDoor = false;
-#endif
-
-	if (!closeDoor) {
-		if (!veh->IsDoorMissing(door) && !veh->bIsBus) {
-			((CAutomobile*)veh)->Damage.SetDoorStatus(door, DOOR_STATUS_SWINGING);
-		}
-		PedSetOutCarCB(nil, ped);
-		return;
-	}
-
-	if (ped->bFleeAfterExitingCar || ped->bGonnaKillTheCarJacker) {
-#ifdef FIX_BUGS
-		if (!veh->IsDoorMissing(door))
-			((CAutomobile*)veh)->Damage.SetDoorStatus(door, DOOR_STATUS_SWINGING);
-		PedSetOutCarCB(nil, ped);
-		return;
-#else
-		if (!veh->IsDoorMissing(door))
-			((CAutomobile*)veh)->Damage.SetDoorStatus(DOOR_FRONT_LEFT, DOOR_STATUS_SWINGING);
-#endif
-	} else {
-		switch (door) {
-			case DOOR_FRONT_LEFT:
-				ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_CAR_CLOSE_LHS);
-				break;
-			case DOOR_FRONT_RIGHT:
-				ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_CAR_CLOSE_RHS);
-				break;
-			case DOOR_REAR_LEFT:
-				ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_CAR_CLOSE_LHS);
-				break;
-			case DOOR_REAR_RIGHT:
-				ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_CAR_CLOSE_RHS);
-				break;
-			default:
-				break;
-		}
-	}
-
-	if (ped->m_pVehicleAnim)
-		ped->m_pVehicleAnim->SetFinishCallback(PedSetOutCarCB, ped);
-	return;
-}
-
-void
-CPed::LineUpPedWithCar(PedLineUpPhase phase)
-{
-	bool vehIsUpsideDown = false;
-	bool stillGettingInOut = false;
-	int vehAnim;
-	float seatPosMult = 0.0f;
-	float currentZ;
-	float adjustedTimeStep;
-
-	if (CReplay::IsPlayingBack())
-		return;
-
-	if (!bChangedSeat && phase != LINE_UP_TO_CAR_2) {
-		if (RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_CAR_SIT)) {
-			SetPedPositionInCar();
-			return;
-		}
-		if (RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_CAR_SIT_LO)) {
-			SetPedPositionInCar();
-			return;
-		}
-		if (RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_CAR_SIT_P)) {
-			SetPedPositionInCar();
-			return;
-		}
-		if (RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_CAR_SIT_P_LO)) {
-			SetPedPositionInCar();
-			return;
-		}
-		bChangedSeat = true;
-	}
-	if (phase == LINE_UP_TO_CAR_START) {
-		m_vecMoveSpeed = CVector(0.0f, 0.0f, 0.0f);
-	}
-	CVehicle *veh = m_pMyVehicle;
-
-	// Not quite right, IsUpsideDown func. checks for <= -0.9f.
-	if (veh->GetUp().z <= -0.8f)
-		vehIsUpsideDown = true;
-
-	if (m_vehDoor == CAR_DOOR_RF || m_vehDoor == CAR_DOOR_RR) {
-		if (vehIsUpsideDown) {
-			m_fRotationDest = -PI + veh->GetForward().Heading();
-		} else if (veh->bIsBus) {
-			m_fRotationDest = 0.5f * PI + veh->GetForward().Heading();
-		} else {
-			m_fRotationDest = veh->GetForward().Heading();
-		}
-	} else if (m_vehDoor == CAR_DOOR_LF || m_vehDoor == CAR_DOOR_LR) {
-		if (vehIsUpsideDown) {
-			m_fRotationDest = veh->GetForward().Heading();
-		} else if (veh->bIsBus) {
-			m_fRotationDest = -0.5f * PI + veh->GetForward().Heading();
-		} else {
-			m_fRotationDest = veh->GetForward().Heading();
-		}
-	} else {
-		// I don't know will this part ever run(maybe boats?), but the game also handles that. I don't know is it intentional.
-
-		if (vehIsUpsideDown) {
-			m_fRotationDest = veh->GetForward().Heading();
-		} else if (veh->bIsBus) {
-			m_fRotationDest = 0.5f * PI + veh->GetForward().Heading();
-		} else {
-			m_fRotationDest = veh->GetForward().Heading();
-		}
-	}
-
-	if (!bInVehicle)
-		seatPosMult = 1.0f;
-
-#ifdef VC_PED_PORTS
-	bool multExtractedFromAnim = false;
-	bool multExtractedFromAnimBus = false;
-	float zBlend;
-#endif
-	if (m_pVehicleAnim) {
-		vehAnim = m_pVehicleAnim->animId;
-
-		switch (vehAnim) {
-			case ANIM_STD_JACKEDCAR_RHS:
-			case ANIM_STD_JACKEDCAR_LO_RHS:
-			case ANIM_STD_JACKEDCAR_LHS:
-			case ANIM_STD_JACKEDCAR_LO_LHS:
-			case ANIM_STD_VAN_GET_IN_REAR_LHS:
-			case ANIM_STD_VAN_GET_IN_REAR_RHS:
-#ifdef VC_PED_PORTS
-				multExtractedFromAnim = true;
-				zBlend = Max(m_pVehicleAnim->currentTime / m_pVehicleAnim->hierarchy->totalLength - 0.3f, 0.0f) / (1.0f - 0.3f);
-				// fall through
-#endif
-			case ANIM_STD_QUICKJACKED:
-			case ANIM_STD_GETOUT_LHS:
-			case ANIM_STD_GETOUT_LO_LHS:
-			case ANIM_STD_GETOUT_RHS:
-			case ANIM_STD_GETOUT_LO_RHS:
-#ifdef VC_PED_PORTS
-				if (!multExtractedFromAnim) {
-					multExtractedFromAnim = true;
-					zBlend = Max(m_pVehicleAnim->currentTime / m_pVehicleAnim->hierarchy->totalLength - 0.5f, 0.0f) / (1.0f - 0.5f);
-				}
-				// fall through
-#endif
-			case ANIM_STD_CRAWLOUT_LHS:
-			case ANIM_STD_CRAWLOUT_RHS:
-			case ANIM_STD_VAN_GET_OUT_REAR_LHS:
-			case ANIM_STD_VAN_GET_OUT_REAR_RHS:
-				seatPosMult = m_pVehicleAnim->currentTime / m_pVehicleAnim->hierarchy->totalLength;
-				break;
-			case ANIM_STD_CAR_GET_IN_RHS:
-			case ANIM_STD_CAR_GET_IN_LHS:
-#ifdef VC_PED_PORTS
-				if (veh && veh->IsCar() && veh->bIsBus) {
-					multExtractedFromAnimBus = true;
-					zBlend = Min(m_pVehicleAnim->currentTime / m_pVehicleAnim->hierarchy->totalLength, 0.5f) / 0.5f;
-				}
-				// fall through
-#endif
-			case ANIM_STD_QUICKJACK:
-			case ANIM_STD_CAR_GET_IN_LO_LHS:
-			case ANIM_STD_CAR_GET_IN_LO_RHS:
-			case ANIM_STD_BOAT_DRIVE:
-				seatPosMult = m_pVehicleAnim->GetTimeLeft() / m_pVehicleAnim->hierarchy->totalLength;
-				break;
-			case ANIM_STD_CAR_CLOSE_DOOR_LHS:
-			case ANIM_STD_CAR_CLOSE_DOOR_LO_LHS:
-			case ANIM_STD_CAR_CLOSE_DOOR_RHS:
-			case ANIM_STD_CAR_CLOSE_DOOR_LO_RHS:
-			case ANIM_STD_CAR_SHUFFLE_RHS:
-			case ANIM_STD_CAR_SHUFFLE_LO_RHS:
-				seatPosMult = 0.0f;
-				break;
-			case ANIM_STD_CAR_CLOSE_LHS:
-			case ANIM_STD_CAR_CLOSE_RHS:
-			case ANIM_STD_COACH_OPEN_LHS:
-			case ANIM_STD_COACH_OPEN_RHS:
-			case ANIM_STD_COACH_GET_IN_LHS:
-			case ANIM_STD_COACH_GET_IN_RHS:
-			case ANIM_STD_COACH_GET_OUT_LHS:
-				seatPosMult = 1.0f;
-				break;
-			default:
-				break;
-		}
-	}
-
-	CVector neededPos;
-
-	if (phase == LINE_UP_TO_CAR_2) {
-		neededPos = GetPosition();
-	} else {
-		neededPos = GetPositionToOpenCarDoor(veh, m_vehDoor, seatPosMult);
-	}
-
-	CVector autoZPos = neededPos;
-
-	if (veh->bIsInWater) {
-		if (veh->m_vehType == VEHICLE_TYPE_BOAT && veh->IsUpsideDown())
-			autoZPos.z += 1.0f;
-	} else {
-		CPedPlacement::FindZCoorForPed(&autoZPos);
-	}
-
-	if (phase == LINE_UP_TO_CAR_END || phase == LINE_UP_TO_CAR_2) {
-		neededPos.z = GetPosition().z;
-
-		// Getting out
-		if (!veh->bIsBus || (veh->bIsBus && vehIsUpsideDown)) {
-			float nextZSpeed = m_vecMoveSpeed.z - GRAVITY * CTimer::GetTimeStep();
-
-			// If we're not in ground at next step, apply animation
-			if (neededPos.z + nextZSpeed >= autoZPos.z) {
-				m_vecMoveSpeed.z = nextZSpeed;
-				ApplyMoveSpeed();
-				// Removing below line breaks the animation
-				neededPos.z = GetPosition().z;
-			} else {
-				neededPos.z = autoZPos.z;
-				m_vecMoveSpeed = CVector(0.0f, 0.0f, 0.0f);
-			}
-		}
-	}
-
-	if (autoZPos.z > neededPos.z) {
-#ifdef VC_PED_PORTS
-		if (multExtractedFromAnim) {
-			neededPos.z += (autoZPos.z - neededPos.z) * zBlend;
-		} else {
-#endif
-			currentZ = GetPosition().z;
-			if (m_pVehicleAnim && vehAnim != ANIM_STD_VAN_GET_IN_REAR_LHS && vehAnim != ANIM_STD_VAN_CLOSE_DOOR_REAR_LHS && vehAnim != ANIM_STD_VAN_CLOSE_DOOR_REAR_RHS && vehAnim != ANIM_STD_VAN_GET_IN_REAR_RHS) {
-				neededPos.z = autoZPos.z;
-				m_vecMoveSpeed = CVector(0.0f, 0.0f, 0.0f);
-			} else if (neededPos.z < currentZ && m_pVehicleAnim && vehAnim != ANIM_STD_VAN_CLOSE_DOOR_REAR_LHS && vehAnim != ANIM_STD_VAN_CLOSE_DOOR_REAR_RHS) {
-				adjustedTimeStep = Max(m_pVehicleAnim->timeStep, 0.1f);
-
-				// Smoothly change ped position
-				neededPos.z = currentZ - (currentZ - neededPos.z) / (m_pVehicleAnim->GetTimeLeft() / adjustedTimeStep);
-			}
-#ifdef VC_PED_PORTS
-		}
-#endif
-	} else {
-		// We may need to raise up the ped
-		if (phase == LINE_UP_TO_CAR_START) {
-			currentZ = GetPosition().z;
-
-			if (neededPos.z > currentZ) {
-#ifdef VC_PED_PORTS
-				if (multExtractedFromAnimBus) {
-					neededPos.z = (neededPos.z - currentZ) * zBlend + currentZ;
-				} else {
-#endif
-					if (m_pVehicleAnim &&
-						(vehAnim == ANIM_STD_CAR_GET_IN_RHS || vehAnim == ANIM_STD_CAR_GET_IN_LO_RHS || vehAnim == ANIM_STD_CAR_GET_IN_LHS || vehAnim == ANIM_STD_CAR_GET_IN_LO_LHS
-							|| vehAnim == ANIM_STD_QUICKJACK || vehAnim == ANIM_STD_VAN_GET_IN_REAR_LHS || vehAnim == ANIM_STD_VAN_GET_IN_REAR_RHS)) {
-						adjustedTimeStep = Max(m_pVehicleAnim->timeStep, 0.1f);
-
-						// Smoothly change ped position
-						neededPos.z = (neededPos.z - currentZ) / (m_pVehicleAnim->GetTimeLeft() / adjustedTimeStep) + currentZ;
-					} else if (EnteringCar()) {
-						neededPos.z = Max(currentZ, autoZPos.z);
-					}
-#ifdef VC_PED_PORTS
-				}
-#endif
-			}
-		}
-	}
-
-	if (CTimer::GetTimeInMilliseconds() < m_nPedStateTimer)
-		stillGettingInOut = veh->m_vehType != VEHICLE_TYPE_BOAT || bOnBoat;
-
-	if (!stillGettingInOut) {
-		m_fRotationCur = m_fRotationDest;
-	} else {
-		float limitedDest = CGeneral::LimitRadianAngle(m_fRotationDest);
-		float timeUntilStateChange = (m_nPedStateTimer - CTimer::GetTimeInMilliseconds())/600.0f;
-
-		if (timeUntilStateChange <= 0.0f) {
-			m_vecOffsetSeek.x = 0.0f;
-			m_vecOffsetSeek.y = 0.0f;
-		}
-		m_vecOffsetSeek.z = 0.0f;
-
-		neededPos -= timeUntilStateChange * m_vecOffsetSeek;
-
-		if (PI + m_fRotationCur < limitedDest) {
-			limitedDest -= 2 * PI;
-		} else if (m_fRotationCur - PI > limitedDest) {
-			limitedDest += 2 * PI;
-		}
-		m_fRotationCur -= (m_fRotationCur - limitedDest) * (1.0f - timeUntilStateChange);
-	}
-
-	if (seatPosMult > 0.2f || vehIsUpsideDown) {
-		SetPosition(neededPos);
-		SetHeading(m_fRotationCur);
-	} else {
-		CMatrix vehDoorMat(veh->GetMatrix());
-		vehDoorMat.GetPosition() += Multiply3x3(vehDoorMat, GetLocalPositionToOpenCarDoor(veh, m_vehDoor, 0.0f));
-		// VC couch anims are inverted, so they're fixing it here.
-		GetMatrix() = vehDoorMat;
-	}
-
-}
-
-void
-CPed::SetCarJack(CVehicle* car)
-{
-	uint8 doorFlag;
-	eDoors door;
-	CPed *pedInSeat = nil;
-
-	if (car->IsBoat())
-		return;
-
-	switch (m_vehDoor) {
-		case CAR_DOOR_RF:
-			doorFlag = CAR_DOOR_FLAG_RF;
-			door = DOOR_FRONT_RIGHT;
-			if (car->pPassengers[0]) {
-				pedInSeat = car->pPassengers[0];
-			} else if (m_nPedType == PEDTYPE_COP) {
-				pedInSeat = car->pDriver;
-			}
-			break;
-		case CAR_DOOR_RR:
-			doorFlag = CAR_DOOR_FLAG_RR;
-			door = DOOR_REAR_RIGHT;
-			pedInSeat = car->pPassengers[2];
-			break;
-		case CAR_DOOR_LF:
-			doorFlag = CAR_DOOR_FLAG_LF;
-			door = DOOR_FRONT_LEFT;
-			pedInSeat = car->pDriver;
-			break;
-		case CAR_DOOR_LR:
-			doorFlag = CAR_DOOR_FLAG_LR;
-			door = DOOR_REAR_LEFT;
-			pedInSeat = car->pPassengers[1];
-			break;
-		default:
-			doorFlag = CAR_DOOR_FLAG_UNKNOWN;
-			break;
-	}
-
-	if(car->bIsBus)
-		pedInSeat = car->pDriver;
-
-	if (m_fHealth > 0.0f && (IsPlayer() || m_objective == OBJECTIVE_KILL_CHAR_ON_FOOT || m_objective == OBJECTIVE_KILL_CHAR_ANY_MEANS ||
-		                     (car->VehicleCreatedBy != MISSION_VEHICLE && car->GetModelIndex() != MI_DODO)))
-		if (pedInSeat && !pedInSeat->IsPedDoingDriveByShooting() && pedInSeat->m_nPedState == PED_DRIVING)
-			if (m_nPedState != PED_CARJACK && !m_pVehicleAnim)
-				if ((car->IsDoorReady(door) || car->IsDoorFullyOpen(door)))
-					if (!car->bIsBeingCarJacked && !(doorFlag & car->m_nGettingInFlags) && !(doorFlag & car->m_nGettingOutFlags))
-						SetCarJack_AllClear(car, m_vehDoor, doorFlag);
-}
-
-void
-CPed::SetCarJack_AllClear(CVehicle *car, uint32 doorNode, uint32 doorFlag)
-{
-	RemoveWeaponWhenEnteringVehicle();
-	if (m_nPedState != PED_SEEK_CAR)
-		SetStoredState();
-
-	m_pSeekTarget = car;
-	m_pSeekTarget->RegisterReference((CEntity**)&m_pSeekTarget);
-	SetPedState(PED_CARJACK);
-	car->bIsBeingCarJacked = true;
-	m_pMyVehicle = (CVehicle*)m_pSeekTarget;
-	m_pMyVehicle->RegisterReference((CEntity**)&m_pMyVehicle);
-	((CVehicle*)m_pSeekTarget)->m_nNumGettingIn++;
-
-	Say(m_nPedType == PEDTYPE_COP ? SOUND_PED_ARREST_COP : SOUND_PED_CAR_JACKING);
-	CVector carEnterPos;
-	carEnterPos = GetPositionToOpenCarDoor(car, m_vehDoor);
-
-	car->m_nGettingInFlags |= doorFlag;
-	m_vecOffsetSeek = carEnterPos - GetPosition();
-	m_nPedStateTimer = CTimer::GetTimeInMilliseconds() + 600;
-	float zDiff = Max(0.0f, carEnterPos.z - GetPosition().z);
-	bUsesCollision = false;
-
-	if (m_vehDoor == CAR_DOOR_LF || m_vehDoor == CAR_DOOR_LR)
-		m_pVehicleAnim = CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, zDiff > 4.4f ? ANIM_STD_CAR_ALIGNHI_DOOR_LHS : ANIM_STD_CAR_ALIGN_DOOR_LHS, 4.0f);
-	else
-		m_pVehicleAnim = CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, zDiff > 4.4f ? ANIM_STD_CAR_ALIGNHI_DOOR_RHS : ANIM_STD_CAR_ALIGN_DOOR_RHS, 4.0f);
-
-	m_pVehicleAnim->SetFinishCallback(PedAnimAlignCB, this);
-}
-
-void
-CPed::SetBeingDraggedFromCar(CVehicle *veh, uint32 vehEnterType, bool quickJack)
-{
-	if (m_nPedState == PED_DRAG_FROM_CAR)
-		return;
-
-	bUsesCollision = false;
-	m_vecMoveSpeed = CVector(0.0f, 0.0f, 0.0f);
-	m_nLastPedState = PED_IDLE;
-	SetMoveState(PEDMOVE_STILL);
-	m_pSeekTarget = veh;
-	m_pSeekTarget->RegisterReference((CEntity **) &m_pSeekTarget);
-	m_vehDoor = vehEnterType;
-	if (m_vehDoor == CAR_DOOR_LF) {
-		if (veh->pDriver && veh->pDriver->IsPlayer())
-			veh->SetStatus(STATUS_PLAYER_DISABLED);
-		else
-			veh->SetStatus(STATUS_ABANDONED);
-	}
-	RemoveInCarAnims();
-	SetMoveState(PEDMOVE_NONE);
-	LineUpPedWithCar(LINE_UP_TO_CAR_START);
-	m_pVehicleAnim = nil;
-	SetPedState(PED_DRAG_FROM_CAR);
-	bChangedSeat = false;
-	bWillBeQuickJacked = quickJack;
-
-	SetHeading(m_fRotationCur);
-
-	Say(SOUND_PED_CAR_JACKED);
-	SetRadioStation();
-	veh->m_nGettingOutFlags |= GetCarDoorFlag(m_vehDoor);
-}
-
-void
-CPed::BeingDraggedFromCar(void)
-{
-	CAnimBlendAssociation *animAssoc;
-	AnimationId enterAnim;
-	bool dontRunAnim = false;
-	PedLineUpPhase lineUpType;
-
-	if (!m_pVehicleAnim) {
-		CAnimManager::BlendAnimation(GetClump(), m_animGroup, ANIM_STD_IDLE, 100.0f);
-		animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_CAR_SIT);
-		if (!animAssoc) {
-			animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_CAR_SIT_LO);
-			if (!animAssoc) {
-				animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_CAR_SIT_P);
-				if (!animAssoc)
-					animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_CAR_SIT_P_LO);
-			}
-		}
-		if (animAssoc)
-			animAssoc->blendDelta = -1000.0f;
-
-		if (m_vehDoor == CAR_DOOR_LF || m_vehDoor == CAR_DOOR_LR) {
-			if (bWillBeQuickJacked) {
-				enterAnim = ANIM_STD_QUICKJACKED;
-			} else if (m_pMyVehicle->bLowVehicle) {
-				enterAnim = ANIM_STD_JACKEDCAR_LO_LHS;
-			} else {
-				enterAnim = ANIM_STD_JACKEDCAR_LHS;
-			}
-		} else if (m_vehDoor == CAR_DOOR_RF || m_vehDoor == CAR_DOOR_RR) {
-			if (m_pMyVehicle->bLowVehicle)
-				enterAnim = ANIM_STD_JACKEDCAR_LO_RHS;
-			else
-				enterAnim = ANIM_STD_JACKEDCAR_RHS;
-		} else
-			dontRunAnim = true;
-
-
-		if (!dontRunAnim)
-			m_pVehicleAnim = CAnimManager::AddAnimation(GetClump(), ASSOCGRP_STD, enterAnim);
-
-		m_pVehicleAnim->SetFinishCallback(PedSetDraggedOutCarCB, this);
-		lineUpType = LINE_UP_TO_CAR_START;
-	} else if (m_pVehicleAnim->currentTime <= 1.4f) {
-		m_vecMoveSpeed = CVector(0.0f, 0.0f, 0.0f);
-		lineUpType = LINE_UP_TO_CAR_START;
-	} else {
-		lineUpType = LINE_UP_TO_CAR_2;
-	}
-	
-	LineUpPedWithCar(lineUpType);
-#ifdef VC_PED_PORTS
-	if (m_objective == OBJECTIVE_LEAVE_CAR_AND_DIE) {
-		if (m_pMyVehicle) {
-			m_pMyVehicle->ProcessOpenDoor(m_vehDoor, ANIM_STD_NUM, m_pVehicleAnim->currentTime * 5.0f);
-		}
-	}
-#endif
-}
-
-void
-CPed::SetEnterCar(CVehicle *car, uint32 unused)
-{
-	if (CCranes::IsThisCarBeingCarriedByAnyCrane(car)) {
-		RestorePreviousState();
-		RestorePreviousObjective();
-	} else {
-		uint8 doorFlag;
-		eDoors door;
-		switch (m_vehDoor) {
-			case CAR_DOOR_RF:
-				doorFlag = CAR_DOOR_FLAG_RF;
-				door = DOOR_FRONT_RIGHT;
-				break;
-			case CAR_DOOR_RR:
-				doorFlag = CAR_DOOR_FLAG_RR;
-				door = DOOR_REAR_RIGHT;
-				break;
-			case CAR_DOOR_LF:
-				doorFlag = CAR_DOOR_FLAG_LF;
-				door = DOOR_FRONT_LEFT;
-				break;
-			case CAR_DOOR_LR:
-				doorFlag = CAR_DOOR_FLAG_LR;
-				door = DOOR_REAR_LEFT;
-				break;
-			default:
-				doorFlag = CAR_DOOR_FLAG_UNKNOWN;
-				break;
-		}
-		if (!IsPedInControl() || m_fHealth <= 0.0f
-			|| doorFlag & car->m_nGettingInFlags || doorFlag & car->m_nGettingOutFlags
-			|| car->bIsBeingCarJacked || m_pVehicleAnim
-			|| doorFlag && !car->IsDoorReady(door) && !car->IsDoorFullyOpen(door))
-			SetMoveState(PEDMOVE_STILL);
-		else
-			SetEnterCar_AllClear(car, m_vehDoor, doorFlag);
-	}
-}
-
-void
-CPed::SetEnterCar_AllClear(CVehicle *car, uint32 doorNode, uint32 doorFlag)
-{
-	float zDiff = 0.0f;
-	RemoveWeaponWhenEnteringVehicle();
-	car->m_nGettingInFlags |= doorFlag;
-	bVehEnterDoorIsBlocked = false;
-	if (m_nPedState != PED_SEEK_CAR && m_nPedState != PED_SEEK_IN_BOAT)
-		SetStoredState();
-
-	m_pSeekTarget = car;
-	m_pSeekTarget->RegisterReference((CEntity **) &m_pSeekTarget);
-	m_vehDoor = doorNode;
-	SetPedState(PED_ENTER_CAR);
-	if (m_vehDoor == CAR_DOOR_RF && m_objective == OBJECTIVE_ENTER_CAR_AS_DRIVER && car->m_vehType != VEHICLE_TYPE_BIKE) {
-		car->bIsBeingCarJacked = true;
-	}
-
-	m_pMyVehicle = (CVehicle*)m_pSeekTarget;
-	m_pMyVehicle->RegisterReference((CEntity**) &m_pMyVehicle);
-	((CVehicle*)m_pSeekTarget)->m_nNumGettingIn++;
-	bUsesCollision = false;
-	CVector doorOpenPos = GetPositionToOpenCarDoor(car, m_vehDoor);
-
-	// Because buses have stairs
-	if (!m_pMyVehicle->bIsBus)
-		zDiff = Max(0.0f, doorOpenPos.z - GetPosition().z);
-
-	m_vecOffsetSeek = doorOpenPos - GetPosition();
-	m_nPedStateTimer = CTimer::GetTimeInMilliseconds() + 600;
-	if (car->IsBoat()) {
-#ifndef FIX_BUGS
-		m_pVehicleAnim = CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_BOAT_DRIVE, 100.0f);
-#else
-		m_pVehicleAnim = CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, car->GetDriverAnim(), 100.0f);
-#endif
-
-		// Otherwise boat enter key sometimes processed multiple times, so you enter/exit instantly
-#if defined VC_PED_PORTS || defined FIX_BUGS
-		PedSetInCarCB(nil, this);
-		bVehExitWillBeInstant = true;
-#else
-		m_pVehicleAnim->SetFinishCallback(PedSetInCarCB, this);
-#endif
-		if (IsPlayer())
-			CWaterLevel::AllocateBoatWakeArray();
-	} else {
-		if (zDiff > 4.4f) {
-			if (m_vehDoor == CAR_DOOR_RF || m_vehDoor == CAR_DOOR_RR)
-				m_pVehicleAnim = CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_CAR_ALIGNHI_DOOR_RHS, 4.0f);
-			else
-				m_pVehicleAnim = CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_CAR_ALIGNHI_DOOR_LHS, 4.0f);
-
-		} else {
-			if (m_vehDoor == CAR_DOOR_RF || m_vehDoor == CAR_DOOR_RR)
-				m_pVehicleAnim = CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_CAR_ALIGN_DOOR_RHS, 4.0f);
-			else
-				m_pVehicleAnim = CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_CAR_ALIGN_DOOR_LHS, 4.0f);
-		}
-		m_pVehicleAnim->SetFinishCallback(PedAnimAlignCB, this);
-		car->AutoPilot.m_nCruiseSpeed = 0;
-	}
-}
-
-void
-CPed::EnterCar(void)
-{
-	if (IsNotInWreckedVehicle() && m_fHealth > 0.0f) {
-		CVehicle *veh = (CVehicle*)m_pSeekTarget;
-
-		// Not used.
-		// CVector posForDoor = GetPositionToOpenCarDoor(veh, m_vehDoor);
-
-		if (veh->CanPedOpenLocks(this)) {
-			if (m_vehDoor && m_pVehicleAnim) {
-				veh->ProcessOpenDoor(m_vehDoor, m_pVehicleAnim->animId, m_pVehicleAnim->currentTime);
-			}
-		}
-		bIsInTheAir = false;
-		LineUpPedWithCar(LINE_UP_TO_CAR_START);
-	} else {
-		QuitEnteringCar();
-		SetDie(ANIM_STD_KO_FRONT, 4.0f, 0.0f);
-	}
-}
-
-void
-CPed::QuitEnteringCar(void)
-{
-	CVehicle *veh = m_pMyVehicle;
-	if (m_pVehicleAnim)
-		m_pVehicleAnim->blendDelta = -1000.0f;
-	
-	RestartNonPartialAnims();
-
-	if (!RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_IDLE))
-		CAnimManager::BlendAnimation(GetClump(), m_animGroup, ANIM_STD_IDLE, 100.0f);
-	
-	if (veh) {
-		if (m_objective == OBJECTIVE_ENTER_CAR_AS_DRIVER || m_nPedState == PED_CARJACK)
-			veh->bIsBeingCarJacked = false;
-
-		if (veh->m_nNumGettingIn != 0)
-			veh->m_nNumGettingIn--;
-
-#ifdef VC_PED_PORTS
-		if (m_objective == OBJECTIVE_ENTER_CAR_AS_DRIVER || m_objective == OBJECTIVE_ENTER_CAR_AS_PASSENGER)
-			RestorePreviousObjective();
-#endif
-
-		veh->m_nGettingInFlags &= ~GetCarDoorFlag(m_vehDoor);
-	}
-
-	bUsesCollision = true;
-
-	ReplaceWeaponWhenExitingVehicle();
-
-	if (DyingOrDead()) {
-		if (m_pVehicleAnim) {
-			m_pVehicleAnim->blendDelta = -4.0f;
-			m_pVehicleAnim->flags |= ASSOC_DELETEFADEDOUT;
-			m_pVehicleAnim->flags &= ~ASSOC_RUNNING;
-		}
-	} else
-		SetIdle();
-
-	m_pVehicleAnim = nil;
-	
-	if (veh) {
-#ifdef VC_PED_PORTS
-		if (veh->AutoPilot.m_nCruiseSpeed == 0 && veh->VehicleCreatedBy == RANDOM_VEHICLE)
-#else
-		if (veh->AutoPilot.m_nCruiseSpeed == 0)
-#endif
-			veh->AutoPilot.m_nCruiseSpeed = 17;
-	}
-}
-
-void
-AddYardieDoorSmoke(CVehicle *veh, uint32 doorNode)
-{
-	eDoors door;
-	switch (doorNode) {
-		case CAR_DOOR_RF:
-			door = DOOR_FRONT_RIGHT;
-			break;
-		case CAR_DOOR_LF:
-			door = DOOR_FRONT_LEFT;
-			break;
-		default:
-			break;
-	}
-
-	if (!veh->IsDoorMissing(door) && veh->IsComponentPresent(doorNode)) {
-		CVector pos;
-#ifdef FIX_BUGS
-		veh->GetComponentWorldPosition(doorNode, pos);
-#else
-		veh->GetComponentWorldPosition(CAR_DOOR_LF, pos);
-#endif
-		CParticle::AddYardieDoorSmoke(pos, veh->GetMatrix());
-	}
-}
-
-// Seperate function in VC, more logical. Not sure is it inlined in III.
-void
-CPed::SetExitBoat(CVehicle *boat)
-{
-#ifndef VC_PED_PORTS
-	SetPedState(PED_IDLE);
-	CVector firstPos = GetPosition();
-	CAnimManager::BlendAnimation(GetClump(), m_animGroup, ANIM_STD_IDLE, 100.0f);
-	if (boat->GetModelIndex() == MI_SPEEDER && boat->IsUpsideDown()) {
-		m_pVehicleAnim = CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_CRAWLOUT_LHS, 8.0f);
-		m_pVehicleAnim->SetFinishCallback(PedSetOutCarCB, this);
-		m_vehDoor = CAR_DOOR_RF;
-		SetPedState(PED_EXIT_CAR);
-	} else {
-		m_vehDoor = CAR_DOOR_RF;
-		PedSetOutCarCB(nil, this);
-		bIsStanding = true;
-		m_pCurSurface = boat;
-		m_pCurSurface->RegisterReference((CEntity**)&m_pCurSurface);
-	}
-	SetPosition(firstPos);
-	SetMoveState(PEDMOVE_STILL);
-	m_vecMoveSpeed = boat->m_vecMoveSpeed;
-	bTryingToReachDryLand = true;
-#else
-	SetPedState(PED_IDLE);
-	CVector newPos = GetPosition();
-	RemoveInCarAnims();
-	CColModel* boatCol = boat->GetColModel();
-	if (boat->IsUpsideDown()) {
-		newPos = { 0.0f, 0.0f, boatCol->boundingBox.min.z };
-		newPos = boat->GetMatrix() * newPos;
-		newPos.z += 1.0f;
-		m_vehDoor = CAR_DOOR_RF;
-		PedSetOutCarCB(nil, this);
-		bIsStanding = true;
-		m_pCurSurface = boat;
-		m_pCurSurface->RegisterReference((CEntity**)&m_pCurSurface);
-		m_pCurrentPhysSurface = boat;
-	} else {
-/*		if (boat->m_modelIndex != MI_SKIMMER || boat->bIsInWater) {
-			if (boat->m_modelIndex == MI_SKIMMER)
-				newPos.z += 2.0f
-*/
-			m_vehDoor = CAR_DOOR_RF;
-			PedSetOutCarCB(nil, this);
-			bIsStanding = true;
-			m_pCurSurface = boat;
-			m_pCurSurface->RegisterReference((CEntity**)&m_pCurSurface);
-			m_pCurrentPhysSurface = boat;
-			CColPoint foundCol;
-			CEntity *foundEnt = nil;
-			if (CWorld::ProcessVerticalLine(newPos, newPos.z - 1.4f, foundCol, foundEnt, false, true, false, false, false, false, nil))
-				newPos.z = FEET_OFFSET + foundCol.point.z;
-/*		// VC specific
-		} else {
-			m_vehDoor = CAR_DOOR_RF;
-			PedSetOutCarCB(nil, this);
-			bIsStanding = true;
-			SetMoveState(PEDMOVE_STILL);
-			bTryingToReachDryLand = true;
-			float upMult = 1.04f + boatCol->boundingBox.min.z;
-			float rightMult = 0.6f * boatCol->boundingBox.max.x;
-			newPos = upMult * boat->GetUp() + rightMult * boat->GetRight() + boat->GetPosition();
-			GetPosition() = newPos;
-			if (m_pMyVehicle) {
-				PositionPedOutOfCollision();
-			} else {
-				m_pMyVehicle = boat;
-				PositionPedOutOfCollision();
-				m_pMyVehicle = nil;
-			}
-			return;
-		}
-*/	}
-	SetPosition(newPos);
-	SetMoveState(PEDMOVE_STILL);
-	m_vecMoveSpeed = boat->m_vecMoveSpeed;
-#endif
-	// Not there in VC.
-	CWaterLevel::FreeBoatWakeArray();
-}
-
-// wantedDoorNode = 0 means that func. will determine it
-void
-CPed::SetExitCar(CVehicle *veh, uint32 wantedDoorNode)
-{
-	uint32 optedDoorNode = wantedDoorNode;
-	bool teleportNeeded = false;
-	bool isLow = !!veh->bLowVehicle;
-	if (!veh->CanPedExitCar()) {
-		if (veh->pDriver && !veh->pDriver->IsPlayer()) {
-			veh->AutoPilot.m_nCruiseSpeed = 0;
-			veh->AutoPilot.m_nCarMission = MISSION_NONE;
-		}
-		return;
-	}
-
-	if (m_nPedState == PED_EXIT_CAR || m_nPedState == PED_DRAG_FROM_CAR)
-		return;
-
-	m_vecMoveSpeed = CVector(0.0f, 0.0f, 0.0f);
-	m_vecTurnSpeed = CVector(0.0f, 0.0f, 0.0f);
-	if (wantedDoorNode == 0) {
-		optedDoorNode = CAR_DOOR_LF;
-		if (!veh->bIsBus) {
-			if (veh->pDriver == this) {
-				optedDoorNode = CAR_DOOR_LF;
-			} else if (veh->pPassengers[0] == this) {
-				optedDoorNode = CAR_DOOR_RF;
-			} else if (veh->pPassengers[1] == this) {
-				optedDoorNode = CAR_DOOR_LR;
-			} else if (veh->pPassengers[2] == this) {
-				optedDoorNode = CAR_DOOR_RR;
-			} else {
-				for (int i = 3; i < veh->m_nNumMaxPassengers; ++i) {
-					if (veh->pPassengers[i] == this) {
-						if (i & 1)
-							optedDoorNode = CAR_DOOR_RR;
-						else
-							optedDoorNode = CAR_DOOR_LR;
-
-						break;
-					}
-				}
-			}
-		}
-	}
-	bool someoneExitsFromOurExitDoor = false;
-	bool someoneEntersFromOurExitDoor = false;
-	switch (optedDoorNode) {
-		case CAR_DOOR_RF:
-			if (veh->m_nGettingInFlags & CAR_DOOR_FLAG_RF)
-				someoneEntersFromOurExitDoor = true;
-			if (veh->m_nGettingOutFlags & CAR_DOOR_FLAG_RF)
-				someoneExitsFromOurExitDoor = true;
-			break;
-		case CAR_DOOR_RR:
-			if (veh->m_nGettingInFlags & CAR_DOOR_FLAG_RR)
-				someoneEntersFromOurExitDoor = true;
-			if (veh->m_nGettingOutFlags & CAR_DOOR_FLAG_RR)
-				someoneExitsFromOurExitDoor = true;
-			break;
-		case CAR_DOOR_LF:
-			if (veh->m_nGettingInFlags & CAR_DOOR_FLAG_LF)
-				someoneEntersFromOurExitDoor = true;
-			if (veh->m_nGettingOutFlags & CAR_DOOR_FLAG_LF)
-				someoneExitsFromOurExitDoor = true;
-			break;
-		case CAR_DOOR_LR:
-			if (veh->m_nGettingInFlags & CAR_DOOR_FLAG_LR)
-				someoneEntersFromOurExitDoor = true;
-			if (veh->m_nGettingOutFlags & CAR_DOOR_FLAG_LR)
-				someoneExitsFromOurExitDoor = true;
-			break;
-		default:
-			break;
-	}
-	if (someoneEntersFromOurExitDoor && m_objective == OBJECTIVE_LEAVE_CAR) {
-		RestorePreviousObjective();
-		return;
-	}
-	if (!someoneExitsFromOurExitDoor || m_nPedType == PEDTYPE_COP && veh->bIsBus) {
-		// Again, unused...
-		// CVector exitPos = GetPositionToOpenCarDoor(veh, optedDoorNode);
-		bool thereIsRoom = veh->IsRoomForPedToLeaveCar(optedDoorNode, nil);
-		if (veh->IsOnItsSide()) {
-			teleportNeeded = true;
-		} else if (!thereIsRoom) {
-			bool trySideSeat = false;
-			CPed *pedOnSideSeat = nil;
-			switch (optedDoorNode) {
-				case CAR_DOOR_RF:
-					if (veh->pDriver || veh->m_nGettingInFlags & CAR_DOOR_FLAG_LF) {
-						pedOnSideSeat = veh->pDriver;
-						trySideSeat = true;
-					} else
-						optedDoorNode = CAR_DOOR_LF;
-
-					break;
-				case CAR_DOOR_RR:
-					if (veh->pPassengers[1] || veh->m_nGettingInFlags & CAR_DOOR_FLAG_LR) {
-						pedOnSideSeat = veh->pPassengers[1];
-						trySideSeat = true;
-					} else
-						optedDoorNode = CAR_DOOR_LR;
-
-					break;
-				case CAR_DOOR_LF:
-					if (veh->pPassengers[0] || veh->m_nGettingInFlags & CAR_DOOR_FLAG_RF) {
-						pedOnSideSeat = veh->pPassengers[0];
-						trySideSeat = true;
-					} else
-						optedDoorNode = CAR_DOOR_RF;
-
-					break;
-				case CAR_DOOR_LR:
-					if (veh->pPassengers[2] || veh->m_nGettingInFlags & CAR_DOOR_FLAG_RR) {
-						pedOnSideSeat = (CPed*)veh->pPassengers[2];
-						trySideSeat = true;
-					} else
-						optedDoorNode = CAR_DOOR_RR;
-
-					break;
-				default:
-					break;
-			}
-			if (trySideSeat) {
-				if (!pedOnSideSeat || !IsPlayer() && CharCreatedBy != MISSION_CHAR)
-					return;
-
-				switch (optedDoorNode) {
-					case CAR_DOOR_RF:
-						optedDoorNode = CAR_DOOR_LF;
-						break;
-					case CAR_DOOR_RR:
-						optedDoorNode = CAR_DOOR_LR;
-						break;
-					case CAR_DOOR_LF:
-						optedDoorNode = CAR_DOOR_RF;
-						break;
-					case CAR_DOOR_LR:
-						optedDoorNode = CAR_DOOR_RR;
-						break;
-					default:
-						break;
-				}
-			}
-			// ...
-			// CVector exitPos = GetPositionToOpenCarDoor(veh, optedDoorNode);
-			if (!veh->IsRoomForPedToLeaveCar(optedDoorNode, nil)) {
-				if (!IsPlayer() && CharCreatedBy != MISSION_CHAR)
-					return;
-
-				teleportNeeded = true;
-			}
-		}
-		if (m_nPedState == PED_FLEE_POS) {
-			m_nLastPedState = PED_FLEE_POS;
-			m_nPrevMoveState = PEDMOVE_RUN;
-			SetMoveState(PEDMOVE_SPRINT);
-		} else {
-			m_nLastPedState = PED_IDLE;
-			m_nPrevMoveState = PEDMOVE_STILL;
-			SetMoveState(PEDMOVE_STILL);
-		}
-
-		ReplaceWeaponWhenExitingVehicle();
-		bUsesCollision = false;
-		m_pSeekTarget = veh;
-		m_pSeekTarget->RegisterReference((CEntity**) &m_pSeekTarget);
-		m_vehDoor = optedDoorNode;
-		SetPedState(PED_EXIT_CAR);
-		if (m_pVehicleAnim && m_pVehicleAnim->flags & ASSOC_PARTIAL)
-			m_pVehicleAnim->blendDelta = -1000.0f;
-		SetMoveState(PEDMOVE_NONE);
-		CAnimManager::BlendAnimation(GetClump(), m_animGroup, ANIM_STD_IDLE, 100.0f);
-		RemoveInCarAnims();
-		veh->AutoPilot.m_nCruiseSpeed = 0;
-		if (teleportNeeded) {
-			PedSetOutCarCB(nil, this);
-
-			// This is same code with CPedPlacement::FindZCoorForPed, except we start from z + 1.5 and also check vehicles.
-			float zForPed;
-			float startZ = GetPosition().z - 100.0f;
-			float foundColZ = -100.0f;
-			float foundColZ2 = -100.0f;
-			CColPoint foundCol;
-			CEntity* foundEnt;
-
-			CVector vec = GetPosition();
-			vec.z += 1.5f;
-
-			if (CWorld::ProcessVerticalLine(vec, startZ, foundCol, foundEnt, true, true, false, false, true, false, nil))
-				foundColZ = foundCol.point.z;
-
-			// Adjust coords and do a second test
-			vec.x += 0.1f;
-			vec.y += 0.1f;
-
-			if (CWorld::ProcessVerticalLine(vec, startZ, foundCol, foundEnt, true, true, false, false, true, false, nil))
-				foundColZ2 = foundCol.point.z;
-
-			zForPed = Max(foundColZ, foundColZ2);
-
-			if (zForPed > -99.0f)
-				GetMatrix().GetPosition().z = FEET_OFFSET + zForPed;
-		} else {
-			if (veh->GetUp().z > -0.8f) {
-				bool addDoorSmoke = false;
-				if (veh->GetModelIndex() == MI_YARDIE)
-					addDoorSmoke = true;
-
-				switch (m_vehDoor) {
-					case CAR_DOOR_RF:
-						if (veh->bIsBus) {
-							m_pVehicleAnim = CAnimManager::AddAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_COACH_GET_OUT_LHS);
-						} else {
-							if (isLow)
-								m_pVehicleAnim = CAnimManager::AddAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_GETOUT_LO_RHS);
-							else
-								m_pVehicleAnim = CAnimManager::AddAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_GETOUT_RHS);
-
-							if (addDoorSmoke)
-								AddYardieDoorSmoke(veh, CAR_DOOR_RF);
-						}
-						break;
-					case CAR_DOOR_RR:
-						if (veh->bIsVan) {
-							m_pVehicleAnim = CAnimManager::AddAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_VAN_GET_OUT_REAR_RHS);
-						} else if (isLow) {
-							m_pVehicleAnim = CAnimManager::AddAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_GETOUT_LO_RHS);
-						} else {
-							m_pVehicleAnim = CAnimManager::AddAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_GETOUT_RHS);
-						}
-						break;
-					case CAR_DOOR_LF:
-						if (veh->bIsBus) {
-							m_pVehicleAnim = CAnimManager::AddAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_COACH_GET_OUT_LHS);
-						} else {
-							if (isLow)
-								m_pVehicleAnim = CAnimManager::AddAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_GETOUT_LO_LHS);
-							else
-								m_pVehicleAnim = CAnimManager::AddAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_GETOUT_LHS);
-
-							if (addDoorSmoke)
-								AddYardieDoorSmoke(veh, CAR_DOOR_LF);
-						}
-						break;
-					case CAR_DOOR_LR:
-						if (veh->bIsVan) {
-							m_pVehicleAnim = CAnimManager::AddAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_VAN_GET_OUT_REAR_LHS);
-						} else if (isLow) {
-							m_pVehicleAnim = CAnimManager::AddAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_GETOUT_LO_LHS);
-						} else {
-							m_pVehicleAnim = CAnimManager::AddAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_GETOUT_LHS);
-						}
-						break;
-					default:
-						break;
-				}
-				if (!bBusJacked) {
-					switch (m_vehDoor) {
-						case CAR_DOOR_RF:
-							veh->m_nGettingOutFlags |= CAR_DOOR_FLAG_RF;
-							break;
-						case CAR_DOOR_RR:
-							veh->m_nGettingOutFlags |= CAR_DOOR_FLAG_RR;
-							break;
-						case CAR_DOOR_LF:
-							veh->m_nGettingOutFlags |= CAR_DOOR_FLAG_LF;
-							break;
-						case CAR_DOOR_LR:
-							veh->m_nGettingOutFlags |= CAR_DOOR_FLAG_LR;
-							break;
-						default:
-							break;
-					}
-				}
-				m_pVehicleAnim->SetFinishCallback(PedAnimStepOutCarCB, this);
-			} else {
-				if (m_vehDoor == CAR_DOOR_RF || m_vehDoor == CAR_DOOR_RR) {
-					m_pVehicleAnim = CAnimManager::AddAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_CRAWLOUT_RHS);
-				} else if (m_vehDoor == CAR_DOOR_LF || m_vehDoor == CAR_DOOR_LR) {
-					m_pVehicleAnim = CAnimManager::AddAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_CRAWLOUT_LHS);
-				}
-				m_pVehicleAnim->SetFinishCallback(PedSetOutCarCB, this);
-			}
-		}
-		bChangedSeat = false;
-		if (veh->bIsBus)
-			bRenderPedInCar = true;
-
-		SetRadioStation();
-		if (veh->pDriver == this) {
-			if (IsPlayer())
-				veh->SetStatus(STATUS_PLAYER_DISABLED);
-			else
-				veh->SetStatus(STATUS_ABANDONED);
-		}
-	}
-}
-
-void
-CPed::ExitCar(void)
-{
-	if (!m_pVehicleAnim)
-		return;
-
-	AnimationId exitAnim = (AnimationId) m_pVehicleAnim->animId;
-	float animTime = m_pVehicleAnim->currentTime;
-
-	m_pMyVehicle->ProcessOpenDoor(m_vehDoor, exitAnim, animTime);
-
-	if (m_pSeekTarget) {
-		// Car is upside down
-		if (m_pMyVehicle->GetUp().z > -0.8f) {
-			if (exitAnim == ANIM_STD_CAR_CLOSE_RHS || exitAnim == ANIM_STD_CAR_CLOSE_LHS || animTime > 0.3f)
-				LineUpPedWithCar(LINE_UP_TO_CAR_END);
-			else
-				LineUpPedWithCar((m_pMyVehicle->GetModelIndex() == MI_DODO ? LINE_UP_TO_CAR_END : LINE_UP_TO_CAR_START));
-		} else {
-			LineUpPedWithCar(LINE_UP_TO_CAR_END);
-		}
-	}
-
-	// If there is someone in front of the door, make him fall while we exit.
-	if (m_nPedState == PED_EXIT_CAR) {
-		CPed *foundPed = nil;
-		for (int i = 0; i < m_numNearPeds; i++) {
-			if ((m_nearPeds[i]->GetPosition() - GetPosition()).MagnitudeSqr2D() < 0.04f) {
-				foundPed = m_nearPeds[i];
-				break;
-			}
-		}
-		if (foundPed && animTime > 0.4f && foundPed->IsPedInControl())
-			foundPed->SetFall(1000, ANIM_STD_HIGHIMPACT_FRONT, 1);
-	}
-}
-
-// This function was mostly duplicate of GetLocalPositionToOpenCarDoor, so I've used it.
-CVector
-CPed::GetPositionToOpenCarDoor(CVehicle *veh, uint32 component)
-{
-	CVector localPos;
-	CVector vehDoorPos;
-
-	localPos = GetLocalPositionToOpenCarDoor(veh, component, 1.0f);
-	vehDoorPos = Multiply3x3(veh->GetMatrix(), localPos) + veh->GetPosition();
-
-/*
-	// Not used.
-	CVector localVehDoorOffset;
-
-	if (veh->bIsVan && (component == VEHICLE_ENTER_REAR_LEFT || component == VEHICLE_ENTER_REAR_RIGHT)) {
-		localVehDoorOffset = vecPedVanRearDoorAnimOffset;
-	} else {
-		if (veh->bIsLow) {
-			localVehDoorOffset = vecPedCarDoorLoAnimOffset;
-		} else {
-			localVehDoorOffset = vecPedCarDoorAnimOffset;
-		}
-	}
-
-	vehDoorPosWithoutOffset = Multiply3x3(veh->GetMatrix(), localPos + localVehDoorOffset) + veh->GetPosition();
-*/
-	return vehDoorPos;
-}
-
-void
-CPed::GetNearestDoor(CVehicle *veh, CVector &posToOpen)
-{
-	CVector *enterOffset = nil;
-	if (m_vehDoor == CAR_DOOR_LF && veh->pDriver
-		|| m_vehDoor == CAR_DOOR_RF && veh->pPassengers[0]
-		|| m_vehDoor == CAR_DOOR_LR && veh->pPassengers[1]
-		|| m_vehDoor == CAR_DOOR_RR && veh->pPassengers[2])
-	{
-		enterOffset = &vecPedQuickDraggedOutCarAnimOffset;
-	}
-
-	CVector lfPos = GetPositionToOpenCarDoor(veh, CAR_DOOR_LF);
-	CVector rfPos = GetPositionToOpenCarDoor(veh, CAR_DOOR_RF);
-
-	// Left front door is closer
-	if ((lfPos - GetPosition()).MagnitudeSqr2D() < (rfPos - GetPosition()).MagnitudeSqr2D()) {
-
-		if (veh->IsRoomForPedToLeaveCar(CAR_DOOR_LF, enterOffset)) {
-			m_vehDoor = CAR_DOOR_LF;
-			posToOpen = lfPos;
-		} else if (veh->IsRoomForPedToLeaveCar(CAR_DOOR_RF, enterOffset)) {
-			m_vehDoor = CAR_DOOR_RF;
-			posToOpen = rfPos;
-		}
-	} else {
-
-		if (veh->IsRoomForPedToLeaveCar(CAR_DOOR_RF, enterOffset)) {
-
-			CPed *rfPassenger = veh->pPassengers[0];
-			if (rfPassenger && (rfPassenger->m_leader == this || rfPassenger->bDontDragMeOutCar ||
-						veh->VehicleCreatedBy == MISSION_VEHICLE && m_objective == OBJECTIVE_ENTER_CAR_AS_DRIVER)
-					&& veh->IsRoomForPedToLeaveCar(CAR_DOOR_LF, enterOffset)
-				|| (veh->m_nGettingInFlags & CAR_DOOR_FLAG_RF) && veh->IsRoomForPedToLeaveCar(CAR_DOOR_LF, enterOffset)) {
-
-				m_vehDoor = CAR_DOOR_LF;
-				posToOpen = lfPos;
-			} else {
-				m_vehDoor = CAR_DOOR_RF;
-				posToOpen = rfPos;
-			}
-		} else if (veh->IsRoomForPedToLeaveCar(CAR_DOOR_LF, enterOffset)) {
-			m_vehDoor = CAR_DOOR_LF;
-			posToOpen = lfPos;
-		}
-	}
-}
-
-bool
-CPed::GetNearestPassengerDoor(CVehicle *veh, CVector &posToOpen)
-{
-	CVector rfPos, lrPos, rrPos;
-	bool canEnter = false;
-
-	CVehicleModelInfo *vehModel = (CVehicleModelInfo *)CModelInfo::GetModelInfo(veh->GetModelIndex());
-
-	switch (veh->GetModelIndex()) {
-		case MI_BUS:
-			m_vehDoor = CAR_DOOR_RF;
-			posToOpen = GetPositionToOpenCarDoor(veh, CAR_DOOR_RF);
-			return true;
-		case MI_RHINO:
-		default:
-			break;
-	}
-
-	CVector2D rfPosDist(999.0f, 999.0f);
-	CVector2D lrPosDist(999.0f, 999.0f);
-	CVector2D rrPosDist(999.0f, 999.0f);
-
-	if (!veh->pPassengers[0]
-		&& !(veh->m_nGettingInFlags & CAR_DOOR_FLAG_RF)
-		&& veh->IsRoomForPedToLeaveCar(CAR_DOOR_RF, nil)) {
-
-		rfPos = GetPositionToOpenCarDoor(veh, CAR_DOOR_RF);
-		canEnter = true;
-		rfPosDist = rfPos - GetPosition();
-	}
-	if (vehModel->m_numDoors == 4) {
-		if (!veh->pPassengers[1]
-			&& !(veh->m_nGettingInFlags & CAR_DOOR_FLAG_LR)
-			&& veh->IsRoomForPedToLeaveCar(CAR_DOOR_LR, nil)) {
-			lrPos = GetPositionToOpenCarDoor(veh, CAR_DOOR_LR);
-			canEnter = true;
-			lrPosDist = lrPos - GetPosition();
-		}
-		if (!veh->pPassengers[2]
-			&& !(veh->m_nGettingInFlags & CAR_DOOR_FLAG_RR)
-			&& veh->IsRoomForPedToLeaveCar(CAR_DOOR_RR, nil)) {
-			rrPos = GetPositionToOpenCarDoor(veh, CAR_DOOR_RR);
-			canEnter = true;
-			rrPosDist = rrPos - GetPosition();
-		}
-
-		// When the door we should enter is blocked by some object.
-		if (!canEnter)
-			veh->ShufflePassengersToMakeSpace();
-	}
-
-	CVector2D nextToCompare = rfPosDist;
-	posToOpen = rfPos;
-	m_vehDoor = CAR_DOOR_RF;
-	if (lrPosDist.MagnitudeSqr() < nextToCompare.MagnitudeSqr()) {
-		m_vehDoor = CAR_DOOR_LR;
-		posToOpen = lrPos;
-		nextToCompare = lrPosDist;
-	}
-
-	if (rrPosDist.MagnitudeSqr() < nextToCompare.MagnitudeSqr()) {
-		m_vehDoor = CAR_DOOR_RR;
-		posToOpen = rrPos;
-	}
-	return canEnter;
-}
-
-void
-CPed::GoToNearestDoor(CVehicle *veh)
-{
-	CVector posToOpen;
-	GetNearestDoor(veh, posToOpen);
-	SetSeek(posToOpen, 0.5f);
-	SetMoveState(PEDMOVE_RUN);
-}
-
-void
-CPed::SetAnimOffsetForEnterOrExitVehicle(void)
-{
-	// FIX: If there were no translations on enter anims, there were overflows all over this function.
-
-	CAnimBlendHierarchy *enterAssoc = CAnimManager::GetAnimAssociation(ASSOCGRP_STD, ANIM_STD_JACKEDCAR_LHS)->hierarchy;
-	CAnimBlendSequence *seq = enterAssoc->sequences;
-	CAnimManager::UncompressAnimation(enterAssoc);
-	if (seq->numFrames > 0) {
-		if (!seq->HasTranslation())
-			vecPedDraggedOutCarAnimOffset = CVector(0.0f, 0.0f, 0.0f);
-		else {
-			KeyFrameTrans *lastFrame = (KeyFrameTrans*)seq->GetKeyFrame(seq->numFrames - 1);
-			vecPedDraggedOutCarAnimOffset = lastFrame->translation;
-		}
-	}
-
-	enterAssoc = CAnimManager::GetAnimAssociation(ASSOCGRP_STD, ANIM_STD_CAR_GET_IN_LHS)->hierarchy;
-	seq = enterAssoc->sequences;
-	CAnimManager::UncompressAnimation(enterAssoc);
-	if (seq->numFrames > 0) {
-		if (!seq->HasTranslation())
-			vecPedCarDoorAnimOffset = CVector(0.0f, 0.0f, 0.0f);
-		else {
-			KeyFrameTrans *lastFrame = (KeyFrameTrans*)seq->GetKeyFrame(seq->numFrames - 1);
-			vecPedCarDoorAnimOffset = lastFrame->translation;
-		}
-	}
-
-	enterAssoc = CAnimManager::GetAnimAssociation(ASSOCGRP_STD, ANIM_STD_CAR_GET_IN_LO_LHS)->hierarchy;
-	seq = enterAssoc->sequences;
-	CAnimManager::UncompressAnimation(enterAssoc);
-	if (seq->numFrames > 0) {
-		if (!seq->HasTranslation())
-			vecPedCarDoorLoAnimOffset = CVector(0.0f, 0.0f, 0.0f);
-		else {
-			KeyFrameTrans *lastFrame = (KeyFrameTrans*)seq->GetKeyFrame(seq->numFrames - 1);
-			vecPedCarDoorLoAnimOffset = lastFrame->translation;
-		}
-	}
-
-	enterAssoc = CAnimManager::GetAnimAssociation(ASSOCGRP_STD, ANIM_STD_QUICKJACKED)->hierarchy;
-	seq = enterAssoc->sequences;
-	CAnimManager::UncompressAnimation(enterAssoc);
-	if (seq->numFrames > 0) {
-		if (!seq->HasTranslation())
-			vecPedQuickDraggedOutCarAnimOffset = CVector(0.0f, 0.0f, 0.0f);
-		else {
-			KeyFrameTrans *lastFrame = (KeyFrameTrans*)seq->GetKeyFrame(seq->numFrames - 1);
-			vecPedQuickDraggedOutCarAnimOffset = lastFrame->translation;
-		}
-	}
-
-	enterAssoc = CAnimManager::GetAnimAssociation(ASSOCGRP_STD, ANIM_STD_VAN_GET_IN_REAR_LHS)->hierarchy;
-	seq = enterAssoc->sequences;
-	CAnimManager::UncompressAnimation(enterAssoc);
-	if (seq->numFrames > 0) {
-		if (!seq->HasTranslation())
-			vecPedVanRearDoorAnimOffset = CVector(0.0f, 0.0f, 0.0f);
-		else {
-			KeyFrameTrans *lastFrame = (KeyFrameTrans*)seq->GetKeyFrame(seq->numFrames - 1);
-			vecPedVanRearDoorAnimOffset = lastFrame->translation;
-		}
-	}
-
-	enterAssoc = CAnimManager::GetAnimAssociation(ASSOCGRP_STD, ANIM_STD_TRAIN_GETOUT)->hierarchy;
-	seq = enterAssoc->sequences;
-	CAnimManager::UncompressAnimation(enterAssoc);
-	if (seq->numFrames > 0) {
-		if (!seq->HasTranslation())
-			vecPedTrainDoorAnimOffset = CVector(0.0f, 0.0f, 0.0f);
-		else {
-			KeyFrameTrans *lastFrame = (KeyFrameTrans*)seq->GetKeyFrame(seq->numFrames - 1);
-			vecPedTrainDoorAnimOffset = lastFrame->translation;
-		}
-	}
-}
-
-void
-CPed::PedSetQuickDraggedOutCarPositionCB(CAnimBlendAssociation *animAssoc, void *arg)
-{
-	CPed *ped = (CPed*)arg;
-
-	CVehicle *veh = ped->m_pMyVehicle;
-
-	CVector finalPos;
-	CVector draggedOutOffset;
-
-	CMatrix pedMat(ped->GetMatrix());
-	ped->bUsesCollision = true;
-	ped->RestartNonPartialAnims();
-	draggedOutOffset = vecPedQuickDraggedOutCarAnimOffset;
-	if (ped->m_vehDoor == CAR_DOOR_RF || ped->m_vehDoor == CAR_DOOR_RR)
-		draggedOutOffset.x = -draggedOutOffset.x;
-
-	finalPos = Multiply3x3(pedMat, draggedOutOffset) + ped->GetPosition();
-	CPedPlacement::FindZCoorForPed(&finalPos);
-	ped->m_vecMoveSpeed = CVector(0.0f, 0.0f, 0.0f);
-	ped->SetPosition(finalPos);
-
-	if (veh) {
-		ped->m_fRotationDest = veh->GetForward().Heading() - HALFPI;
-		ped->m_fRotationCur = ped->m_fRotationDest;
-		ped->CalculateNewOrientation();
-
-		if (!veh->IsRoomForPedToLeaveCar(ped->m_vehDoor, &vecPedQuickDraggedOutCarAnimOffset))
-			ped->PositionPedOutOfCollision();
-	}
-
-	if (!ped->CanSetPedState())
-		return;
-
-	ped->SetIdle();
-	if (veh) {
-		if (ped->bFleeAfterExitingCar) {
-			ped->bFleeAfterExitingCar = false;
-			ped->SetFlee(veh->GetPosition(), 14000);
-
-		} else if (ped->bWanderPathAfterExitingCar) {
-			ped->SetWanderPath(CGeneral::GetRandomNumberInRange(0.0f, 8.0f));
-			ped->bWanderPathAfterExitingCar = false;
-
-		} else if (ped->bGonnaKillTheCarJacker) {
-			ped->bGonnaKillTheCarJacker = false;
-			if (ped->m_pedInObjective && CGeneral::GetRandomNumber() & 1) {
-				if (ped->m_objective != OBJECTIVE_KILL_CHAR_ON_FOOT)
-					ped->SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, ped->m_pedInObjective);
-
-			} else {
-				CPed *driver = veh->pDriver;
-				if (!driver || driver == ped || driver->IsPlayer() && CTheScripts::IsPlayerOnAMission()) {
-					ped->SetFlee(veh->GetPosition(), 14000);
-				} else {
-					ped->ClearObjective();
-					ped->SetObjective(OBJECTIVE_ENTER_CAR_AS_DRIVER, veh);
-				}
-				ped->bUsePedNodeSeek = true;
-				ped->m_pNextPathNode = nil;
-				ped->Say(SOUND_PED_FLEE_RUN);
-			}
-		} else if (ped->m_pedStats->m_temper > ped->m_pedStats->m_fear
-			&& ped->CharCreatedBy != MISSION_CHAR && veh->VehicleCreatedBy != MISSION_VEHICLE
-			&& veh->pDriver && veh->pDriver->IsPlayer()
-			&& !CTheScripts::IsPlayerOnAMission()) {
-
-#ifndef VC_PED_PORTS
-			if (CGeneral::GetRandomNumber() < MYRAND_MAX / 2) {
-				ped->SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, veh->pDriver);
-			} else
-#endif
-				ped->SetObjective(OBJECTIVE_ENTER_CAR_AS_DRIVER, veh);
-
-#ifdef VC_PED_PORTS
-		} else if (ped->m_pedStats->m_temper > ped->m_pedStats->m_fear
-			&& ped->CharCreatedBy != MISSION_CHAR && veh->VehicleCreatedBy != MISSION_VEHICLE
-			&& !veh->pDriver && FindPlayerPed()->m_carInObjective == veh
-			&& !CTheScripts::IsPlayerOnAMission()) {
-			ped->SetObjective(OBJECTIVE_ENTER_CAR_AS_DRIVER, veh);
-#endif
-		} else {
-			ped->SetFindPathAndFlee(veh->GetPosition(), 10000);
-			if (CGeneral::GetRandomNumber() & 1 || ped->m_pedStats->m_fear > 70) {
-				ped->SetMoveState(PEDMOVE_SPRINT);
-				ped->Say(SOUND_PED_FLEE_SPRINT);
-			} else {
-				ped->Say(SOUND_PED_FLEE_RUN);
-			}
-		}
-	}
-	if (ped->m_nLastPedState == PED_IDLE)
-		ped->m_nLastPedState = PED_WANDER_PATH;
-}
-
-void
-CPed::PedSetDraggedOutCarPositionCB(CAnimBlendAssociation* animAssoc, void* arg)
-{
-	CPed *ped = (CPed*)arg;
-
-	ped->bUsesCollision = true;
-	ped->RestartNonPartialAnims();
-	bool itsRearDoor = false;
-
-	if (ped->m_vehDoor == CAR_DOOR_RF || ped->m_vehDoor == CAR_DOOR_RR)
-		itsRearDoor = true;
-
-	CMatrix pedMat(ped->GetMatrix());
-	CVector posAfterBeingDragged = Multiply3x3(pedMat, (itsRearDoor ? -vecPedDraggedOutCarAnimOffset : vecPedDraggedOutCarAnimOffset));
-	posAfterBeingDragged += ped->GetPosition();
-#ifndef VC_PED_PORTS
-	posAfterBeingDragged.z += 1.0f;
-#endif
-	CPedPlacement::FindZCoorForPed(&posAfterBeingDragged);
-	ped->m_vecMoveSpeed = CVector(0.0f, 0.0f, 0.0f);
-	ped->SetPosition(posAfterBeingDragged);
-
-	if (ped->m_pMyVehicle && !ped->m_pMyVehicle->IsRoomForPedToLeaveCar(ped->m_vehDoor, &vecPedDraggedOutCarAnimOffset)) {
-		ped->PositionPedOutOfCollision();
-	}
-
-	if (!ped->CanSetPedState())
-		return;
-	
-	if (!ped->m_pMyVehicle) {
-		ped->SetIdle();
-		ped->SetGetUp();
-		return;
-	}
-
-	CPed *driver = ped->m_pMyVehicle->pDriver;
-
-	if (ped->IsPlayer()) {
-		ped->SetIdle();
-
-	} else if (ped->bFleeAfterExitingCar) {
-		ped->bFleeAfterExitingCar = false;
-		ped->SetFlee(ped->m_pMyVehicle->GetPosition(), 4000);
-
-	} else if (ped->bWanderPathAfterExitingCar) {
-		ped->SetWanderPath(CGeneral::GetRandomNumberInRange(0.0f, 8.0f));
-		ped->bWanderPathAfterExitingCar = false;
-
-	} else if (ped->bGonnaKillTheCarJacker) {
-		// Kill objective is already set at this point.
-
-		ped->bGonnaKillTheCarJacker = false;
-		if (!ped->m_pedInObjective || !(CGeneral::GetRandomNumber() & 1)) {
-			if (!driver || driver == ped || driver->IsPlayer() && CTheScripts::IsPlayerOnAMission()) {
-				ped->SetPedState(PED_NONE);
-				ped->m_nLastPedState = PED_NONE;
-				ped->SetFlee(ped->m_pMyVehicle->GetPosition(), 4000);
-			} else {
-				ped->ClearObjective();
-				ped->SetObjective(OBJECTIVE_ENTER_CAR_AS_DRIVER, ped->m_pMyVehicle);
-			}
-		}
-
-	} else if (ped->m_pedStats->m_temper > ped->m_pedStats->m_fear && ped->CharCreatedBy != MISSION_CHAR
-		&& ped->m_pMyVehicle->VehicleCreatedBy != MISSION_VEHICLE && driver
-		&& driver->IsPlayer() && !CTheScripts::IsPlayerOnAMission()) {
-
-#ifndef VC_PED_PORTS
-		if (CGeneral::GetRandomNumber() & 1)
-			ped->SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, driver);
-		else
-#endif
-			ped->SetObjective(OBJECTIVE_ENTER_CAR_AS_DRIVER, ped->m_pMyVehicle);
-
-	} else {
-#ifdef VC_PED_PORTS
-		if (ped->m_pedStats->m_temper > ped->m_pedStats->m_fear && ped->CharCreatedBy != MISSION_CHAR
-			&& ped->m_pMyVehicle->VehicleCreatedBy != MISSION_VEHICLE && !driver
-			&& FindPlayerPed()->m_carInObjective == ped->m_pMyVehicle && !CTheScripts::IsPlayerOnAMission())
-			ped->SetObjective(OBJECTIVE_ENTER_CAR_AS_DRIVER, ped->m_pMyVehicle);
-		else
-#endif
-		{
-			ped->SetPedState(PED_NONE);
-			ped->m_nLastPedState = PED_NONE;
-			ped->SetFindPathAndFlee(ped->m_pMyVehicle->GetPosition(), 10000);
-		}
-	}
-	ped->SetGetUp();
-}
-
-uint8
-CPed::GetNearestTrainDoor(CVehicle *train, CVector &doorPos)
-{
-	GetNearestTrainPedPosition(train, doorPos);
-/*
-	// Not used.
-	CVehicleModelInfo* trainModel = (CVehicleModelInfo*)CModelInfo::GetModelInfo(train->m_modelIndex);
-	CMatrix trainMat = CMatrix(train->GetMatrix());
-
-	doorPos = trainModel->m_positions[m_vehDoor];
-	doorPos.x -= 1.5f;
-	doorPos = Multiply3x3(trainMat, doorPos);
-	doorPos += train->GetPosition();
-*/
-	return 1;
-}
-
-uint8
-CPed::GetNearestTrainPedPosition(CVehicle *train, CVector &enterPos)
-{
-	CVector enterStepOffset;
-	CVehicleModelInfo *trainModel = (CVehicleModelInfo *)CModelInfo::GetModelInfo(train->GetModelIndex());
-	CMatrix trainMat = CMatrix(train->GetMatrix());
-	CVector leftEntryPos, rightEntryPos, midEntryPos;
-	float distLeftEntry, distRightEntry, distMidEntry;
-
-	// enterStepOffset = vecPedCarDoorAnimOffset;
-	enterStepOffset = CVector(1.5f, 0.0f, 0.0f);
-
-	if (train->pPassengers[TRAIN_POS_LEFT_ENTRY]) {
-		distLeftEntry = 999.0f;
-	} else {
-		leftEntryPos = trainModel->m_positions[TRAIN_POS_LEFT_ENTRY] - enterStepOffset;
-		leftEntryPos = Multiply3x3(trainMat, leftEntryPos);
-		leftEntryPos += train->GetPosition();
-		distLeftEntry = (leftEntryPos - GetPosition()).Magnitude();
-	}
-
-	if (train->pPassengers[TRAIN_POS_MID_ENTRY]) {
-		distMidEntry = 999.0f;
-	} else {
-		midEntryPos = trainModel->m_positions[TRAIN_POS_MID_ENTRY] - enterStepOffset;
-		midEntryPos = Multiply3x3(trainMat, midEntryPos);
-		midEntryPos += train->GetPosition();
-		distMidEntry = (midEntryPos - GetPosition()).Magnitude();
-	}
-
-	if (train->pPassengers[TRAIN_POS_RIGHT_ENTRY]) {
-		distRightEntry = 999.0f;
-	} else {
-		rightEntryPos = trainModel->m_positions[TRAIN_POS_RIGHT_ENTRY] - enterStepOffset;
-		rightEntryPos = Multiply3x3(trainMat, rightEntryPos);
-		rightEntryPos += train->GetPosition();
-		distRightEntry = (rightEntryPos - GetPosition()).Magnitude();
-	}
-
-	if (distMidEntry < distLeftEntry) {
-		if (distMidEntry < distRightEntry) {
-			enterPos = midEntryPos;
-			m_vehDoor = TRAIN_POS_MID_ENTRY;
-		} else {
-			enterPos = rightEntryPos;
-			m_vehDoor = TRAIN_POS_RIGHT_ENTRY;
-		}
-	} else if (distRightEntry < distLeftEntry) {
-		enterPos = rightEntryPos;
-		m_vehDoor = TRAIN_POS_RIGHT_ENTRY;
-	} else {
-		enterPos = leftEntryPos;
-		m_vehDoor = TRAIN_POS_LEFT_ENTRY;
-	}
-
-	return 1;
-}
-
-void
-CPed::PedSetInTrainCB(CAnimBlendAssociation* animAssoc, void* arg)
-{
-	CPed *ped = (CPed*)arg;
-	CTrain *veh = (CTrain*)ped->m_pMyVehicle;
-
-	if (!veh)
-		return;
-
-	ped->bInVehicle = true;
-	ped->SetPedState(PED_DRIVING);
-	ped->RestorePreviousObjective();
-	ped->SetMoveState(PEDMOVE_STILL);
-	veh->AddPassenger(ped);
-}
-
-void
-CPed::SetEnterTrain(CVehicle *train, uint32 unused)
-{
-	if (m_nPedState == PED_ENTER_TRAIN || !((CTrain*)train)->Doors[0].IsFullyOpen())
-		return;
-
-	/*
-	// Not used
-	CVector enterPos;
-	GetNearestTrainPedPosition(train, enterPos);
-	*/
-	m_fRotationCur = train->GetForward().Heading() - HALFPI;
-	m_pMyVehicle = train;
-	m_pMyVehicle->RegisterReference((CEntity **) &m_pMyVehicle);
-
-	SetPedState(PED_ENTER_TRAIN);
-	m_pVehicleAnim = CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_TRAIN_GETIN, 4.0f);
-	m_pVehicleAnim->SetFinishCallback(PedSetInTrainCB, this);
-	bUsesCollision = false;
-	LineUpPedWithTrain();
-	if (IsPlayer()) {
-		if (((CPlayerPed*)this)->m_bAdrenalineActive)
-			((CPlayerPed*)this)->ClearAdrenaline();
-	}
-}
-
-void
-CPed::EnterTrain(void)
-{
-	LineUpPedWithTrain();
-}
-
-void
-CPed::SetPedPositionInTrain(void)
-{
-	LineUpPedWithTrain();
-}
-
-void
-CPed::LineUpPedWithTrain(void)
-{
-	CVector lineUpPos;
-	CVehicleModelInfo *trainModel = (CVehicleModelInfo *)CModelInfo::GetModelInfo(m_pMyVehicle->GetModelIndex());
-	CVector enterOffset(1.5f, 0.0f, -0.2f);
-
-	m_vecMoveSpeed = CVector(0.0f, 0.0f, 0.0f);
-	m_fRotationCur = m_pMyVehicle->GetForward().Heading() - HALFPI;
-	m_fRotationDest = m_fRotationCur;
-
-	if (!bInVehicle) {
-		GetNearestTrainDoor(m_pMyVehicle, lineUpPos);
-		lineUpPos.z += 0.2f;
-	} else {
-		if (m_pMyVehicle->pPassengers[TRAIN_POS_LEFT_ENTRY] == this) {
-
-			lineUpPos = trainModel->m_positions[TRAIN_POS_LEFT_ENTRY] - enterOffset;
-
-		} else if (m_pMyVehicle->pPassengers[TRAIN_POS_MID_ENTRY] == this) {
-
-			lineUpPos = trainModel->m_positions[TRAIN_POS_MID_ENTRY] - enterOffset;
-
-		} else if (m_pMyVehicle->pPassengers[TRAIN_POS_RIGHT_ENTRY] == this) {
-
-			lineUpPos = trainModel->m_positions[TRAIN_POS_RIGHT_ENTRY] - enterOffset;
-		}
-		lineUpPos = Multiply3x3(m_pMyVehicle->GetMatrix(), lineUpPos);
-		lineUpPos += m_pMyVehicle->GetPosition();
-	}
-
-	if (m_pVehicleAnim) {
-		float percentageLeft = m_pVehicleAnim->GetTimeLeft() / m_pVehicleAnim->hierarchy->totalLength;
-		lineUpPos += (GetPosition() - lineUpPos) * percentageLeft;
-	}
-
-	SetPosition(lineUpPos);
-	SetHeading(m_fRotationCur);
-}
-
-void
-CPed::SetExitTrain(CVehicle* train)
-{
-	if (m_nPedState == PED_EXIT_TRAIN || train->GetStatus() != STATUS_TRAIN_NOT_MOVING || !((CTrain*)train)->Doors[0].IsFullyOpen())
-		return;
-
-	/*
-	// Not used
-	CVector exitPos;
-	GetNearestTrainPedPosition(train, exitPos);
-	*/
-	SetPedState(PED_EXIT_TRAIN);
-	m_pVehicleAnim = CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_TRAIN_GETOUT, 4.0f);
-	m_pVehicleAnim->SetFinishCallback(PedSetOutTrainCB, this);
-	bUsesCollision = false;
-	LineUpPedWithTrain();
-}
-
-void
-CPed::ExitTrain(void)
-{
-	LineUpPedWithTrain();
-}
-
-void
-CPed::PedSetOutTrainCB(CAnimBlendAssociation *animAssoc, void *arg)
-{
-	CPed *ped = (CPed*)arg;
-
-	CVehicle *veh = ped->m_pMyVehicle;
-
-	if (ped->m_pVehicleAnim)
-		ped->m_pVehicleAnim->blendDelta = -1000.0f;
-
-	ped->bUsesCollision = true;
-	ped->m_pVehicleAnim = nil;
-	ped->bInVehicle = false;
-	ped->SetPedState(PED_IDLE);
-	ped->RestorePreviousObjective();
-	ped->SetMoveState(PEDMOVE_STILL);
-
-	CMatrix pedMat(ped->GetMatrix());
-	ped->m_fRotationCur = HALFPI + veh->GetForward().Heading();
-	ped->m_fRotationDest = ped->m_fRotationCur;
-	CVector posAfterExit = Multiply3x3(pedMat, vecPedTrainDoorAnimOffset);
-	posAfterExit += ped->GetPosition();
-	CPedPlacement::FindZCoorForPed(&posAfterExit);
-	ped->m_vecMoveSpeed = CVector(0.0f, 0.0f, 0.0f);
-	ped->SetPosition(posAfterExit);
-	ped->SetHeading(ped->m_fRotationCur);
-	veh->RemovePassenger(ped);
-}
-
-void
-CPed::RegisterThreatWithGangPeds(CEntity *attacker)
-{
-	CPed *attackerPed = nil;
-	if (attacker) {
-		if (m_objective != OBJECTIVE_KILL_CHAR_ON_FOOT && m_objective != OBJECTIVE_KILL_CHAR_ANY_MEANS) {
-			if (attacker->IsPed()) {
-				attackerPed = (CPed*)attacker;
-			} else {
-				if (!attacker->IsVehicle())
-					return;
-
-				attackerPed = ((CVehicle*)attacker)->pDriver;
-				if (!attackerPed)
-					return;
-			}
-
-			if (attackerPed && (attackerPed->IsPlayer() || attackerPed->IsGangMember())) {
-				for (int i = 0; i < m_numNearPeds; ++i) {
-					CPed *nearPed = m_nearPeds[i];
-					if (nearPed->IsPointerValid()) {
-						if (nearPed != this && nearPed->m_nPedType == m_nPedType)
-							nearPed->m_fearFlags |= CPedType::GetFlag(attackerPed->m_nPedType);
-					}
-				}
-			}
-		}
-	}
-
-	if (attackerPed && attackerPed->IsPlayer() && (attackerPed->m_nPedState == PED_CARJACK || attackerPed->bInVehicle)) {
-		if (!attackerPed->m_pMyVehicle || attackerPed->m_pMyVehicle->GetModelIndex() != MI_TOYZ) {
-			int16 lastVehicle;
-			CEntity *vehicles[8];
-			CWorld::FindObjectsInRange(GetPosition(), ENTER_CAR_MAX_DIST, true, &lastVehicle, 6, vehicles, false, true, false, false, false);
-
-			if (lastVehicle > 8)
-				lastVehicle = 8;
-
-			for (int j = 0; j < lastVehicle; ++j) {
-				CVehicle *nearVeh = (CVehicle*) vehicles[j];
-
-				if (nearVeh->VehicleCreatedBy != MISSION_VEHICLE) {
-					CPed *nearVehDriver = nearVeh->pDriver;
-
-					if (nearVehDriver && nearVehDriver != this && nearVehDriver->m_nPedType == m_nPedType) {
-
-						if (nearVeh->IsVehicleNormal() && nearVeh->IsCar()) {
-							nearVeh->AutoPilot.m_nCruiseSpeed = GAME_SPEED_TO_CARAI_SPEED * nearVeh->pHandling->Transmission.fMaxCruiseVelocity * 0.8f;
-							nearVeh->AutoPilot.m_nCarMission = MISSION_RAMPLAYER_FARAWAY;
-							nearVeh->SetStatus(STATUS_PHYSICS);
-							nearVeh->AutoPilot.m_nTempAction = TEMPACT_NONE;
-							nearVeh->AutoPilot.m_nDrivingStyle = DRIVINGSTYLE_AVOID_CARS;
-						}
-					}
-				}
-			}
-		}
-	}
-}
-
-// Some helper function which doesn't exist in og game.
-inline void
-SelectClosestNodeForSeek(CPed *ped, CPathNode *node, CVector2D closeDist, CVector2D farDist, CPathNode *closeNode, CPathNode *closeNode2, int runCount = 3)
-{
-	for (int i = 0; i < node->numLinks; i++) {
-
-		CPathNode *testNode = &ThePaths.m_pathNodes[ThePaths.ConnectedNode(i + node->firstLink)];
-
-		if (testNode && testNode != closeNode && testNode != closeNode2) {
-			CVector2D posDiff(ped->m_vecSeekPos - testNode->GetPosition());
-			float dist = posDiff.MagnitudeSqr();
-
-			if (farDist.MagnitudeSqr() > dist) {
-
-				if (closeDist.MagnitudeSqr() <= dist) {
-					ped->m_pNextPathNode = closeNode;
-					closeDist = posDiff;
-				} else {
-					ped->m_pNextPathNode = (closeNode2 ? closeNode2 : testNode);
-					farDist = posDiff;
-				}
-			}
-
-			if (--runCount > 0)
-				SelectClosestNodeForSeek(ped, testNode, closeDist, farDist, closeNode, (closeNode2 ? closeNode2 : testNode), runCount);
-		}
-	}
-}
-
-bool
-CPed::FindBestCoordsFromNodes(CVector unused, CVector *bestCoords)
-{
-	if (m_pNextPathNode || !bUsePedNodeSeek)
-		return false;
-
-	CVector ourPos = GetPosition();
-
-	int closestNodeId = ThePaths.FindNodeClosestToCoors(GetPosition(), 1, 999999.9f);
-
-	CVector seekObjPos = m_vecSeekPos;
-	seekObjPos.z += 1.0f;
-
-	if (CWorld::GetIsLineOfSightClear(ourPos, seekObjPos, true, false, false, true, false, false, false))
-		return false;
-
-	m_pNextPathNode = nil;
-
-	CVector2D seekPosDist (m_vecSeekPos - ourPos);
-
-	CPathNode *closestNode = &ThePaths.m_pathNodes[closestNodeId];
-	CVector2D closeDist(m_vecSeekPos - closestNode->GetPosition());
-
-	SelectClosestNodeForSeek(this, closestNode, closeDist, seekPosDist, closestNode, nil);
-
-	// Above function decided that going to the next node is more logical than seeking the object.
-	if (m_pNextPathNode) {
-
-		CVector pathToNextNode = m_pNextPathNode->GetPosition() - ourPos;
-		if (pathToNextNode.MagnitudeSqr2D() < seekPosDist.MagnitudeSqr()) {
-			*bestCoords = m_pNextPathNode->GetPosition();
-			return true;
-		}
-		m_pNextPathNode = nil;
-	}
-
-	return false;
-}
-
-bool
-CPed::DuckAndCover(void)
-{
-	if (!m_pedInObjective || CTimer::GetTimeInMilliseconds() <= m_duckAndCoverTimer)
-		return false;
-
-	if (bKindaStayInSamePlace){
-
-		if (CTimer::GetTimeInMilliseconds() <= m_leaveCarTimer) {
-			if (!m_pLookTarget || m_pLookTarget != m_pedInObjective) {
-				m_pLookTarget = m_pedInObjective;
-				m_pLookTarget->RegisterReference((CEntity **) &m_pLookTarget);
-			}
-			if (!bIsAimingGun)
-				SetAimFlag(m_pedInObjective);
-
-		} else {
-			bCrouchWhenShooting = false;
-			bKindaStayInSamePlace = false;
-			bIsDucking = false;
-			bDuckAndCover = false;
-			m_headingRate = 10.0f;
-			m_duckAndCoverTimer = CTimer::GetTimeInMilliseconds() + CGeneral::GetRandomNumberInRange(20000,30000);
-			if (m_pSeekTarget && m_pSeekTarget->IsVehicle())
-				((CVehicle*)m_pSeekTarget)->m_numPedsUseItAsCover--;
-		}
-		return false;
-	}
-
-	bool justDucked = false;
-	CVehicle *foundVeh = nil;
-	float maxDist = 225.0f;
-	bIsDucking = false;
-	bCrouchWhenShooting = false;
-	if (CTimer::GetTimeInMilliseconds() > m_leaveCarTimer) {
-		CVector pos = GetPosition();
-		int16 lastVehicle;
-		CEntity *vehicles[8];
-		CWorld::FindObjectsInRange(pos, CHECK_NEARBY_THINGS_MAX_DIST, true, &lastVehicle, 6, vehicles, false, true, false, false, false);
-
-		for (int i = 0; i < lastVehicle; i++) {
-			CVehicle *veh = (CVehicle*) vehicles[i];
-			if (veh->m_vecMoveSpeed.Magnitude() <= 0.02f
-				&& !veh->bIsBus
-				&& !veh->bIsVan
-				&& !veh->bIsBig
-				&& veh->m_numPedsUseItAsCover < 3) {
-				float dist = (GetPosition() - veh->GetPosition()).MagnitudeSqr();
-				if (dist < maxDist) {
-					maxDist = dist;
-					foundVeh = veh;
-				}
-			}
-		}
-		if (foundVeh) {
-			// Unused.
-			// CVector lfWheelPos, rfWheelPos;
-			// foundVeh->GetComponentWorldPosition(CAR_WHEEL_RF, rfWheelPos);
-			// foundVeh->GetComponentWorldPosition(CAR_WHEEL_LF, lfWheelPos);
-			CVector rightSide, leftSide;
-
-			// 3 persons can use the car as cover. Found the correct position for us.
-			if (foundVeh->m_numPedsUseItAsCover == 2) {
-				rightSide = CVector(1.5f, -0.5f, 0.0f);
-				leftSide = CVector(-1.5f, -0.5f, 0.0f);
-			} else if (foundVeh->m_numPedsUseItAsCover == 1) {
-				rightSide = CVector(1.5f, 0.5f, 0.0f);
-				leftSide = CVector(-1.5f, 0.5f, 0.0f);
-			} else if (foundVeh->m_numPedsUseItAsCover == 0) {
-				rightSide = CVector(1.5f, 0.0f, 0.0f);
-				leftSide = CVector(-1.5f, 0.0f, 0.0f);
-			}
-
-			CMatrix vehMatrix(foundVeh->GetMatrix());
-			CVector duckAtRightSide = Multiply3x3(vehMatrix, rightSide) + foundVeh->GetPosition();
-
-			CVector duckAtLeftSide = Multiply3x3(vehMatrix, leftSide) + foundVeh->GetPosition();
-
-			CVector distWithPedRightSide = m_pedInObjective->GetPosition() - duckAtRightSide;
-			CVector distWithPedLeftSide = m_pedInObjective->GetPosition() - duckAtLeftSide;
-
-			CVector duckPos;
-			if (distWithPedRightSide.MagnitudeSqr() <= distWithPedLeftSide.MagnitudeSqr())
-				duckPos = duckAtLeftSide;
-			else
-				duckPos = duckAtRightSide;
-
-			if (CWorld::TestSphereAgainstWorld(duckPos, 0.5f, nil, true, true, true, false, false, false)
-				&& CWorld::GetIsLineOfSightClear(GetPosition(), duckPos, 1, 0, 0, 1, 0, 0, 0)) {
-				SetSeek(duckPos, 1.0f);
-				m_headingRate = 15.0f;
-				bIsRunning = true;
-				bDuckAndCover = true;
-				justDucked = true;
-				m_leaveCarTimer = CTimer::GetTimeInMilliseconds() + 500;
-				if (foundVeh->bIsLawEnforcer)
-					m_carInObjective = foundVeh;
-
-				// BUG? Shouldn't we register the reference?
-				m_pSeekTarget = foundVeh;
-				ClearPointGunAt();
-			} else {
-				m_duckAndCoverTimer = CTimer::GetTimeInMilliseconds() + CGeneral::GetRandomNumberInRange(10000, 15000);
-				bDuckAndCover = false;
-			}
-		} else {
-			bDuckAndCover = false;
-		}
-	}
-
-	if (!justDucked && !bDuckAndCover)
-		return false;
-	
-	if (!Seek())
-		return true;
-
-	bKindaStayInSamePlace = true;
-	bDuckAndCover = false;
-	m_vecSeekPos = CVector(0.0f, 0.0f, 0.0f);
-	if (m_pSeekTarget && m_pSeekTarget->IsVehicle())
-		((CVehicle*)m_pSeekTarget)->m_numPedsUseItAsCover++;
-	
-	SetIdle();
-	SetMoveState(PEDMOVE_STILL);
-	SetMoveAnim();
-	if (!m_pLookTarget || m_pLookTarget != m_pedInObjective) {
-		m_pLookTarget = m_pedInObjective;
-		m_pLookTarget->RegisterReference((CEntity **) &m_pLookTarget);
-	}
-
-	m_leaveCarTimer = CTimer::GetTimeInMilliseconds() + CGeneral::GetRandomNumberInRange(3000, 6000);
-	return false;
-}
-
-CVector
-CPed::GetPositionToOpenCarDoor(CVehicle *veh, uint32 component, float offset)
-{	
-	CVector doorPos;
-	CMatrix vehMat(veh->GetMatrix());
-
-	doorPos = Multiply3x3(vehMat, GetLocalPositionToOpenCarDoor(veh, component, offset));
-
-	return veh->GetPosition() + doorPos;
-}
-
-CVector
-CPed::GetLocalPositionToOpenCarDoor(CVehicle *veh, uint32 component, float seatPosMult)
-{
-	CVehicleModelInfo *vehModel; 
-	CVector vehDoorPos;
-	CVector vehDoorOffset;
-	float seatOffset;
-
-	vehModel = (CVehicleModelInfo *)CModelInfo::GetModelInfo(veh->GetModelIndex());
-	if (veh->bIsVan && (component == CAR_DOOR_LR || component == CAR_DOOR_RR)) {
-		seatOffset = 0.0f;
-		vehDoorOffset = vecPedVanRearDoorAnimOffset;
-	} else {
-		seatOffset = veh->pHandling->fSeatOffsetDistance * seatPosMult;
-		if (veh->bLowVehicle) {
-			vehDoorOffset = vecPedCarDoorLoAnimOffset;
-		} else {
-			vehDoorOffset = vecPedCarDoorAnimOffset;
-		}
-	}
-
-	switch (component) {
-		case CAR_DOOR_RF:
-			vehDoorPos = vehModel->GetFrontSeatPosn();
-			vehDoorPos.x += seatOffset;
-			vehDoorOffset.x = -vehDoorOffset.x;
-			break;
-
-		case CAR_DOOR_RR:
-			vehDoorPos = vehModel->m_positions[CAR_POS_BACKSEAT];
-			vehDoorPos.x += seatOffset;
-			vehDoorOffset.x = -vehDoorOffset.x;
-			break;
-
-		case CAR_DOOR_LF:
-			vehDoorPos = vehModel->GetFrontSeatPosn();
-			vehDoorPos.x = -(vehDoorPos.x + seatOffset);
-			break;
-
-		case CAR_DOOR_LR:
-			vehDoorPos = vehModel->m_positions[CAR_POS_BACKSEAT];
-			vehDoorPos.x = -(vehDoorPos.x + seatOffset);
-			break;
-
-		default:
-			vehDoorPos = vehModel->GetFrontSeatPosn();
-			vehDoorOffset = CVector(0.0f, 0.0f, 0.0f);
-	}
-	return vehDoorPos - vehDoorOffset;
-}
-
-void
-CPed::SetDuck(uint32 time)
-{
-	if (bIsDucking || CTimer::GetTimeInMilliseconds() <= m_duckTimer)
-		return;
-
-	if (bCrouchWhenShooting && (m_nPedState == PED_ATTACK || m_nPedState == PED_AIM_GUN)) {
-		CAnimBlendAssociation *duckAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_DUCK_LOW);
-		if (!duckAssoc || duckAssoc->blendDelta < 0.0f) {
-			CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_DUCK_LOW, 4.0f);
-			bIsDucking = true;
-			m_duckTimer = CTimer::GetTimeInMilliseconds() + time;
-		}
-	} else {
-		CAnimBlendAssociation *duckAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_DUCK_DOWN);
-		if (!duckAssoc || duckAssoc->blendDelta < 0.0f) {
-			CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_DUCK_DOWN, 4.0f);
-			bIsDucking = true;
-			m_duckTimer = CTimer::GetTimeInMilliseconds() + time;
-		}
-	}
-}
-
-void
-CPed::Duck(void)
-{
-	if (CTimer::GetTimeInMilliseconds() > m_duckTimer)
-		ClearDuck();
-}
-
-void
-CPed::ClearDuck(void)
-{
-	CAnimBlendAssociation *animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_DUCK_DOWN);
-	if (!animAssoc) {
-		animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_DUCK_LOW);
-
-		if (!animAssoc) {
-			bIsDucking = false;
-			return;
-		}
-	}
-
-	if (!bCrouchWhenShooting)
-		return;
-
-	if (m_nPedState != PED_ATTACK && m_nPedState != PED_AIM_GUN)
-		return;
-
-	animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_RBLOCK_SHOOT);
-	if (!animAssoc || animAssoc->blendDelta < 0.0f) {
-		CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_RBLOCK_SHOOT, 4.0f);
-	}
-}
-
-void
-CPed::InformMyGangOfAttack(CEntity *attacker)
-{
-	CPed *attackerPed;
-
-	if (m_objective == OBJECTIVE_KILL_CHAR_ON_FOOT || m_objective == OBJECTIVE_KILL_CHAR_ANY_MEANS)
-		return;
-
-	if (attacker->IsPed()) {
-		attackerPed = (CPed*)attacker;
-	} else {
-		if (!attacker->IsVehicle())
-			return;
-
-		attackerPed = ((CVehicle*)attacker)->pDriver;
-		if (!attackerPed)
-			return;
-	}
-
-	if (attackerPed->m_nPedType == PEDTYPE_COP)
-		return;
-
-	for (int i = 0; i < m_numNearPeds; i++)	{
-		CPed *nearPed = m_nearPeds[i];
-		if (nearPed && nearPed != this) {
-			CPed *leader = nearPed->m_leader;
-			if (leader && leader == this && nearPed->m_pedStats->m_fear < nearPed->m_pedStats->m_temper)
-			{
-				nearPed->SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, attackerPed);
-				nearPed->SetObjectiveTimer(30000);
-			}
-		}
-	}
-}
-
-void
-CPed::PedAnimDoorCloseRollingCB(CAnimBlendAssociation* animAssoc, void* arg)
-{
-	CPed* ped = (CPed*)arg;
-
-	CAutomobile* veh = (CAutomobile*)(ped->m_pMyVehicle);
-
-	if (animAssoc)
-		animAssoc->blendDelta = -1000.0f;
-
-	if (veh->bLowVehicle) {
-		veh->ProcessOpenDoor(CAR_DOOR_LF, ANIM_STD_CAR_CLOSE_DOOR_ROLLING_LO_LHS, 1.0f);
-	} else {
-		veh->ProcessOpenDoor(CAR_DOOR_LF, ANIM_STD_CAR_CLOSE_DOOR_ROLLING_LHS, 1.0f);
-	}
-
-	veh->m_nGettingOutFlags &= ~CAR_DOOR_FLAG_LF;
-
-	if (veh->Damage.GetDoorStatus(DOOR_FRONT_LEFT) == DOOR_STATUS_SWINGING)
-		veh->Damage.SetDoorStatus(DOOR_FRONT_LEFT, DOOR_STATUS_OK);
-}
-
-void
-CPed::SetSeekBoatPosition(CVehicle *boat)
-{
-	if (m_nPedState == PED_SEEK_IN_BOAT || boat->pDriver
-#if defined VC_PED_PORTS || defined FIX_BUGS
-		|| !IsPedInControl()
-#endif
-		)
-		return;
-
-	SetStoredState();
-	m_carInObjective = boat;
-	m_carInObjective->RegisterReference((CEntity **) &m_carInObjective);
-	m_pMyVehicle = boat;
-	m_pMyVehicle->RegisterReference((CEntity **) &m_pMyVehicle);
-	m_distanceToCountSeekDone = 0.5f;
-	SetPedState(PED_SEEK_IN_BOAT);
-}
-
-void
-CPed::SeekBoatPosition(void)
-{
-	if (m_carInObjective && !m_carInObjective->pDriver) {
-		CVehicleModelInfo *boatModel = m_carInObjective->GetModelInfo();
-
-		CVector enterOffset;
-		enterOffset = boatModel->GetFrontSeatPosn();
-		enterOffset.x = 0.0f;
-		CMatrix boatMat(m_carInObjective->GetMatrix());
-		CVector boatEnterPos = Multiply3x3(boatMat, enterOffset);
-		boatEnterPos += m_carInObjective->GetPosition();
-		SetMoveState(PEDMOVE_WALK);
-		m_vecSeekPos = boatEnterPos;
-		if (Seek()) {
-			// We arrived to the boat
-			m_vehDoor = 0;
-			SetEnterCar(m_carInObjective, 0);
-		}
-	} else
-		RestorePreviousState();
-}
-
-bool
-CPed::IsRoomToBeCarJacked(void)
-{
-	if (!m_pMyVehicle)
-		return false;
-
-	CVector offset;
-	if (m_pMyVehicle->bLowVehicle || m_nPedType == PEDTYPE_COP) {
-		offset = vecPedDraggedOutCarAnimOffset;
-	} else {
-		offset = vecPedQuickDraggedOutCarAnimOffset;
-	}
-
-	offset.z = 0.0f;
-	if (m_pMyVehicle->IsRoomForPedToLeaveCar(CAR_DOOR_LF, &offset)) {
-		return true;
-	}
-
-	return false;
-}
-
-void
-CPed::RemoveInCarAnims(void)
-{
-	if (!IsPlayer())
-		return;
-
-	CAnimBlendAssociation *animAssoc;
-
-	if (m_pMyVehicle && m_pMyVehicle->bLowVehicle) {
-		animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_CAR_DRIVE_LEFT_LO);
-		if (animAssoc)
-			animAssoc->blendDelta = -1000.0f;
-		animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_CAR_DRIVE_RIGHT_LO);
-		if (animAssoc)
-			animAssoc->blendDelta = -1000.0f;
-		animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_CAR_DRIVEBY_LEFT);
-		if (animAssoc)
-			animAssoc->blendDelta = -1000.0f;
-		animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_CAR_DRIVEBY_RIGHT);
-		if (animAssoc)
-			animAssoc->blendDelta = -1000.0f;
-	} else {
-		animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_CAR_DRIVE_LEFT);
-		if (animAssoc)
-			animAssoc->blendDelta = -1000.0f;
-		animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_CAR_DRIVE_RIGHT);
-		if (animAssoc)
-			animAssoc->blendDelta = -1000.0f;
-		animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_CAR_DRIVEBY_LEFT);
-		if (animAssoc)
-			animAssoc->blendDelta = -1000.0f;
-		animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_CAR_DRIVEBY_RIGHT);
-		if (animAssoc)
-			animAssoc->blendDelta = -1000.0f;
-	}
-
-#ifdef VC_PED_PORTS
-	animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_BOAT_DRIVE);
-	if (animAssoc)
-		animAssoc->blendDelta = -1000.0f;
-#endif
-
-	animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_CAR_LOOKBEHIND);
-	if (animAssoc)
-		animAssoc->blendDelta = -1000.0f;
-}
-
-bool
-CPed::PositionPedOutOfCollision(void)
-{
-	CVehicle *veh;
-	CVector posNearVeh;
-	CVector posSomewhereClose;
-	bool putNearVeh = false;
-	bool putSomewhereClose = false;
-	int smallestDistNearVeh = 999;
-	int smallestDistSomewhereClose = 999;
-
-	if (!m_pMyVehicle)
-		return false;
-
-	CVector vehPos = m_pMyVehicle->GetPosition();
-	CVector potentialPos;
-	potentialPos.y = GetPosition().y - 3.5f;
-	potentialPos.z = GetPosition().z;
-
-	for (int yTry = 0; yTry < 15; yTry++) {
-		potentialPos.x = GetPosition().x - 3.5f;
-
-		for (int xTry = 0; xTry < 15; xTry++) {
-			CPedPlacement::FindZCoorForPed(&potentialPos);
-			CVector distVec = potentialPos - vehPos;
-			float dist = distVec.Magnitude();
-
-			// Makes close distances bigger for some reason.
-			float mult = (0.6f + dist) / dist;
-			CVector adjustedPotentialPos = distVec * mult + vehPos;
-			if (CWorld::GetIsLineOfSightClear(vehPos, adjustedPotentialPos, true, false, false, true, false, false, false)
-				&& !CWorld::TestSphereAgainstWorld(potentialPos, 0.6f, this, true, false, false, true, false, false)) {
-
-				float potentialChangeSqr = (potentialPos - GetPosition()).MagnitudeSqr();
-				veh = (CVehicle*)CWorld::TestSphereAgainstWorld(potentialPos, 0.6f, this, false, true, false, false, false, false);
-				if (veh) {
-					if (potentialChangeSqr < smallestDistNearVeh) {
-						posNearVeh = potentialPos;
-						putNearVeh = true;
-						smallestDistNearVeh = potentialChangeSqr;
-					}
-				} else if (potentialChangeSqr < smallestDistSomewhereClose) {
-					smallestDistSomewhereClose = potentialChangeSqr;
-					posSomewhereClose = potentialPos;
-					putSomewhereClose = true;
-				}
-			}
-			potentialPos.x += 0.5f;
-		}
-		potentialPos.y += 0.5f;
-	}
-
-	if (!putSomewhereClose && !putNearVeh)
-		return false;
-
-	// We refrain from using posNearVeh, probably because of it may be top of the vehicle.
-	if (putSomewhereClose) {
-		SetPosition(posSomewhereClose);
-	} else {
-		CVector vehSize = veh->GetModelInfo()->GetColModel()->boundingBox.max;
-		posNearVeh.z += vehSize.z;
-		SetPosition(posNearVeh);
-	}
-	return true;
-}
-
-bool
-CPed::WarpPedToNearLeaderOffScreen(void)
-{
-	bool teleported = false;
-	if (GetIsOnScreen() || m_leaveCarTimer > CTimer::GetTimeInMilliseconds())
-		return false;
-
-	CVector warpToPos = m_leader->GetPosition();
-	CVector distVec = warpToPos - GetPosition();
-	float halfOfDist = distVec.Magnitude() * 0.5f;
-	CVector halfNormalizedDist = distVec / halfOfDist;
-
-	CVector appropriatePos = GetPosition();
-	CVector zCorrectedPos = appropriatePos;
-	int tryCount = Min(10, halfOfDist);
-	for (int i = 0; i < tryCount; ++i) {
-		appropriatePos += halfNormalizedDist;
-		CPedPlacement::FindZCoorForPed(&zCorrectedPos);
-
-		if (Abs(zCorrectedPos.z - warpToPos.z) >= 3.0f && Abs(zCorrectedPos.z - appropriatePos.z) >= 3.0f)
-			continue;
-
-		appropriatePos.z = zCorrectedPos.z;
-		if (!TheCamera.IsSphereVisible(appropriatePos, 0.6f)
-			&& CWorld::GetIsLineOfSightClear(appropriatePos, warpToPos, true, true, false, true, false, false, false)
-			&& !CWorld::TestSphereAgainstWorld(appropriatePos, 0.6f, this, true, true, false, true, false, false)) {
-			teleported = true;
-			Teleport(appropriatePos);
-		}
-	}
-	m_leaveCarTimer = CTimer::GetTimeInMilliseconds() + 3000;
-	return teleported;
-}
-
-bool
-CPed::WarpPedToNearEntityOffScreen(CEntity *warpTo)
-{
-	bool teleported = false;
-	if (GetIsOnScreen() || m_leaveCarTimer > CTimer::GetTimeInMilliseconds())
-		return false;
-
-	CVector warpToPos = warpTo->GetPosition();
-	CVector distVec = warpToPos - GetPosition();
-	float halfOfDist = distVec.Magnitude() * 0.5f;
-	CVector halfNormalizedDist = distVec / halfOfDist;
-
-	CVector appropriatePos = GetPosition();
-	CVector zCorrectedPos = appropriatePos;
-	int tryCount = Min(10, halfOfDist);
-	for (int i = 0; i < tryCount; ++i) {
-		appropriatePos += halfNormalizedDist;
-		CPedPlacement::FindZCoorForPed(&zCorrectedPos);
-
-		if (Abs(zCorrectedPos.z - warpToPos.z) >= 3.0f && Abs(zCorrectedPos.z - appropriatePos.z) >= 3.0f)
-			continue;
-
-		appropriatePos.z = zCorrectedPos.z;
-		if (!TheCamera.IsSphereVisible(appropriatePos, 0.6f)
-			&& CWorld::GetIsLineOfSightClear(appropriatePos, warpToPos, true, true, false, true, false, false, false)
-			&& !CWorld::TestSphereAgainstWorld(appropriatePos, 0.6f, this, true, true, false, true, false, false)) {
-			teleported = true;
-			Teleport(appropriatePos);
-		}
-	}
-	m_leaveCarTimer = CTimer::GetTimeInMilliseconds() + 3000;
-	return teleported;
-}
+YªçŠx-®éÜj×¢ëiºÚ+Š§j[h‘éÜ¢éíç­õÙ:-jZ.¶›­–)Þ³R6–æ6ÇVFR&6öÖÖöâæ‚  ¢6–æ6ÇVFR&Ö–âæ‚ ¢6–æ6ÇVFR%'F–6ÆRæ‚ ¢6–æ6ÇVFR%'æ–Ô&ÆVæBæ‚ ¢6–æ6ÇVFR%VBæ‚ ¢6–æ6ÇVFR%vçFVBæ‚ ¢6–æ6ÇVFR$æ–Ô&ÆVæD76ö6–F–öâæ‚ ¢6–æ6ÇVFR$DÔVF–òæ‚ ¢6–æ6ÇVFR$vVæW&Âæ‚ ¢6–æ6ÇVFR$†æFÆ–ætÖw"æ‚ ¢6–æ6ÇVFR%&WÆ’æ‚ ¢6–æ6ÇVFR$6ÖW&æ‚ ¢6–æ6ÇVFR%VEÆ6VÖVçBæ‚ ¢6–æ6ÇVFR%¦öæT7VÆÂæ‚ ¢6–æ6ÇVFR%Bæ‚ ¢6–æ6ÇVFR%–6·W2æ‚ ¢6–æ6ÇVFR%G&–âæ‚ ¢6–æ6ÇVFR%VE&÷WFW2æ‚ ¢6–æ6ÇVFR$6÷VBæ‚ ¢6–æ6ÇVFR%67&—Bæ‚ ¢6–æ6ÇVFR$6$7G&Âæ‚ ¢6–æ6ÇVFR%vFW$ÆWfVÂæ‚ ¢6–æ6ÇVFR$6$’æ‚ ¢6–æ6ÇVFR%¦öæW2æ‚ ¢6–æ6ÇVFR$7&æW2æ‚ ¢6–æ6ÇVFR%ööÇ2æ‚ ¢6–æ6ÇVFR%Æ–W%VBæ‚  ¤5fV7F÷"fV5VD6$Fö÷$æ–Ôöfg6WC°¤5fV7F÷"fV5VD6$Fö÷$Æôæ–Ôöfg6WC°¤5fV7F÷"fV5VEfå&V$Fö÷$æ–Ôöfg6WC°¤5fV7F÷"fV5VEV–6´G&vvVD÷WD6$æ–Ôöfg6WC°¤5fV7F÷"fV5VDG&vvVD÷WD6$æ–Ôöfg6WC°¤5fV7F÷"fV5VEG&–äFö÷$æ–Ôöfg6WC° §fö–@¤5VC£¥6WDö&¦V7F—fUF–ÖW"†–çBF–ÖR§° ––b‡F–ÖRÓÒ’° –Õöö&¦V7F—fUF–ÖW"Ò° —ÒVÇ6R–b„5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’âÕöö&¦V7F—fUF–ÖW"’° –Õöö&¦V7F—fUF–ÖW"Ò5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’²F–ÖS° —Ð§Ð §fö–@¤5VC£¥6WE7F÷&VDö&¦V7F—fR‡fö–B§° ––b†Õöö&¦V7F—fRÓÒÕ÷&Wdö&¦V7F—fR —&WGW&ã°  —7v—F6‚†Õöö&¦V7F—fR —° –66Rô$¤T5D•dUôdÄTUôôåôdôõEõD”ÄÅõ4dS  –66Rô$¤T5D•dUô´”ÄÅô4„%ôôåôdôõC  –66Rô$¤T5D•dUô´”ÄÅô4„%ôå•ôÔTå3  –66Rô$¤T5D•dUôdÄTUô4„%ôôåôdôõEõD”ÄÅõ4dS  –66Rô$¤T5D•dUôdÄTUô4„%ôôåôdôõEôÅt•3  –66Rô$¤T5D•dUôtõDõô4„%ôôåôdôõC  –66Rô$¤T5D•dUôdôÄÄõuô4„%ô”åôdõ$ÔD”ôã  –66Rô$¤T5D•dUôÄTdUô4#  –66Rô$¤T5D•dUôTåDU%ô4%ô5õ54TätU#  –66Rô$¤T5D•dUôTåDU%ô4%ô5ôE$•dU#  –66Rô$¤T5D•dUôtõDõô$TôôåôdôõC  –66Rô$¤T5D•dUõ%TåõDõô$T  —&WGW&ã° –FVfVÇC  –Õ÷&Wdö&¦V7F—fRÒÕöö&¦V7F—fS° —Ð§Ð §fö–@¤5VC£¤f÷&6U7F÷&VDö&¦V7F—fR†Tö&¦V7F—fRö&¦V7F—fR§° ––b†ö&¦V7F—fRÒô$¤T5D•dUôTåDU%ô4%ô5ôE$•dU"bbö&¦V7F—fRÒô$¤T5D•dUôTåDU%ô4%ô5õ54TätU"’° –Õ÷&Wdö&¦V7F—fRÒÕöö&¦V7F—fS° —&WGW&ã° —Ð  —7v—F6‚†Õöö&¦V7F—fR —° –66Rô$¤T5D•dUôdÄTUôôåôdôõEõD”ÄÅõ4dS  –66Rô$¤T5D•dUô´”ÄÅô4„%ôôåôdôõC  –66Rô$¤T5D•dUôdÄTUô4„%ôôåôdôõEõD”ÄÅõ4dS  –66Rô$¤T5D•dUôdÄTUô4„%ôôåôdôõEôÅt•3  –66Rô$¤T5D•dUôtõDõô4„%ôôåôdôõC  –66Rô$¤T5D•dUôTåDU%ô4%ô5õ54TätU#  –66Rô$¤T5D•dUôTåDU%ô4%ô5ôE$•dU#  –66Rô$¤T5D•dUôtõDõô$TôôåôdôõC  –66Rô$¤T5D•dUõ%TåõDõô$T  —&WGW&ã° –FVfVÇC  –Õ÷&Wdö&¦V7F—fRÒÕöö&¦V7F—fS° —Ð§Ð ¦&ööÀ¤5VC£¤—5FV×÷&'”ö&¦V7F—fR†Tö&¦V7F—fRö&¦V7F—fR§° —&WGW&âö&¦V7F—fRÓÒô$¤T5D•dUôÄTdUô4"ÇÂö&¦V7F—fRÓÒô$¤T5D•dUõ4UEôÄTDU"ÇÀ¢6–fFVbd5õTEõõ%E0 –ö&¦V7F—fRÓÒô$¤T5D•dUôÄTdUô4%ôäEôD”RÇÀ¢6VæF–` –ö&¦V7F—fRÓÒô$¤T5D•dUôTåDU%ô4%ô5ôE$•dU"ÇÂö&¦V7F—fRÓÒô$¤T5D•dUôTåDU%ô4%ô5õ54TätU#°§Ð §fö–@¤5VC£¥6WDö&¦V7F—fR†Tö&¦V7F—fRæWtö&¢§° ––b„G––æt÷$FVB‚’ —&WGW&ã°  ––b†æWtö&¢ÓÒô$¤T5D•dUôäôäR’° ––b‚†Õöö&¦V7F—fRÓÒô$¤T5D•dUôÄTdUô4"ÇÂÕöö&¦V7F—fRÓÒô$¤T5D•dUôTåDU%ô4%ô5ôE$•dU"ÇÂÕöö&¦V7F—fRÓÒô$¤T5D•dUôTåDU%ô4%ô5õ54TätU ¢6–fFVbd5õTEõõ%E0 —ÇÂÕöö&¦V7F—fRÓÒô$¤T5D•dUôÄTdUô4%ôäEôD”R ’bb—5Æ–W"‚¢6VÇ6P ’¢6VæF–` ’bb—5VD–ä6öçG&öÂ‚’’°  –%7F'EvæFW%F„öäfö÷BÒG'VS° —&WGW&ã° —Ð ’òòVçW6VB6öFRg&öÒ76VÖ&Ç’ââà ’ò  –VÇ6R–b†Õöö&¦V7F—fRÓÒô$¤T5D•dUôdÄTUô4"’°  —ÒVÇ6R°  —Ð ’¢ð –Õöö&¦V7F—fRÒô$¤T5D•dUôäôäS° –Õ÷&Wdö&¦V7F—fRÒô$¤T5D•dUôäôäS° —ÒVÇ6R–b†Õ÷&Wdö&¦V7F—fRÒæWtö&¢ÇÂÕ÷&Wdö&¦V7F—fRÓÒô$¤T5D•dUôäôäR’° •6WDö&¦V7F—fUF–ÖW"ƒ“°  ––b†Õöö&¦V7F—fRÓÒæWtö&¢ —&WGW&ã°  ––b„—5FV×÷&'”ö&¦V7F—fR†Õöö&¦V7F—fR’’° –Õ÷&Wdö&¦V7F—fRÒæWtö&£° —ÒVÇ6R° ––b†Õöö&¦V7F—fRÒæWtö&¢ •6WE7F÷&VDö&¦V7F—fR‚“°  –Õöö&¦V7F—fRÒæWtö&£° —Ð –$ö&¦V7F—fT6ö×ÆWFVBÒfÇ6S°  —7v—F6‚†æWtö&¢’° –66Rô$¤T5D•dUôäôäS  –Õ÷&Wdö&¦V7F—fRÒô$¤T5D•dUôäôäS° –'&V³° –66Rô$¤T5D•dUô„”ÅõD„“  –Õöåv—EF–ÖW"Ò° •6WD–FÆR‚“° •6WDÖ÷fU7FFR…TDÔõdUõ5D”ÄÂ“° –'&V³° –FVfVÇC  –'&V³° —Ð —Ð§Ð §fö–@¤5VC£¥6WDö&¦V7F—fR†Tö&¦V7F—fRæWtö&¢Âfö–B¦VçF—G’§° ––b„G––æt÷$FVB‚’ —&WGW&ã°  ’òòæò’÷"Ö—76–öâ67&—BÖ’GW&âÆVöæR–çFòâVæV×’÷"föÆÆ÷vW"ö` ’òòF†RÆ–W"âÆVöæRöæÇ’&V6V—fRFV×÷&'’6öÖ&Bö&¦V7F—fRv–ç7@ ’òòF†RÆ–W"w2GF6¶W"–âÖ¶TæV&'”ÆVöæTFVfVæEÆ–W"‚’à ––b†ÕöåVEG—RÓÒTEE•Uôtäsb` ’†æWtö&¢ÓÒô$¤T5D•dUô´”ÄÅô4„%ôôåôdôõBÇÀ ’æWtö&¢ÓÒô$¤T5D•dUô´”ÄÅô4„%ôå•ôÔTå2ÇÀ ’æWtö&¢ÓÒô$¤T5D•dUôÕTuô4„"ÇÀ ’æWtö&¢ÓÒô$¤T5D•dUôdÄTUô4„%ôôåôdôõEõD”ÄÅõ4dRÇÀ ’æWtö&¢ÓÒô$¤T5D•dUôdÄTUô4„%ôôåôdôõEôÅt•2ÇÀ ’æWtö&¢ÓÒô$¤T5D•dUôtõDõô4„%ôôåôdôõBÇÀ ’æWtö&¢ÓÒô$¤T5D•dUôdôÄÄõuô4„%ô”åôdõ$ÔD”ôâÇÀ ’æWtö&¢ÓÒô$¤T5D•dUôuT$EôED4²ÇÀ ’æWtö&¢ÓÒô$¤T5D•dUõ4UEôÄTDU"’b` ’VçF—G’bb‚„4VçF—G’¢–VçF—G’’Óä—5VB‚’bb‚„5VB¢–VçF—G’’Óä—5Æ–W"‚’ —&WGW&ã°  ––b†Õ÷&Wdö&¦V7F—fRÓÒæWtö&¢’° ’òòv‡“ð ––b†Õ÷&Wdö&¦V7F—fRÒô$¤T5D•dUôäôäR —&WGW&ã° —Ð  ––b†VçF—G’ÓÒF†—2 —&WGW&ã°  •6WDö&¦V7F—fUF–ÖW"ƒ“° ––b†Õöö&¦V7F—fRÓÒæWtö&¢’° —7v—F6‚†æWtö&¢’° –66Rô$¤T5D•dUô´”ÄÅô4„%ôôåôdôõC  –66Rô$¤T5D•dUô´”ÄÅô4„%ôå•ôÔTå3  –66Rô$¤T5D•dUôtõDõô4„%ôôåôdôõC  –66Rô$¤T5D•dUôdôÄÄõuô4„%ô”åôdõ$ÔD”ôã  –66Rô$¤T5D•dUôtõDõô$Tôå•ôÔTå3  –66Rô$¤T5D•dUôuT$EôED4³  ––b†Õ÷VD–äö&¦V7F—fRÓÒVçF—G’ —&WGW&ã°  –'&V³° –66Rô$¤T5D•dUôÄTdUô4#  –66Rô$¤T5D•dUôdÄTUô4# ¢6–fFVbd5õTEõõ%E0 –66Rô$¤T5D•dUôÄTdUô4%ôäEôD”S ¢6VæF–` —&WGW&ã° –66Rô$¤T5D•dUôTåDU%ô4%ô5õ54TätU#  –66Rô$¤T5D•dUôTåDU%ô4%ô5ôE$•dU#  –66Rô$¤T5D•dUôDU5E$õ•ô4#  –66Rô$¤T5D•dUõ4ôÄ”4•EõdT„”4ÄS  –66Rô$¤T5D•dUô%U•ô”4Uô5$TÓ  ––b†Õö6$–äö&¦V7F—fRÓÒVçF—G’ —&WGW&ã°  –'&V³° –66Rô$¤T5D•dUõ4UEôÄTDU#  ––b†ÕöÆVFW"ÓÒVçF—G’ —&WGW&ã°  –'&V³° –FVfVÇC  –'&V³° —Ð —ÒVÇ6R° ––b‚†æWtö&¢ÓÒô$¤T5D•dUôÄTdUô4 ¢6–fFVbd5õTEõõ%E0 —ÇÂæWtö&¢ÓÒô$¤T5D•dUôÄTdUô4%ôäEôD”P¢6VæF–` ’’bb$–åfV†–6ÆR —&WGW&ã° —Ð ¢6–fFVbd5õTEõõ%E0 ”6ÆV%ö–çDwVäB‚“°¢6VæF–` –$ö&¦V7F—fT6ö×ÆWFVBÒfÇ6S° ––b„—5FV×÷&'”ö&¦V7F—fR†Õöö&¦V7F—fR’bb—5FV×÷&'”ö&¦V7F—fR†æWtö&¢’’° –Õ÷&Wdö&¦V7F—fRÒæWtö&£° —ÒVÇ6R° ––b†Õöö&¦V7F—fRÒæWtö&¢’° ––b„—5FV×÷&'”ö&¦V7F—fR†æWtö&¢’ ”f÷&6U7F÷&VDö&¦V7F—fR†æWtö&¢“° –VÇ6P •6WE7F÷&VDö&¦V7F—fR‚“° —Ð –Õöö&¦V7F—fRÒæWtö&£° —Ð  —7v—F6‚†æWtö&¢’° –66Rô$¤T5D•dUõt•Eô”åô4%õD„TåôtUEôõUC   ’òò–âF†—27V6–Â66RÂVçF—G’&ÖWFW"—6âwB4VçF—G’Â'WB–çBà •6WDö&¦V7F—fUF–ÖW"‚‡V–çGG"–VçF—G’“° –'&V³° –66Rô$¤T5D•dUô´”ÄÅô4„%ôôåôdôõC  –66Rô$¤T5D•dUô´”ÄÅô4„%ôå•ôÔTå3  –66Rô$¤T5D•dUôÕTuô4„#  –Õ÷æW‡EF„æöFRÒæ–Ã° –%W6UVDæöFU6VV²ÒfÇ6S° –Õ÷fV56VVµ÷2Ò5fV7F÷"ƒãbÂãbÂãb“° –Õ÷VD–äö&¦V7F—fRÒ„5VB¢–VçF—G“° –Õ÷VD–äö&¦V7F—fRÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕ÷VD–äö&¦V7F—fR“° –Õ÷ÆööµF&vWBÒ„4VçF—G’¢–VçF—G“° –Õ÷ÆööµF&vWBÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕ÷ÆööµF&vWB“° –'&V³° –66Rô$¤T5D•dUôdÄTUô4„%ôôåôdôõEõD”ÄÅõ4dS  –66Rô$¤T5D•dUôdÄTUô4„%ôôåôdôõEôÅt•3  –66Rô$¤T5D•dUôtõDõô4„%ôôåôdôõC  –66Rô$¤T5D•dUôuT$EôED4³  –Õ÷fV56VVµ÷2Ò5fV7F÷"ƒãbÂãbÂãb“° –Õ÷VD–äö&¦V7F—fRÒ„5VB¢–VçF—G“° –Õ÷VD–äö&¦V7F—fRÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕ÷VD–äö&¦V7F—fR“° –'&V³° –66Rô$¤T5D•dUôdôÄÄõuô4„%ô”åôdõ$ÔD”ôã  –Õ÷VD–äö&¦V7F—fRÒ„5VB¢–VçF—G“° –Õ÷VD–äö&¦V7F—fRÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕ÷VD–äö&¦V7F—fR“° –Õ÷VDf÷&ÖF–öâÒdõ$ÔD”ôåõ$T#° –'&V³° –66Rô$¤T5D•dUôÄTdUô4# ¢6–fFVbd5õTEõõ%E0 –66Rô$¤T5D•dUôÄTdUô4%ôäEôD”S ¢6VæF–` –66Rô$¤T5D•dUôdÄTUô4#  –Õö6$–äö&¦V7F—fRÒ„5fV†–6ÆR¢–VçF—G“° –Õö6$–äö&¦V7F—fRÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕö6$–äö&¦V7F—fR“° ––b†Õö6$–äö&¦V7F—fRÓæ$—4'W2bbÕöÆVfT6%F–ÖW"ÓÒ’° –f÷"†–çB’Ò²’ÂÕö6$–äö&¦V7F—fRÓæÕöäçVÔÖ…76VævW'3²’²²’° ––b†Õö6$–äö&¦V7F—fRÓç76VævW'5¶•ÒÓÒF†—2’° –ÕöÆVfT6%F–ÖW"Ò5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’²#¢“° –'&V³° —Ð —Ð —Ð  –'&V³° –66Rô$¤T5D•dUôTåDU%ô4%ô5õ54TätU#  –66Rô$¤T5D•dUôTåDU%ô4%ô5ôE$•dU#  ––b†ÕöäÖ÷fU7FFRÓÒTDÔõdUõ5D”ÄÂ •6WDÖ÷fU7FFR…TDÔõdUõ%Tâ“°  ––b‚‚„5fV†–6ÆR¢–VçF—G’’ÓæÕ÷fV…G—RÓÒdT„”4ÄUõE•Uô$ôBbb—5Æ–W"‚’’° •&W7F÷&U&Wf–÷W4ö&¦V7F—fR‚“° –'&V³° —Ð ’òòfÆÂF‡&÷Vv€ –66Rô$¤T5D•dUôDU5E$õ•ô4#  –66Rô$¤T5D•dUõ4ôÄ”4•EõdT„”4ÄS  –66Rô$¤T5D•dUô%U•ô”4Uô5$TÓ  –Õö6$–äö&¦V7F—fRÒ„5fV†–6ÆR¢–VçF—G“° –Õö6$–äö&¦V7F—fRÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕö6$–äö&¦V7F—fR“° –Õ÷6VVµF&vWBÒÕö6$–äö&¦V7F—fS° –Õ÷6VVµF&vWBÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕ÷6VVµF&vWB“° –Õ÷fV56VVµ÷2Ò5fV7F÷"ƒãbÂãbÂãb“° ––b†æWtö&¢ÓÒô$¤T5D•dUõ4ôÄ”4•EõdT„”4ÄR’° –Õöö&¦V7F—fUF–ÖW"Ò5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’²° —ÒVÇ6R–b†Õöö&¦V7F—fRÓÒô$¤T5D•dUôTåDU%ô4%ô5õ54TätU"bb6†$7&VFVD'’ÓÒÔ•54”ôåô4„"b` ’†Õö6$–äö&¦V7F—fRÓävWE7FGW2‚’ÓÒ5DEU5õÄ”U%ôD•4$ÄTBÇÂ5C£¤vWEB„5v÷&ÆC£¥Æ–W$–äfö7W2’Óä&UÆ–W$6öçG&öÇ4F—6&ÆVB‚’’’° •6WDö&¦V7F—fUF–ÖW"ƒC“° —ÒVÇ6R° –Õöö&¦V7F—fUF–ÖW"Ò° —Ð –'&V³° –66Rô$¤T5D•dUõ4UEôÄTDU#  •6WDÆVFW"‚„4VçF—G’¢–VçF—G’“° •&W7F÷&U&Wf–÷W4ö&¦V7F—fR‚“° –'&V³° –FVfVÇC  –'&V³° —Ð§Ð §fö–@¤5VC£¥6WDö&¦V7F—fR†Tö&¦V7F—fRæWtö&¢Â5fV7F÷"FW7BÂfÆöB6fTF—7B§° ––b„G––æt÷$FVB‚’ —&WGW&ã°  ––b†Õ÷&Wdö&¦V7F—fRÒô$¤T5D•dUôäôäRbbÕ÷&Wdö&¦V7F—fRÓÒæWtö&¢ —&WGW&ã°  •6WDö&¦V7F—fUF–ÖW"ƒ“° ––b†Õöö&¦V7F—fRÓÒæWtö&¢’° ––b†æWtö&¢ÓÒô$¤T5D•dUôtõDõô$Tôå•ôÔTå2ÇÂæWtö&¢ÓÒô$¤T5D•dUôtõDõô$TôôåôdôõBÇÂæWtö&¢ÓÒô$¤T5D•dUõ%TåõDõô$T’° ––b†ÕöæW‡E&÷WFUö–çE÷2ÓÒFW7BbbÕöF—7Fæ6UFô6÷VçE6VV´FöæRÓÒ6fTF—7B —&WGW&ã° —ÒVÇ6R–b†æWtö&¢ÓÒô$¤T5D•dUôuT$Eõ5õB’° ––b†Õ÷fV56VVµ÷4W‚ÓÒFW7BbbÕöF—7Fæ6UFô6÷VçE6VV´FöæTW‚ÓÒ6fTF—7B —&WGW&ã° —Ð —Ð ¢6–fFVbd5õTEõõ%E0 ”6ÆV%ö–çDwVäB‚“°¢6VæF–` –$ö&¦V7F—fT6ö×ÆWFVBÒfÇ6S° ––b„—5FV×÷&'”ö&¦V7F—fR†Õöö&¦V7F—fR’’° –Õ÷&Wdö&¦V7F—fRÒæWtö&£° —ÒVÇ6R° ––b†Õöö&¦V7F—fRÒæWtö&¢ •6WE7F÷&VDö&¦V7F—fR‚“°  –Õöö&¦V7F—fRÒæWtö&£° —Ð  ––b†æWtö&¢ÓÒô$¤T5D•dUôuT$Eõ5õB’° –Õ÷fV56VVµ÷4W‚ÒFW7C° –ÕöF—7Fæ6UFô6÷VçE6VV´FöæTW‚Ò6fTF—7C° —ÒVÇ6R–b†æWtö&¢ÓÒô$¤T5D•dUôtõDõô$Tôå•ôÔTå2ÇÂæWtö&¢ÓÒô$¤T5D•dUôtõDõô$TôôåôdôõBÇÂæWtö&¢ÓÒô$¤T5D•dUõ%TåõDõô$T’° –Õ÷æW‡EF„æöFRÒæ–Ã° –ÕöæW‡E&÷WFUö–çE÷2ÒFW7C° –Õ÷fV56VVµ÷2ÒÕöæW‡E&÷WFUö–çE÷3° –%W6UVDæöFU6VV²ÒG'VS° —Ð§Ð ¢òòöæÇ’W6VB–âS¢4UEô4„%ôô$¥ôdôÄÄõuõ$õUDR÷6öFP¢òò”Df–Ç2fW'’&FÇ’–â†W&RÂWG2f¶RÆö÷æB–væ÷&W26WDföÆÆ÷u&÷WFR6ÆÂââà§fö–@¤5VC£¥6WDö&¦V7F—fR†Tö&¦V7F—fRæWtö&¢Â–çCb&÷WFUö–çBÂ–çCb&÷WFUG—R§° ––b„G––æt÷$FVB‚’ —&WGW&ã°  ––b†Õ÷&Wdö&¦V7F—fRÓÒæWtö&¢bbÕ÷&Wdö&¦V7F—fRÒô$¤T5D•dUôäôäR —&WGW&ã°  •6WDö&¦V7F—fUF–ÖW"ƒ“°  ––b†Õöö&¦V7F—fRÓÒæWtö&¢bbæWtö&¢ÓÒô$¤T5D•dUôdôÄÄõuõ$õUDRbbÕ÷&÷WFTÆ7Eö–çBÓÒ&÷WFUö–çBbbÕ÷&÷WFUG—RÓÒ&÷WFUG—R —&WGW&ã°  –$ö&¦V7F—fT6ö×ÆWFVBÒfÇ6S° ––b„—5FV×÷&'”ö&¦V7F—fR†Õöö&¦V7F—fR’’° –Õ÷&Wdö&¦V7F—fRÒæWtö&£° —ÒVÇ6R° ––b†Õöö&¦V7F—fRÒæWtö&¢ •6WE7F÷&VDö&¦V7F—fR‚“°  –Õöö&¦V7F—fRÒæWtö&£° —Ð  ––b†æWtö&¢ÓÒô$¤T5D•dUôdôÄÄõuõ$õUDR’° •6WDföÆÆ÷u&÷WFR‡&÷WFUö–çBÂ&÷WFUG—R“° —Ð§Ð §fö–@¤5VC£¥6WDö&¦V7F—fR†Tö&¦V7F—fRæWtö&¢Â5fV7F÷"FW7B§° ––b„G––æt÷$FVB‚’ —&WGW&ã°  ––b†Õ÷&Wdö&¦V7F—fRÒô$¤T5D•dUôäôäRbbÕ÷&Wdö&¦V7F—fRÓÒæWtö&¢ —&WGW&ã°  •6WDö&¦V7F—fUF–ÖW"ƒ“° ––b†Õöö&¦V7F—fRÓÒæWtö&¢’° ––b†æWtö&¢ÓÒô$¤T5D•dUôtõDõô$Tôå•ôÔTå2ÇÂæWtö&¢ÓÒô$¤T5D•dUôtõDõô$TôôåôdôõBÇÂæWtö&¢ÓÒô$¤T5D•dUõ%TåõDõô$T’° ––b†ÕöæW‡E&÷WFUö–çE÷2ÓÒFW7B —&WGW&ã° —ÒVÇ6R–b†æWtö&¢ÓÒô$¤T5D•dUôuT$Eõ5õB’° ––b†Õ÷fV56VVµ÷4W‚ÓÒFW7B —&WGW&ã° —Ð —Ð ¢6–fFVbd5õTEõõ%E0 ”6ÆV%ö–çDwVäB‚“°¢6VæF–` –$ö&¦V7F—fT6ö×ÆWFVBÒfÇ6S° —7v—F6‚†æWtö&¢’° –66Rô$¤T5D•dUôuT$Eõ5õC  –Õ÷fV56VVµ÷4W‚ÒFW7C° –ÕöF—7Fæ6UFô6÷VçE6VV´FöæTW‚ÒRãc° •6WDÖ÷fU7FFR…TDÔõdUõ5D”ÄÂ“° –'&V³° –66Rô$¤T5D•dUôuT$Eô$T  –66Rô$¤T5D•dUõt•Eô”åô4#  –66Rô$¤T5D•dUõt•Eô”åô4%õD„TåôtUEôõUC  –66Rô$¤T5D•dUô´”ÄÅô4„%ôôåôdôõC  –66Rô$¤T5D•dUô´”ÄÅô4„%ôå•ôÔTå3  –66Rô$¤T5D•dUôdÄTUô4„%ôôåôdôõEõD”ÄÅõ4dS  –66Rô$¤T5D•dUôdÄTUô4„%ôôåôdôõEôÅt•3  –66Rô$¤T5D•dUôtõDõô4„%ôôåôdôõC  –66Rô$¤T5D•dUôdôÄÄõuô4„%ô”åôdõ$ÔD”ôã  –66Rô$¤T5D•dUôÄTdUô4#  –66Rô$¤T5D•dUôTåDU%ô4%ô5õ54TätU#  –66Rô$¤T5D•dUôTåDU%ô4%ô5ôE$•dU#  –66Rô$¤T5D•dUôdôÄÄõuô4%ô”åô4#  –66Rô$¤T5D•dUôd•$UôEôô$¤T5Eôe$ôÕõdT„”4ÄS  –66Rô$¤T5D•dUôDU5E$õ•ôô$¤T5C  –66Rô$¤T5D•dUôDU5E$õ•ô4#  –'&V³° –66Rô$¤T5D•dUôtõDõô$Tôå•ôÔTå3  –66Rô$¤T5D•dUôtõDõô$TôôåôdôõC  –$—5'Vææ–ærÒfÇ6S° –Õ÷æW‡EF„æöFRÒæ–Ã° –ÕöæW‡E&÷WFUö–çE÷2ÒFW7C° –Õ÷fV56VVµ÷2ÒÕöæW‡E&÷WFUö–çE÷3° –ÕöF—7Fæ6UFô6÷VçE6VV´FöæRÒãVc° –%W6UVDæöFU6VV²ÒG'VS° ––b‡7†ÕöF—7Fæ6UFô6÷VçE6VV´FöæR’â†ÕöæW‡E&÷WFUö–çE÷2ÒvWE÷6—F–öâ‚’’äÖvæ—GVFU7#$B‚’ —&WGW&ã° –'&V³° –66Rô$¤T5D•dUõ%TåõDõô$T  –$—5'Vææ–ærÒG'VS° –Õ÷æW‡EF„æöFRÒæ–Ã° –ÕöæW‡E&÷WFUö–çE÷2ÒFW7C° –Õ÷fV56VVµ÷2ÒÕöæW‡E&÷WFUö–çE÷3° –ÕöF—7Fæ6UFô6÷VçE6VV´FöæRÒãVc° –%W6UVDæöFU6VV²ÒG'VS° ––b‡7†ÕöF—7Fæ6UFô6÷VçE6VV´FöæR’â†ÕöæW‡E&÷WFUö–çE÷2ÒvWE÷6—F–öâ‚’’äÖvæ—GVFU7#$B‚’ —&WGW&ã° –'&V³° –FVfVÇC¢'&V³° —Ð  ––b„—5FV×÷&'”ö&¦V7F—fR†Õöö&¦V7F—fR’’° –Õ÷&Wdö&¦V7F—fRÒæWtö&£° —ÒVÇ6R° ––b†Õöö&¦V7F—fRÒæWtö&¢ •6WE7F÷&VDö&¦V7F—fR‚“°  –Õöö&¦V7F—fRÒæWtö&£° —Ð§Ð §fö–@¤5VC£¤6ÆV$ö&¦V7F—fR‡fö–B§° ––b„—5VD–ä6öçG&öÂ‚’ÇÂÕöåVE7FFRÓÒTEôE$•d”är’° –Õöö&¦V7F—fRÒô$¤T5D•dUôäôäS°¢6–fFVbd5õTEõõ%E0 –Õ÷VD–äö&¦V7F—fRÒæ–Ã° –Õö6$–äö&¦V7F—fRÒæ–Ã°¢6VæF–` ––b†ÕöåVE7FFRÓÒTEôE$•d”ärbbÕ÷×•fV†–6ÆR’°  ––b†Õ÷×•fV†–6ÆRÓçG&—fW"ÒF†—2’°¢6–bFVf–æVBd5õTEõõ%E2ÇÂFVf–æVBd•…ô%Tu0 ––b‚—5Æ–W"‚’¢6VæF–` –%væFW%F„gFW$W†—F–æt6"ÒG'VS°  •6WDö&¦V7F—fR„ô$¤T5D•dUôÄTdUô4"ÂÕ÷×•fV†–6ÆR“° —Ð¢6–fFVbd5õTEõõ%E0 –ÕöäÆ7EVE7FFRÒTEôäôäS°¢6VæF–` —ÒVÇ6R° •6WD–FÆR‚“° •6WDÖ÷fU7FFR…TDÔõdUõ5D”ÄÂ“° —Ð —ÒVÇ6R° –$6ÆV$ö&¦V7F—fRÒG'VS° —Ð§Ð §fö–@¤5VC£¤6ÆV$ÆVFW"‡fö–B§° ––b‚ÕöÆVFW" —&WGW&ã°  –ÕöÆVFW"Òæ–Ã° ––b„—5VD–ä6öçG&öÂ‚’’° •6WDö&¦V7F—fR„ô$¤T5D•dUôäôäR“° ––b„6†$7&VFVD'’ÓÒÔ•54”ôåô4„"’° •6WD–FÆR‚“° —ÒVÇ6R° •6WEvæFW%F‚„4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒÃ‚’“° —Ð —ÒVÇ6R–b†Õöö&¦V7F—fRÒô$¤T5D•dUôäôäR’° –$6ÆV$ö&¦V7F—fRÒG'VS° —Ð§Ð §fö–@¤5VC£¥WFFTg&öÔÆVFW"‡fö–B§° ––b„5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’ÃÒÕöö&¦V7F—fUF–ÖW" —&WGW&ã°  ––b‚ÕöÆVFW" —&WGW&ã°  ”5fV7F÷"ÆVFW$F—7C° ––b†ÕöÆVFW"Óä–åfV†–6ÆR‚’ –ÆVFW$F—7BÒÕöÆVFW"ÓæÕ÷×•fV†–6ÆRÓävWE÷6—F–öâ‚’ÒvWE÷6—F–öâ‚“° –VÇ6P –ÆVFW$F—7BÒÕöÆVFW"ÓävWE÷6—F–öâ‚’ÒvWE÷6—F–öâ‚“°  ––b†ÆVFW$F—7BäÖvæ—GVFR‚’â3ãb’° ––b„—5VD–ä6öçG&öÂ‚’’° •6WDö&¦V7F—fR„ô$¤T5D•dUôäôäR“° •6WD–FÆR‚“° •6WDÖ÷fU7FFR…TDÔõdUõ5D”ÄÂ“° —Ð •6WDÆVFW"†æ–Â“° —&WGW&ã° —Ð  ––b„—5VD–ä6öçG&öÂ‚’’° ––b†Õöåv—E7FFRÓÒt•E5DDUõÄ”ä”ÕõD„’ •v'VEFôæV$ÆVFW$öfe67&VVâ‚“°  ––b†ÕöÆVFW"ÓæÕöåVE7FFRÓÒTEôDTB’° •6WDÆVFW"†æ–Â“° •6WDö&¦V7F—fR„ô$¤T5D•dUôdÄTUôôåôdôõEõD”ÄÅõ4dR“° —&WGW&ã° —Ð ––b‚ÕöÆVFW"Óæ$–åfV†–6ÆR’° ––b†ÕöÆVFW"ÓæÕöö&¦V7F—fRÒô$¤T5D•dUôTåDU%ô4%ô5ôE$•dU"’° ––b†$–åfV†–6ÆR’° ––b†Õöö&¦V7F—fRÒô$¤T5D•dUõt•Eô”åô4%õD„TåôtUEôõUBbbÕöö&¦V7F—fRÒô$¤T5D•dUôÄTdUô4" •6WDö&¦V7F—fR„ô$¤T5D•dUôÄTdUô4"ÂÕ÷×•fV†–6ÆR“°  —&WGW&ã° —Ð ––b†Õöö&¦V7F—fRÓÒô$¤T5D•dUôTåDU%ô4%ô5õ54TätU"’° •&W7F÷&U&Wf–÷W4ö&¦V7F—fR‚“° •&W7F÷&U&Wf–÷W57FFR‚“° —Ð —Ð ––b†ÕöåVEG—RÓÒTEE•Uõ$õ5D•EUDRbb6†$7&VFVD'’ÓÒ$äDôÕô4„"’° •6WDÆVFW"†æ–Â“° —&WGW&ã° —Ð —Ð ––b‚$–åfV†–6ÆRbbÕöÆVFW"Óæ$–åfV†–6ÆRbbÕöÆVFW"ÓæÕöåVE7FFRÓÒTEôE$•d”är’° ––b†Õöö&¦V7F—fRÒô$¤T5D•dUôTåDU%ô4%ô5õ54TätU"bbÕöö&¦V7F—fRÒô$¤T5D•dUôTåDU%ô4%ô5ôE$•dU"’° ––b†ÕöÆVFW"ÓæÕ÷×•fV†–6ÆRÓæÕöäçVÕ76VævW'2ÂÕöÆVFW"ÓæÕ÷×•fV†–6ÆRÓæÕöäçVÔÖ…76VævW'2 •6WDö&¦V7F—fR„ô$¤T5D•dUôTåDU%ô4%ô5õ54TätU"ÂÕöÆVFW"ÓæÕ÷×•fV†–6ÆR“° —Ð —ÒVÇ6R–b†ÕöÆVFW"ÓæÕöö&¦V7F—fRÓÒô$¤T5D•dUôäôäRÇÂ†ÕöÆVFW"Óä—5Æ–W"‚’bbÕöÆVFW"ÓæÕöö&¦V7F—fRÓÒô$¤T5D•dUõt•EôôåôdôõB —ÇÂÕöö&¦V7F—fRÓÒÕöÆVFW"ÓæÕöö&¦V7F—fR’°  ––b†ÕöÆVFW"ÓæÕöåVE7FFRÓÒTEôED4²’° ”4VçF—G’¦ÆööµF&vWDödÆVFW"ÒÕöÆVFW"ÓæÕ÷ÆööµF&vWC° ––b†ÆööµF&vWDödÆVFW"bbÕöö&¦V7F—fRÒô$¤T5D•dUô´”ÄÅô4„%ôôåôdôõ@ ’bbÆööµF&vWDödÆVFW"Óä—5VB‚’bbÆööµF&vWDödÆVFW"ÒF†—2’°  •6WDö&¦V7F—fR„ô$¤T5D•dUô´”ÄÅô4„%ôôåôdôõBÂÆööµF&vWDödÆVFW"“° •6WDö&¦V7F—fUF–ÖW"ƒƒ“° •6WDÆöö´fÆr†ÕöÆVFW"ÓæÕ÷ÆööµF&vWBÂfÇ6R“° •6WDÆööµF–ÖW"ƒS“° —Ð —ÒVÇ6R° ––b„—5VD–ä6öçG&öÂ‚’bbÕöåVE7FFRÒTEôED4²’°¢6–fæFVbd5õTEõõ%E0 •6WDö&¦V7F—fR„ô$¤T5D•dUôtõDõô4„%ôôåôdôõBÂÕöÆVFW"“° •6WDö&¦V7F—fUF–ÖW"ƒ“°¢6VÇ6P ––b†ÕöÆVFW"ÓæÕöö&¦V7F—fRÓÒô$¤T5D•dUôäôäRbbÕöö&¦V7F—fRÓÒô$¤T5D•dUôäôäP ’bbÕöÆVFW"ÓæÕöåVE7FFRÓÒTEô4„BbbÕöåVE7FFRÓÒTEô4„B’°  •6WDö&¦V7F—fR„ô$¤T5D•dUôäôäR“° —ÒVÇ6R° •6WDö&¦V7F—fR„ô$¤T5D•dUôtõDõô4„%ôôåôdôõBÂÕöÆVFW"“° •6WDö&¦V7F—fUF–ÖW"ƒ“° —Ð¢6VæF–` —Ð ––b†ÕöåVE7FFRÓÒTEô”DÄRbbÕöÆVFW"Óä—5Æ–W"‚’’° ––b…66äf÷%F‡&VG2‚’bbÕ÷F‡&VDVçF—G’’° –Õ÷ÆööµF&vWBÒÕ÷F‡&VDVçF—G“° –Õ÷ÆööµF&vWBÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕ÷ÆööµF&vWB“° •GW&ä&öG’‚“° ––b†ÕöGF6µF–ÖW"Â5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’bbvWEvVöâ‚’Óä—5G—TÖVÆVR‚’’° •6WEvVöäÆö6´öåF&vWB†Õ÷F‡&VDVçF—G’“° •6WDGF6²†Õ÷F‡&VDVçF—G’“° —Ð —Ð —Ð —Ð —ÒVÇ6R° —7v—F6‚†ÕöÆVFW"ÓæÕöö&¦V7F—fR’° –66Rô$¤T5D•dUõt•EôôåôdôõC  –66Rô$¤T5D•dUôdÄTUôôåôdôõEõD”ÄÅõ4dS  –66Rô$¤T5D•dUõt•Eô”åô4#  –66Rô$¤T5D•dUôdôÄÄõuõ$õUDS  •6WDö&¦V7F—fR†ÕöÆVFW"ÓæÕöö&¦V7F—fR“° –Õöö&¦V7F—fUF–ÖW"ÒÕöÆVFW"ÓæÕöö&¦V7F—fUF–ÖW#° –'&V³° –66Rô$¤T5D•dUôuT$Eõ5õC  •6WDö&¦V7F—fR„ô$¤T5D•dUôuT$Eõ5õBÂÕöÆVFW"ÓæÕ÷fV56VVµ÷4W‚“° –Õöö&¦V7F—fUF–ÖW"ÒÕöÆVFW"ÓæÕöö&¦V7F—fUF–ÖW#° –'&V³° –66Rô$¤T5D•dUô´”ÄÅô4„%ôôåôdôõC  –66Rô$¤T5D•dUô´”ÄÅô4„%ôå•ôÔTå3  –66Rô$¤T5D•dUôtõDõô4„%ôôåôdôõC  ––b†ÕöÆVFW"ÓæÕ÷VD–äö&¦V7F—fR’° •6WDö&¦V7F—fR†ÕöÆVFW"ÓæÕöö&¦V7F—fRÂÕöÆVFW"ÓæÕ÷VD–äö&¦V7F—fR“° –Õöö&¦V7F—fUF–ÖW"ÒÕöÆVFW"ÓæÕöö&¦V7F—fUF–ÖW#° —Ð –'&V³° –66Rô$¤T5D•dUôTåDU%ô4%ô5õ54TätU#  –66Rô$¤T5D•dUôTåDU%ô4%ô5ôE$•dU#  ––b†ÕöÆVFW"ÓæÕö6$–äö&¦V7F—fR’° •6WDö&¦V7F—fR„ô$¤T5D•dUôTåDU%ô4%ô5õ54TätU"ÂÕöÆVFW"ÓæÕö6$–äö&¦V7F—fR“° —&WGW&ã° —Ð –'&V³° –66Rô$¤T5D•dUôuT$EôED4³  —&WGW&ã° –66Rô$¤T5D•dUô„”ÅõD„“  –ÕöÆVFW"Òæ–Ã° •6WDö&¦V7F—fR„ô$¤T5D•dUôäôäR“° –'&V³° –FVfVÇC  •6WDö&¦V7F—fR„ô$¤T5D•dUôtõDõô4„%ôôåôdôõBÂÕöÆVFW"“° •6WDö&¦V7F—fUF–ÖW"ƒ“° –'&V³° —Ð —Ð —ÒVÇ6R–b†$–åfV†–6ÆR’° ––b‚‚ÕöÆVFW"Óæ$–åfV†–6ÆRÇÂÕöÆVFW"ÓæÕöåVE7FFRÓÒTEôU„•Eô4"’bbÕöö&¦V7F—fRÒô$¤T5D•dUõt•Eô”åô4%õD„TåôtUEôõUB’°  —7v—F6‚†ÕöÆVFW"ÓæÕöö&¦V7F—fR’° –66Rô$¤T5D•dUôTåDU%ô4%ô5õ54TätU#  –66Rô$¤T5D•dUôTåDU%ô4%ô5ôE$•dU#  ––b†Õ÷×•fV†–6ÆRÓÒÕöÆVFW"ÓæÕ÷×•fV†–6ÆRÇÂÕ÷×•fV†–6ÆRÓÒÕöÆVFW"ÓæÕö6$–äö&¦V7F—fR –'&V³°  ’òòfÆÂF‡&÷Vv€ –FVfVÇC  ––b†Õ÷×•fV†–6ÆRbbÕöö&¦V7F—fRÒô$¤T5D•dUôÄTdUô4"’°¢6–fFVbd5õTEõõ%E0 –ÕöÆVfT6%F–ÖW"Ò5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’²#S°¢6VæF–` •6WDö&¦V7F—fR„ô$¤T5D•dUôÄTdUô4"ÂÕ÷×•fV†–6ÆR“° —Ð  –'&V³° —Ð —Ð —Ð§Ð §fö–@¤5VC£¥&W7F÷&U&Wf–÷W4ö&¦V7F—fR‡fö–B§° ––b†Õöö&¦V7F—fRÓÒô$¤T5D•dUôäôäR —&WGW&ã°  ––b†Õöö&¦V7F—fRÒô$¤T5D•dUôÄTdUô4"bbÕöö&¦V7F—fRÒô$¤T5D•dUôTåDU%ô4%ô5õ54TätU"bbÕöö&¦V7F—fRÒô$¤T5D•dUôTåDU%ô4%ô5ôE$•dU ¢6–bFVf–æVBd5õTEõõ%E2ÇÂFVf–æVBd•…ô%Tu0 ’bbÕöåVE7FFRÒTEô4$¤4°¢6VæF–` ’ –Õ÷VD–äö&¦V7F—fRÒæ–Ã°  ––b†Õöö&¦V7F—fRÓÒô$¤T5D•dUõt•Eô”åô4%õD„TåôtUEôõUB’° –Õöö&¦V7F—fRÒô$¤T5D•dUôäôäS° ––b†Õ÷×•fV†–6ÆR •6WDö&¦V7F—fR„ô$¤T5D•dUôÄTdUô4"ÂÕ÷×•fV†–6ÆR“°  —ÒVÇ6R° –Õöö&¦V7F—fRÒÕ÷&Wdö&¦V7F—fS° –Õ÷&Wdö&¦V7F—fRÒô$¤T5D•dUôäôäS° —Ð –$ö&¦V7F—fT6ö×ÆWFVBÒfÇ6S°§Ð §fö–@¤5VC£¥&ö6W74ö&¦V7F—fR‡fö–B§° ––b†$6ÆV$ö&¦V7F—fRbb„—5VD–ä6öçG&öÂ‚’ÇÂÕöåVE7FFRÓÒTEôE$•d”är’’° ”6ÆV$ö&¦V7F—fR‚“° –$6ÆV$ö&¦V7F—fRÒfÇ6S° —Ð •WFFTg&öÔÆVFW"‚“°  ”5fV7F÷"6$÷$÷W%÷3° ”5fV7F÷"F&vWD6$÷$†—5÷3° ”5fV7F÷"F—7Ev—F…F&vWC°  ––b†Õöö&¦V7F—fRÒô$¤T5D•dUôäôäRbb„—5VD–ä6öçG&öÂ‚’ÇÂÕöåVE7FFRÓÒTEôE$•d”är’’° ––b†$–åfV†–6ÆR’° ––b‚Õ÷×•fV†–6ÆR’° –$–åfV†–6ÆRÒfÇ6S° —&WGW&ã° —Ð –6$÷$÷W%÷2ÒÕ÷×•fV†–6ÆRÓävWE÷6—F–öâ‚“° —ÒVÇ6R° –6$÷$÷W%÷2ÒvWE÷6—F–öâ‚“° —Ð  ––b†Õ÷VD–äö&¦V7F—fR’° ––b†Õ÷VD–äö&¦V7F—fRÓä–åfV†–6ÆR‚’bbÕ÷VD–äö&¦V7F—fRÓæÕöåVE7FFRÒTEôE$uôe$ôÕô4"’° —F&vWD6$÷$†—5÷2ÒÕ÷VD–äö&¦V7F—fRÓæÕ÷×•fV†–6ÆRÓävWE÷6—F–öâ‚“° —ÒVÇ6R° —F&vWD6$÷$†—5÷2ÒÕ÷VD–äö&¦V7F—fRÓävWE÷6—F–öâ‚“° —Ð –F—7Ev—F…F&vWBÒF&vWD6$÷$†—5÷2Ò6$÷$÷W%÷3° —ÒVÇ6R–b†Õö6$–äö&¦V7F—fR’° —F&vWD6$÷$†—5÷2ÒÕö6$–äö&¦V7F—fRÓävWE÷6—F–öâ‚“° –F—7Ev—F…F&vWBÒF&vWD6$÷$†—5÷2Ò6$÷$÷W%÷3° —Ð  —7v—F6‚†Õöö&¦V7F—fR’° –66Rô$¤T5D•dUôäôäS  –66Rô$¤T5D•dUôuT$Eô$T  –66Rô$¤T5D•dUôdôÄÄõuô4%ô”åô4#  –66Rô$¤T5D•dUôd•$UôEôô$¤T5Eôe$ôÕõdT„”4ÄS  –66Rô$¤T5D•dUôDU5E$õ•ôô$¤T5C  –66Rô$¤T5D•dUôtõDõô$Tô”åô4#  –66Rô$¤T5D•dUôdôÄÄõuô4%ôôåôdôõEõt•D…ôôde4UC  –66Rô$¤T5D•dUõ4UEôÄTDU#  –'&V³° –66Rô$¤T5D•dUõt•EôôåôdôõC  •6WD–FÆR‚“° –Õöö&¦V7F—fRÒô$¤T5D•dUôäôäS° •6WDÖ÷fU7FFR…TDÔõdUõ5D”ÄÂ“° –'&V³° –66Rô$¤T5D•dUôdÄTUôôåôdôõEõD”ÄÅõ4dS  ––b„–åfV†–6ÆR‚’’° •6WDö&¦V7F—fR„ô$¤T5D•dUôÄTdUô4"ÂÕ÷×•fV†–6ÆR“° –$fÆVTgFW$W†—F–æt6"ÒG'VS° —ÒVÇ6R–b†ÕöåVE7FFRÒTEôdÄTUõõ2’° ”5fV7F÷#$BfÆVU÷2ÒvWE÷6—F–öâ‚“° •6WDfÆVR†fÆVU÷2Â“° –%W6UVDæöFU6VV²ÒG'VS° –Õ÷æW‡EF„æöFRÒæ–Ã° —Ð –'&V³° –66Rô$¤T5D•dUôuT$Eõ5õC  —° –F—7Ev—F…F&vWBÒÕ÷fV56VVµ÷4W‚ÒvWE÷6—F–öâ‚“° ––b†Õ÷VD–äö&¦V7F—fR’° •6WDÆöö´fÆr†Õ÷VD–äö&¦V7F—fRÂG'VR“° –Õ÷ÆööµF&vWBÒÕ÷VD–äö&¦V7F—fS° –Õ÷ÆööµF&vWBÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕ÷ÆööµF&vWB“° •GW&ä&öG’‚“° —Ð –fÆöBF—7Ev—F…F&vWE62ÒF—7Ev—F…F&vWBäÖvæ—GVFR‚“° ––bƒ"ãb¢ÕöF—7Fæ6UFô6÷VçE6VV´FöæTW‚ãÒF—7Ev—F…F&vWE62’° ––b†Õ÷VD–äö&¦V7F—fR’° ––b†F—7Ev—F…F&vWE62ÃÒÕöF—7Fæ6UFô6÷VçE6VV´FöæTW‚ •6WD–FÆR‚“° –VÇ6P •6WE6VV²†Õ÷fV56VVµ÷4W‚ÂÕöF—7Fæ6UFô6÷VçE6VV´FöæTW‚“° —ÒVÇ6R–b„5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’âÕöÆööµF–ÖW"’° ––çBF‡&VEG—RÒ66äf÷%F‡&VG2‚“° •6WDÆööµF–ÖW"„4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒSÂS’“°  ’òò6V6öæB6öæF—F–öâ—2ö–çFÆW72æB—6âwBF†W&R–âÖö&–ÆRà ––b‡F‡&VEG—RÓÒTEôdÄuôuTâÇÂ‡F‡&VEG—RÓÒTEôdÄuôU…Äõ4”ôâbbÕ÷F‡&VDVçF—G’’ÇÂÕ÷F‡&VDVçF—G’’° ––b†Õ÷F‡&VDVçF—G’Óä—5VB‚’ •6WDö&¦V7F—fR„ô$¤T5D•dUô´”ÄÅô4„%ôôåôdôõBÂÕ÷F‡&VDVçF—G’“° —Ð —Ð —ÒVÇ6R° •6WE6VV²†Õ÷fV56VVµ÷4W‚ÂÕöF—7Fæ6UFô6÷VçE6VV´FöæTW‚“° —Ð –'&V³° —Ð –66Rô$¤T5D•dUõt•Eô”åô4#  •6WEVE7FFR…TEôE$•d”är“° –'&V³° –66Rô$¤T5D•dUõt•Eô”åô4%õD„TåôtUEôõUC  •6WEVE7FFR…TEôE$•d”är“° –'&V³° –66Rô$¤T5D•dUô´”ÄÅô4„%ôå•ôÔTå3  —° ––b†Õ÷VD–äö&¦V7F—fR’° ––b†Õ÷VD–äö&¦V7F—fRÓä—5Æ–W"‚’bb6†$7&VFVD'’ÒÔ•54”ôåô4„  ’bbÕöåVEG—RÒTEE•Uô4õbbf–æEÆ–W%VB‚’ÓæÕ÷vçFVBÓæÕô7W'&VçD6÷2Ò  ’bb$¶–æF7F”–å6ÖUÆ6R’°  •6WDö&¦V7F—fR„ô$¤T5D•dUôdÄTUôôåôdôõEõD”ÄÅõ4dR“° –'&V³° —Ð ––b„–åfV†–6ÆR‚’’° ––b†F—7Ev—F…F&vWBäÖvæ—GVFR‚’ãÒ#ã` —ÇÂÕ÷×•fV†–6ÆRÓæÕ÷fV4Ö÷fU7VVBäÖvæ—GVFU7"‚’ãÒ7ƒã&b’’° ––b†Õ÷×•fV†–6ÆRÓçG&—fW"ÓÒF†—0 ’bbÕ÷×•fV†–6ÆRÓæÕöävWGF–æt–äfÆw2’° –Õ÷×•fV†–6ÆRÓå6WE7FGW2…5DEU5õ…•4”52“° –Õ÷×•fV†–6ÆRÓäWFõ–Æ÷BæÕöå&We&÷WFTæöFRÒ° ––b†ÕöåVEG—RÓÒTEE•Uô4õ’° –Õ÷×•fV†–6ÆRÓäWFõ–Æ÷BæÕöä7'V—6U7VVBÒ„f–æEÆ–W%VB‚’ÓæÕ÷vçFVBÓävWEvçFVDÆWfVÂ‚’¢ãb²ãfb’¢„tÔUõ5TTEõDõô4$•õ5TTB¢Õ÷×•fV†–6ÆRÓç†æFÆ–ærÓåG&ç6Ö—76–öâædÖ„7'V—6UfVÆö6—G’“° –Õ÷×•fV†–6ÆRÓäWFõ–Æ÷BæÕöä6$Ö—76–öâÒ46$“£¤f–æEöÆ–6T6$Ö—76–öäf÷%vçFVDÆWfVÂ‚“° —ÒVÇ6R° –Õ÷×•fV†–6ÆRÓäWFõ–Æ÷BæÕöä7'V—6U7VVBÒtÔUõ5TTEõDõô4$•õ5TTB¢Õ÷×•fV†–6ÆRÓç†æFÆ–ærÓåG&ç6Ö—76–öâædÖ„7'V—6UfVÆö6—G’¢ã†c° –Õ÷×•fV†–6ÆRÓäWFõ–Æ÷BæÕöä6$Ö—76–öâÒÔ•54”ôåõ$ÕÄ”U%ôd$t“° —Ð –Õ÷×•fV†–6ÆRÓäWFõ–Æ÷BæÕöäG&—f–æu7G–ÆRÒE$•d”äu5E”ÄUôdô”Eô4%3° —Ð —ÒVÇ6R° –&ööÂF&vWD†5fV‚ÒÕ÷VD–äö&¦V7F—fRÓæ$–åfV†–6ÆS° ––b‚F&vWD†5fV€ —ÇÂF&vWD†5fV‚bbÕ÷VD–äö&¦V7F—fRÓæÕ÷×•fV†–6ÆRÓä6åVDW†—D6"‚’’° –Õ÷×•fV†–6ÆRÓäWFõ–Æ÷BæÕöä7'V—6U7VVBÒ° –Õ÷×•fV†–6ÆRÓäWFõ–Æ÷BæÕöä6$Ö—76–öâÒÔ•54”ôåôäôäS° •6WDö&¦V7F—fR„ô$¤T5D•dUôÄTdUô4"ÂÕ÷×•fV†–6ÆR“° —Ð —Ð –'&V³° —Ð ––b†F—7Ev—F…F&vWBäÖvæ—GVFR‚’â3ãbbb$¶–æF7F”–å6ÖUÆ6R’° ––b†Õ÷×•fV†–6ÆR’° –Õ÷×•fV†–6ÆRÓäWFõ–Æ÷BæÕöä7'V—6U7VVBÒ° •6WDö&¦V7F—fR„ô$¤T5D•dUôTåDU%ô4%ô5ôE$•dU"ÂÕ÷×•fV†–6ÆR“° —ÒVÇ6R° –fÆöB6Æ÷6W7EfV„F—7BÒcãc° ––çCbÆ7EfV†–6ÆS° ”4VçF—G’¢fV†–6ÆW5³…Ó° ”5v÷&ÆC£¤f–æDö&¦V7G4–å&ævR„vWE÷6—F–öâ‚’Â#RãbÂG'VRÂfÆ7EfV†–6ÆRÂbÂfV†–6ÆW2ÂfÇ6RÂG'VRÂfÇ6RÂfÇ6RÂfÇ6R“° ”5fV†–6ÆR¦f÷VæEfV‚Òæ–Ã° –f÷"†–çB’Ò²’ÂÆ7EfV†–6ÆS²’²²’° ”5fV†–6ÆR¦æV%fV‚Ò„5fV†–6ÆR¢—fV†–6ÆW5¶•Ó° ’ò  ”æ÷BW6VBà ”5fV7F÷"fV…7VVBÒæV%fV‚ÓävWE7VVB‚“° ”5fV7F÷"÷W%7VVBÒvWE7VVB‚“° ’¢ð ”5fV7F÷"fV„F—7EfV2ÒæV%fV‚ÓävWE÷6—F–öâ‚’ÒvWE÷6—F–öâ‚“° ––b‡fV„F—7EfV2äÖvæ—GVFR‚’Â6Æ÷6W7EfV„F—7BbbÕ÷VD–äö&¦V7F—fRÓæÕ÷×•fV†–6ÆRÒæV%fV€ ’bbæV%fV‚Óä6åVD÷VäÆö6·2‡F†—2’’°  –f÷VæEfV‚ÒæV%fVƒ° –6Æ÷6W7EfV„F—7BÒfV„F—7EfV2äÖvæ—GVFR‚“° —Ð —Ð –Õ÷×•fV†–6ÆRÒf÷VæEfVƒ° ––b†Õ÷×•fV†–6ÆR’° –Õ÷×•fV†–6ÆRÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕ÷×•fV†–6ÆR“° –Õ÷×•fV†–6ÆRÓäWFõ–Æ÷BæÕöä7'V—6U7VVBÒ° •6WDö&¦V7F—fR„ô$¤T5D•dUôTåDU%ô4%ô5ôE$•dU"ÂÕ÷×•fV†–6ÆR“° —ÒVÇ6R–b‚vWD—4öå67&VVâ‚’’° ”5fV7F÷"÷W%÷2ÒvWE÷6—F–öâ‚“° ––çB6Æ÷6W7DæöFRÒF†UF‡2äf–æDæöFT6Æ÷6W7EFô6ö÷'2†÷W%÷2ÂD…ô4"Â#ãb“° ––b†6Æ÷6W7DæöFRãÒ’° ––çCb6öÆÆ–F–æs° ”5v÷&ÆC£¤f–æDö&¦V7G4¶–æF6öÆÆ–F–ær€ •F†UF‡2æÕ÷F„æöFW5¶6Æ÷6W7DæöFUÒävWE÷6—F–öâ‚’ÂãbÂG'VRÂf6öÆÆ–F–ærÂ"Âæ–ÂÂfÇ6RÂG'VRÂG'VRÂfÇ6RÂfÇ6R“° ––b‚6öÆÆ–F–ær’° ”5¦öæT–æfò¦öæT–æfó° ––çB6†÷6Vä6$6Æ73° ”5F†U¦öæW3£¤vWE¦öæT–æfôf÷%F–ÖTödF’‚f÷W%÷2Âg¦öæT–æfò“° ––çB6†÷6VäÖöFVÂÒ46$7G&Ã£¤6†ö÷6TÖöFVÂ‚g¦öæT–æfòÂf÷W%÷2Âf6†÷6Vä6$6Æ72“° ”4WFöÖö&–ÆR¦æWufV‚ÒæWr4WFöÖö&–ÆR†6†÷6VäÖöFVÂÂ$äDôÕõdT„”4ÄR“° ––b†æWufV‚’° ’æWufV‚ÓävWDÖG&—‚‚’ävWE÷6—F–öâ‚’ÒF†UF‡2æÕ÷F„æöFW5¶6Æ÷6W7DæöFUÒävWE÷6—F–öâ‚“° ’æWufV‚ÓävWDÖG&—‚‚’ävWE÷6—F–öâ‚’ç¢³ÒBãc° –æWufV‚Óå6WD†VF–ær„DTuDõ$Bƒ#ãb’“° –æWufV‚Óå6WE7FGW2…5DEU5ô$äDôäTB“° –æWufV‚ÓæÕöäFö÷$Æö6²Ò4$Äô4µõTäÄô4´TC° ”5v÷&ÆC£¤FB†æWufV‚“° –Õ÷×•fV†–6ÆRÒæWufVƒ° ––b†Õ÷×•fV†–6ÆR’° –Õ÷×•fV†–6ÆRÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕ÷×•fV†–6ÆR“° –Õ÷×•fV†–6ÆRÓäWFõ–Æ÷BæÕöä7'V—6U7VVBÒ° •6WDö&¦V7F—fR„ô$¤T5D•dUôTåDU%ô4%ô5ôE$•dU"ÂÕ÷×•fV†–6ÆR“° —Ð —Ð —Ð —Ð —Ð —Ð –'&V³° —Ð —ÒVÇ6R° ”6ÆV$Æöö´fÆr‚“° –$ö&¦V7F—fT6ö×ÆWFVBÒG'VS° —Ð —Ð –66Rô$¤T5D•dUô´”ÄÅô4„%ôôåôdôõC  —° –&ööÂ¶–ÆÅÆ–W$–äæõöÆ–6U¦öæRÒfÇ6S° ––b†Õöö&¦V7F—fRÓÒô$¤T5D•dUô´”ÄÅô4„%ôôåôdôõBbb–åfV†–6ÆR‚’’° •6WDö&¦V7F—fR„ô$¤T5D•dUôÄTdUô4"ÂÕ÷×•fV†–6ÆR“° –'&V³° —Ð ––b‚Õ÷VD–äö&¦V7F—fRÇÂÕ÷VD–äö&¦V7F—fRÓäG––æt÷$FVB‚’’° ”6ÆV$Æöö´fÆr‚“° –$ö&¦V7F—fT6ö×ÆWFVBÒG'VS° •6WDÖ÷fTæ–Ò‚“° –'&V³° —Ð ––b†Õ÷VD–äö&¦V7F—fRÓä—5Æ–W"‚’bb47VÆÅ¦öæW3£¤æõöÆ–6R‚’ –¶–ÆÅÆ–W$–äæõöÆ–6U¦öæRÒG'VS°  ––b‚$æ÷DÆÆ÷vVEFôGV6²ÇÂ¶–ÆÅÆ–W$–äæõöÆ–6U¦öæR’° ––b†ÕöåVEG—RÓÒTEE•Uô4õbbÕ÷VD–äö&¦V7F—fRÓävWEvVöâ‚’Óä—5G—TÖVÆVR‚’bbvWEvVöâ‚’Óä—5G—TÖVÆVR‚’ –$æ÷DÆÆ÷vVEFôGV6²ÒG'VS° —ÒVÇ6R° ––b‚Õ÷VD–äö&¦V7F—fRÓæ$–åfV†–6ÆR’° ––b†Õ÷VD–äö&¦V7F—fRÓävWEvVöâ‚’Óä—5G—TÖVÆVR‚’ÇÂvWEvVöâ‚’Óä—5G—TÖVÆVR‚’’° –$æ÷DÆÆ÷vVEFôGV6²ÒfÇ6S° –$7&÷V6…v†Vå6†ö÷F–ærÒfÇ6S° —ÒVÇ6R–b„GV6´æD6÷fW"‚’’° –'&V³° —Ð —ÒVÇ6R° –$æ÷DÆÆ÷vVEFôGV6²ÒfÇ6S° –$7&÷V6…v†Vå6†ö÷F–ærÒfÇ6S° —Ð —Ð ––b†ÕöÆVfT6%F–ÖW"â5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’bb$¶–æF7F”–å6ÖUÆ6R’° •6WDÖ÷fU7FFR…TDÔõdUõ5D”ÄÂ“° –'&V³° —Ð ––b†Õ÷VD–äö&¦V7F—fRÓä—5Æ–W"‚’’° ”5Æ–W%VB§Æ–W"Òf–æEÆ–W%VB‚“° ––b†ÕöåVEG—RÓÒTEE•Uô4õbbÆ–W"ÓæÕ÷vçFVBÓæÕö$–væ÷&VD'”6÷0 —ÇÂÆ–W"ÓæÕ÷vçFVBÓæÕö$–væ÷&VD'”WfW'–öæP —ÇÂÕ÷VD–äö&¦V7F—fRÓæ$—4–åvFW  —ÇÂÕ÷VD–äö&¦V7F—fRÓæÕöåVE7FFRÓÒTEô%$U5DTB’°  ––b†ÕöåVE7FFRÒTEô%$U5EõÄ”U" •6WD–FÆR‚“°  –'&V³° —Ð —Ð ”5vVöä–æfò§vW–æfòÒ5vVöä–æfó£¤vWEvVöä–æfò„vWEvVöâ‚’ÓæÕöUvVöåG—R“° –fÆöBvW&ævRÒvW–æfòÓæÕöe&ævS° –fÆöBÖ„F—7EFô¶VW° ––b„vWEvVöâ‚’ÓæÕöUvVöåG—RÒtTôåE•UõTä$ÔTB’° –Ö„F—7EFô¶VWÒvW&ævRò2ãc° —ÒVÇ6R° ––b†ÕöåVE7FFRÓÒTEôd”t…B’° ––b‚—5Æ–W"‚’bb†Õ÷VE7FG2ÓæÕöfÆw2b5DEô4åô´”4²’ —vW&ævRÒ"ãc° —ÒVÇ6R° —vW&ævRÒã6c° —Ð –Ö„F—7EFô¶VWÒvW&ævS° —Ð ––b†Õ÷VD–äö&¦V7F—fRÓæÕövWEWF–ÖW"â5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’bbÖ„F—7EFô¶VWÂ"ãVb’° –Ö„F—7EFô¶VWÒ"ãVc° —Ð ––b†Õ÷VD–äö&¦V7F—fRÓä—5Æ–W"‚’bbÕöåVEG—RÒTEE•Uô4õ  ’bb6†$7&VFVD'’ÒÔ•54”ôåô4„"bbf–æEÆ–W%VB‚’ÓæÕ÷vçFVBÓæÕô7W'&VçD6÷2’° •6WDö&¦V7F—fR„ô$¤T5D•dUôdÄTUôôåôdôõEõD”ÄÅõ4dR“° –'&V³° —Ð ––b†Õ÷VD–äö&¦V7F—fRÓæÕöd†VÇF‚ÃÒãb’° –$ö&¦V7F—fT6ö×ÆWFVBÒG'VS° –%67&—Dö&¦V7F—fT6ö×ÆWFVBÒG'VS° •6WDÖ÷fTæ–Ò‚“° –'&V³° —Ð –fÆöBF—7Ev—F…F&vWE62ÒF—7Ev—F…F&vWBäÖvæ—GVFR‚“° ––b†Õ÷VD–äö&¦V7F—fRÓæ$–åfV†–6ÆRbbÕ÷VD–äö&¦V7F—fRÓæÕöåVE7FFRÒTEôE$uôe$ôÕô4"’° ”5fV†–6ÆR§fV„öeF&vWBÒÕ÷VD–äö&¦V7F—fRÓæÕ÷×•fV†–6ÆS° ––b‡fV„öeF&vWBÓæ$—4–åvFW"ÇÂfV„öeF&vWBÓävWE7FGW2‚’ÓÒ5DEU5õÄ”U%ôD•4$ÄT@ —ÇÂÕ÷VD–äö&¦V7F—fRÓä—5Æ–W"‚’bb5C£¤vWEBƒ’Óä&UÆ–W$6öçG&öÇ4F—6&ÆVB‚’’° •6WD–FÆR‚“° —&WGW&ã° —Ð •6WDÆöö´fÆr‡fV„öeF&vWBÂfÇ6R“° ––b†ÕöåVE7FFRÒTEô4$¤4²’° ––b†Õ÷VD–äö&¦V7F—fRÓæÕöåVE7FFRÒTEô%$U5DTB’° ––b†ÕöGF6µF–ÖW"Â5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’bbvW–æfòÓæÕöUvVöäf—&RÒtTôåôd•$UôÔTÄTP ’bbF—7Ev—F…F&vWE62ÂvW&ævRbbF—7Ev—F…F&vWE62â2ãb’°  ’òò’†÷R6ð ”5fV7F÷"÷W$†VBÒvWDÖG&—‚‚’¢5fV7F÷"ƒãVbÂãbÂãfb“° ”5fV7F÷"Ö…6†÷E÷2ÒfV„öeF&vWBÓävWE÷6—F–öâ‚’Ò÷W$†VC° –Ö…6†÷E÷2£ÒvW–æfòÓæÕöe&ævRòÖ…6†÷E÷2äÖvæ—GVFR‚“° –Ö…6†÷E÷2³Ò÷W$†VC°  ”46öÅö–çBf÷VæD6öÃ° ”4VçF—G’¦f÷VæDVçC°  ”5v÷&ÆC£¦$–æ6ÇVFTFVEVG2ÒG'VS° ”5v÷&ÆC£¥&ö6W74Æ–æTöe6–v‡B†÷W$†VBÂÖ…6†÷E÷2Âf÷VæD6öÂÂf÷VæDVçBÂG'VRÂG'VRÂG'VRÂG'VRÂfÇ6RÂG'VRÂfÇ6R“° ”5v÷&ÆC£¦$–æ6ÇVFTFVEVG2ÒfÇ6S° ––b†f÷VæDVçBÓÒfV„öeF&vWB’° •6WDGF6²‡fV„öeF&vWB“° •6WEvVöäÆö6´öåF&vWB‡fV„öeF&vWB“° •6WE6†ö÷EF–ÖW"„4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒSÂ#’“° ––b†F—7Ev—F…F&vWE62ÃÒÕöF—7Fæ6UFô6÷VçE6VV´FöæR’° •6WDGF6µF–ÖW"„4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒ#ÂS’“° •6WDÖ÷fU7FFR…TDÔõdUõ5D”ÄÂ“° —ÒVÇ6R° •6WDGF6µF–ÖW"„4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒ#ÂS’“° —Ð —Ð —ÒVÇ6R–b†ÕöåVE7FFRÒTEôED4²bb$¶–æF7F”–å6ÖUÆ6Rbb¶–ÆÅÆ–W$–äæõöÆ–6U¦öæR’° ––b‡fV„öeF&vWB’° ––b†ÕöåVEG—RÓÒTEE•Uô4õÇÂfV„öeF&vWBÓæ$—4'W2’° ”võFôæV&W7DFö÷"‡fV„öeF&vWB“° —ÒVÇ6R° –Õ÷fV„Fö÷"Ò° ––b†Õ÷VD–äö&¦V7F—fRÓÒfV„öeF&vWBÓçG&—fW"ÇÂfV„öeF&vWBÓæ$—4'W2’° –Õ÷fV„Fö÷"Ò4%ôDôõ%ôÄc° —ÒVÇ6R–b†Õ÷VD–äö&¦V7F—fRÓÒfV„öeF&vWBÓç76VævW'5³Ò’° –Õ÷fV„Fö÷"Ò4%ôDôõ%õ$c° —ÒVÇ6R–b†Õ÷VD–äö&¦V7F—fRÓÒfV„öeF&vWBÓç76VævW'5³Ò’° –Õ÷fV„Fö÷"Ò4%ôDôõ%ôÅ#° —ÒVÇ6R–b†Õ÷VD–äö&¦V7F—fRÓÒfV„öeF&vWBÓç76VævW'5³%Ò’° –Õ÷fV„Fö÷"Ò4%ôDôõ%õ%#° —Ð ’òòVçW6V@ ’òòvWE÷6—F–öåFô÷Vä6$Fö÷"‡fV„öeF&vWBÂÕ÷fV„Fö÷"“° •6WE6VV´6"‡fV„öeF&vWBÂÕ÷fV„Fö÷"“° •6WDÖ÷fU7FFR…TDÔõdUõ%Tâ“° —Ð —Ð —Ð —Ð —Ð •6WDÖ÷fTæ–Ò‚“° –'&V³° —Ð ––b†ÕöäÖ÷fU7FFRÓÒTDÔõdUõ5D”ÄÂbb—5VD–ä6öçG&öÂ‚’’° •6WDÆöö´fÆr†Õ÷VD–äö&¦V7F—fRÂfÇ6R“° •GW&ä&öG’‚“° —Ð ––b†ÕöåVEG—RÓÒTEE•Uô4õbbF—7Ev—F…F&vWE62ÂãVbbbÕ÷VD–äö&¦V7F—fRÓä—5Æ–W"‚’’° ––b†Õ÷VD–äö&¦V7F—fRÓæÕövWEWF–ÖW"â5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚ —ÇÂÕ÷VD–äö&¦V7F—fRÓæÕöåVE7FFRÓÒTEôE$uôe$ôÕô4"’°  ’‚„46÷VB¢—F†—2’Óå6WD'&W7EÆ–W"†Õ÷VD–äö&¦V7F—fR“° —&WGW&ã° —Ð —Ð ––b‚$¶–æF7F”–å6ÖUÆ6Rbb%7F÷æE6†ö÷BbbÕöåVE7FFRÒTEôED4²bb¶–ÆÅÆ–W$–äæõöÆ–6U¦öæR’° ––b†F—7Ev—F…F&vWE62âvW&ævP —ÇÂÕ÷VD–äö&¦V7F—fRÓæÕövWEWF–ÖW"â5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚ —ÇÂÕ÷VD–äö&¦V7F—fRÓæÕöåVE7FFRÓÒTEô%$U5DT@ —ÇÂÕ÷VD–äö&¦V7F—fRÓäVçFW&–æt6"‚’bbF—7Ev—F…F&vWE62Â2ã` —ÇÂF—7Ev—F…F&vWE62âÕöF—7Fæ6UFô6÷VçE6VV´FöæRbb6å6VTVçF—G’†Õ÷VD–äö&¦V7F—fR’’°  ––b†Õ÷VD–äö&¦V7F—fRÓäVçFW&–æt6"‚’ –Ö„F—7EFô¶VWÒ"ãc°  ––b†%W6UVDæöFU6VV²’° ”5fV7F÷"&W7D6ö÷&G2ƒãbÂãbÂãb“° –Õ÷fV56VVµ÷2ÒÕ÷VD–äö&¦V7F—fRÓävWE÷6—F–öâ‚“°  ––b‚Õ÷æW‡EF„æöFR ”f–æD&W7D6ö÷&G4g&öÔæöFW2†Õ÷fV56VVµ÷2Âf&W7D6ö÷&G2“°  ––b†Õ÷æW‡EF„æöFR –Õ÷fV56VVµ÷2ÒÕ÷æW‡EF„æöFRÓävWE÷6—F–öâ‚“°  •6WE6VV²†Õ÷fV56VVµ÷2ÂÕöF—7Fæ6UFô6÷VçE6VV´FöæR“° —ÒVÇ6R° •6WE6VV²†Õ÷VD–äö&¦V7F—fRÂÖ„F—7EFô¶VW“° —Ð –$7&÷V6…v†Vå6†ö÷F–ærÒfÇ6S° ––b†Õ÷VD–äö&¦V7F—fRÓæÕ÷7W'&VçE‡—57W&f6RbbF—7Ev—F…F&vWE62ÂRãb’° ––b‡vW&ævRÃÒRãb’° ––b†Õ÷VD–äö&¦V7F—fRÓä—5Æ–W"‚ ’bbf–æEÆ–W%VB‚’ÓæÕö%7VVEF–ÖW$fÆp ’bb„—4vætÖVÖ&W"‚’ÇÂÕöåVEG—RÓÒTEE•Uô4õ ’bbvWEvVöâ‚’ÓæÕöUvVöåG—RÓÒtTôåE•UõTä$ÔTB’° ”v—fUvVöâ…tTôåE•Uô4ôÅCCRÂ“° •6WD7W'&VçEvVöâ…tTôåE•Uô4ôÅCCR“° —Ð —ÒVÇ6R° –%7F÷æE6†ö÷BÒG'VS° —Ð •6WDÖ÷fU7FFR…TDÔõdUõ5D”ÄÂ“° •6WDÖ÷fTæ–Ò‚“° –'&V³° —Ð –%7F÷æE6†ö÷BÒfÇ6S° •6WDÖ÷fTæ–Ò‚“° –'&V³° —Ð —Ð ––b†ÕöGF6µF–ÖW"Â5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚ ’bbF—7Ev—F…F&vWE62ÂvW&ævRbbÕ÷VD–äö&¦V7F—fRÓæÕöåVE7FFRÒTEôtUEUbbÕ÷VD–äö&¦V7F—fRÓæÕöåVE7FFRÒTEôE$uôe$ôÕô4"’° ––b†$—4GV6¶–ær’° ”4æ–Ô&ÆVæD76ö6–F–öâ¦GV6´æ–ÒÒ'æ–Ô&ÆVæD6ÇV×vWD76ö6–F–öâ„vWD6ÇV×‚’Âä”Õõ5DEôET4µôDõtâ“° ––b†GV6´æ–Ò’° –GV6´æ–ÒÓæ&ÆVæDFVÇFÒÓ"ãc° –'&V³° —Ð –$—4GV6¶–ærÒfÇ6S° —ÒVÇ6R–b‡vW&ævRÃÒRãb’° •6WDÖ÷fU7FFR…TDÔõdUõ5D”ÄÂ“° •6WDGF6²†Õ÷VD–äö&¦V7F—fR“° –Õöe&÷FF–öäFW7BÒ4vVæW&Ã£¤vWE&F–äævÆT&WGvVVåö–çG2€ –Õ÷VD–äö&¦V7F—fRÓävWE÷6—F–öâ‚’ç‚ÂÕ÷VD–äö&¦V7F—fRÓävWE÷6—F–öâ‚’ç’À ”vWE÷6—F–öâ‚’ç‚ÂvWE÷6—F–öâ‚’ç’“° •6WE6†ö÷EF–ÖW"„4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒãbÂSãb’“° •6WDGF6µF–ÖW"„4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒãbÂSãb’“° –$ö'7F6ÆU6†÷vVEWGW&–æt¶–ÆÄö&¦V7F—fRÒfÇ6S°  —ÒVÇ6R° ”5fV7F÷"F&vWC° ”5fV7F÷"÷W$†VBÒvWDÖG&—‚‚’¢5fV7F÷"ƒãVbÂãbÂãfb“° ––b†Õ÷VD–äö&¦V7F—fRÓä—5VB‚’ –Õ÷VD–äö&¦V7F—fRÓæÕ÷VD”²ävWD6ö×öæVçE÷6—F–öâ‡F&vWBÂTEôÔ”B“° –VÇ6P —F&vWBÒÕ÷VD–äö&¦V7F—fRÓävWE÷6—F–öâ‚“°  —F&vWBÓÒ÷W$†VC° —F&vWB£ÒvW–æfòÓæÕöe&ævRòF&vWBäÖvæ—GVFR‚“° —F&vWB³Ò÷W$†VC°  ”46öÅö–çBf÷VæD6öÃ° ”4VçF—G’¦f÷VæDVçBÒæ–Ã°  ”5v÷&ÆC£¦$–æ6ÇVFTFVEVG2ÒG'VS° ”5v÷&ÆC£¥&ö6W74Æ–æTöe6–v‡B†÷W$†VBÂF&vWBÂf÷VæD6öÂÂf÷VæDVçBÂG'VRÂG'VRÂG'VRÂG'VRÂfÇ6RÂG'VRÂfÇ6R“° ”5v÷&ÆC£¦$–æ6ÇVFTFVEVG2ÒfÇ6S° ––b†f÷VæDVçBÓÒÕ÷VD–äö&¦V7F—fR’° •6WDGF6²†Õ÷VD–äö&¦V7F—fR“° •6WEvVöäÆö6´öåF&vWB†Õ÷VD–äö&¦V7F—fR“° •6WE6†ö÷EF–ÖW"„4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒSãbÂ#ãb’“°  ––çBF–ÖS° ––b†F—7Ev—F…F&vWE62ÃÒÖ„F—7EFô¶VW —F–ÖRÒ4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒãbÂSãb“° –VÇ6P —F–ÖRÒ4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒSãbÂ3ãb“°  •6WDGF6µF–ÖW"‡F–ÖR“° –$ö'7F6ÆU6†÷vVEWGW&–æt¶–ÆÄö&¦V7F—fRÒfÇ6S°  —ÒVÇ6R° ––b†f÷VæDVçB’° ––b†f÷VæDVçBÓä—5VB‚’’° •6WDGF6µF–ÖW"„4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒSãbÂãb’“° –$ö'7F6ÆU6†÷vVEWGW&–æt¶–ÆÄö&¦V7F—fRÒfÇ6S° —ÒVÇ6R° ––b†f÷VæDVçBÓä—4ö&¦V7B‚’’° •6WDGF6µF–ÖW"„4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒ#ãbÂCãb’“° –$ö'7F6ÆU6†÷vVEWGW&–æt¶–ÆÄö&¦V7F—fRÒG'VS° —ÒVÇ6R–b†f÷VæDVçBÓä—5fV†–6ÆR‚’’° •6WDGF6µF–ÖW"„4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒCãbÂcãb’“° –$ö'7F6ÆU6†÷vVEWGW&–æt¶–ÆÄö&¦V7F—fRÒG'VS° —ÒVÇ6R° •6WDGF6µF–ÖW"„4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒsãbÂ#ãb’“° –$ö'7F6ÆU6†÷vVEWGW&–æt¶–ÆÄö&¦V7F—fRÒG'VS° —Ð —Ð  –ÕöfÆVTg&öÒÒf÷VæDVçC° –ÕöfÆVTg&öÒÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕöfÆVTg&öÒ“° —Ð •6WEö–çDwVäB†Õ÷VD–äö&¦V7F—fR“° —Ð —Ð —ÒVÇ6R° ––b‚Õ÷VD–äö&¦V7F—fRÓæÕ÷7W'&VçE‡—57W&f6R –%7F÷æE6†ö÷BÒfÇ6S°  ––b†ÕöåVE7FFRÒTEôED4²bbÕöåVE7FFRÒTEôd”t…B’°  ’òòF†—2—2vV—&Bââà ––b†$æ÷DÆÆ÷vVEFôGV6²bb$¶–æF7F”–å6ÖUÆ6R’° ––b‚$—4GV6¶–ær’° ”4æ–Ô&ÆVæD76ö6–F–öâ¢GV6´æ–ÒÒ'æ–Ô&ÆVæD6ÇV×vWD76ö6–F–öâ„vWD6ÇV×‚’Âä”Õõ5DEôET4µôDõtâ“° ––b‚GV6´æ–ÒÇÂGV6´æ–ÒÓæ&ÆVæDFVÇFÂãb’° ”4æ–ÔÖævW#£¤&ÆVæDæ–ÖF–öâ„vWD6ÇV×‚’Â54ô4u%õ5DBÂä”Õõ5DEôET4µôDõtâÂBãb“° –$—4GV6¶–ærÒG'VS° —Ð –'&V³° —ÒVÇ6R° ”4æ–Ô&ÆVæD76ö6–F–öâ¢GV6´æ–ÒÒ'æ–Ô&ÆVæD6ÇV×vWD76ö6–F–öâ„vWD6ÇV×‚’Âä”Õõ5DEôET4µôDõtâ“° ––b‚GV6´æ–ÒÇÂGV6´æ–ÒÓæ&ÆVæDFVÇFÂãb’° –$—4GV6¶–ærÒfÇ6S° —ÒVÇ6R° –'&V³° —Ð —Ð —Ð ––b†$ö'7F6ÆU6†÷vVEWGW&–æt¶–ÆÄö&¦V7F—fR’° ––b†ÕöåVEG—RÓÒTEE•Uô4õ’° ––b„vWEvVöâ‚’ÓæÕöUvVöåG—RâtTôåE•Uô4ôÅCCP —ÇÂÕöfÆVTg&öÒbbÕöfÆVTg&öÒÓä—4ö&¦V7B‚’’° –Ö„F—7EFô¶VWÒbãc° —ÒVÇ6R–b†ÕöfÆVTg&öÒbbÕöfÆVTg&öÒÓä—5fV†–6ÆR‚’’° –Ö„F—7EFô¶VWÒBãc° —ÒVÇ6R° –Ö„F—7EFô¶VWÒ"ãc° —Ð —ÒVÇ6R° –Ö„F—7EFô¶VWÒ"ãc° —Ð —Ð ––b†F—7Ev—F…F&vWE62ÃÒÖ„F—7EFô¶VW’° •6WDÖ÷fU7FFR…TDÔõdUõ5D”ÄÂ“° –$—5ö–çF–ætwVäBÒG'VS° ––b†ÕöåVE7FFRÒTEô”ÕôuTâbb$GV6´æD6÷fW"’° –ÕöGF6µF–ÖW"Ò5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚“° •6WD–FÆR‚“° —Ð —ÒVÇ6R° ––b†ÕöåVE7FFRÒTEõ4TTµôTåD•E’bbÕöåVE7FFRÒTEõ4TTµõõ0 ’bb%7F÷æE6†ö÷Bbb¶–ÆÅÆ–W$–äæõöÆ–6U¦öæRbb$¶–æF7F”–å6ÖUÆ6R’° •6’…4õTäEõTEôED4²“° •6WE6VV²†Õ÷VD–äö&¦V7F—fRÂÖ„F—7EFô¶VW“° –$—5'Vææ–ærÒG'VS° —Ð —Ð —Ð —Ð  ––b†F—7Ev—F…F&vWE62Â"ãVbbbvW&ævRâRã` ’bbvW–æfòÓæÕöUvVöäf—&RÒtTôåôd•$UôÔTÄTR’°  •6WDGF6²†Õ÷VD–äö&¦V7F—fR“° ––b†ÕöGF6µF–ÖW"Â5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’’° ––çBF–ÖRÒ4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒSãbÂãb“° •6WDGF6µF–ÖW"‡F–ÖR“° •6WE6†ö÷EF–ÖW"‡F–ÖRÒS“° —Ð •6WDÖ÷fU7FFR…TDÔõdUõ5D”ÄÂ“° —Ð ––b„5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’âÕöåVE7FFUF–ÖW" –Õöe&÷FF–öäFW7BÒ4vVæW&Ã£¤vWE&F–äævÆT&WGvVVåö–çG2†Õ÷VD–äö&¦V7F—fRÓävWE÷6—F–öâ‚’ç‚ÂÕ÷VD–äö&¦V7F—fRÓävWE÷6—F–öâ‚’ç’ÂvWE÷6—F–öâ‚’ç‚ÂvWE÷6—F–öâ‚’ç’“°  •6WDÖ÷fTæ–Ò‚“° –'&V³° —Ð –66Rô$¤T5D•dUôdÄTUô4„%ôôåôdôõEõD”ÄÅõ4dS  –66Rô$¤T5D•dUôdÄTUô4„%ôôåôdôõEôÅt•3  —° ––b„–åfV†–6ÆR‚’’° ––b†ÕöåVE7FFRÓÒTEôE$•d”är •6WDö&¦V7F—fR„ô$¤T5D•dUôÄTdUô4"ÂÕ÷×•fV†–6ÆR“° —ÒVÇ6R–b†ÕöåVE7FFRÒTEôdÄTUôTåD•E’’° ––çBF–ÖS° ––b†Õöö&¦V7F—fRÓÒô$¤T5D•dUôdÄTUô4„%ôôåôdôõEôÅt•2 —F–ÖRÒ° –VÇ6P —F–ÖRÒc°  •6WDf–æEF„æDfÆVR†Õ÷VD–äö&¦V7F—fRÂF–ÖR“° —Ð –'&V³° —Ð –66Rô$¤T5D•dUôtõDõô4„%ôôåôdôõC  —° ––b†Õ÷VD–äö&¦V7F—fR’° –fÆöB6fTF—7Fæ6RÒ"ãc° ––b†Õ÷VD–äö&¦V7F—fRÓæ$–åfV†–6ÆR —6fTF—7Fæ6RÒ2ãc°  –fÆöBF—7Ev—F…F&vWE62ÒF—7Ev—F…F&vWBäÖvæ—GVFR‚“° ––b†ÕöåVE7FFUF–ÖW"Â5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’’° ––b†F—7Ev—F…F&vWE62ÃÒ6fTF—7Fæ6R’° –%67&—Dö&¦V7F—fT6ö×ÆWFVBÒG'VS° ––b†ÕöåVE7FFRÒTEôED4²’° •6WD–FÆR‚“° –Õ÷ÆööµF&vWBÒÕ÷VD–äö&¦V7F—fS° –Õ÷ÆööµF&vWBÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕ÷ÆööµF&vWB“° •GW&ä&öG’‚“° —Ð ––b†F—7Ev—F…F&vWE62â"ãb •6WDÖ÷fU7FFR†Õ÷VD–äö&¦V7F—fRÓæÕöäÖ÷fU7FFR“° –VÇ6P •6WDÖ÷fU7FFR…TDÔõdUõ5D”ÄÂ“° —ÒVÇ6R° •6WE6VV²†Õ÷VD–äö&¦V7F—fRÂ6fTF—7Fæ6R“° ––b†F—7Ev—F…F&vWE62ãÒRãb’° ––b†ÕöÆVFW"bbÕöÆVFW"ÓæÕöäÖ÷fU7FFRÓÒTDÔõdUõ5$”åB •6WDÖ÷fU7FFR…TDÔõdUõ5$”åB“° –VÇ6P •6WDÖ÷fU7FFR…TDÔõdUõ%Tâ“° —ÒVÇ6R° ––b†ÕöÆVFW"bbÕöÆVFW"ÓæÕöäÖ÷fU7FFRÒTDÔõdUõ5D”ÄÀ ’bbÕöÆVFW"ÓæÕöäÖ÷fU7FFRÒTDÔõdUôäôäR’° ––b†ÕöÆVFW"Óä—5Æ–W"‚’’° ––b†F—7Ev—F…F&vWE62ãÒ2ãbbbf–æEÆ–W%VB‚’ÓæÕödÖ÷fU7VVBãÒã6b •6WDÖ÷fU7FFR…TDÔõdUõ%Tâ“° –VÇ6P •6WDÖ÷fU7FFR…TDÔõdUõtÄ²“° —ÒVÇ6R° •6WDÖ÷fU7FFR†ÕöÆVFW"ÓæÕöäÖ÷fU7FFR“° —Ð —ÒVÇ6R–b†F—7Ev—F…F&vWE62ÃÒ2ãb’° •6WDÖ÷fU7FFR…TDÔõdUõtÄ²“° —ÒVÇ6R° •6WDÖ÷fU7FFR…TDÔõdUõ%Tâ“° —Ð —Ð —Ð —Ð —ÒVÇ6R° •6WDö&¦V7F—fR„ô$¤T5D•dUôäôäR“° —Ð –'&V³° —Ð –66Rô$¤T5D•dUôdôÄÄõuô4„%ô”åôdõ$ÔD”ôã  —° ––b†Õ÷VD–äö&¦V7F—fR’° ”5fV7F÷"÷5FôvòÒvWDf÷&ÖF–öå÷6—F–öâ‚“° –F—7Ev—F…F&vWBÒ÷5FôvòÒ6$÷$÷W%÷3° •6WE6VV²‡÷5FôvòÂãb“° ––b†F—7Ev—F…F&vWBäÖvæ—GVFR‚’ÃÒ2ãb’° •6WE6VV²‡÷5FôvòÂãb“° ––b†Õ÷VD–äö&¦V7F—fRÓæÕöäÖ÷fU7FFRÒTDÔõdUõ5D”ÄÂ •6WDÖ÷fU7FFR†Õ÷VD–äö&¦V7F—fRÓæÕöäÖ÷fU7FFR“° —ÒVÇ6R° •6WE6VV²‡÷5FôvòÂãb“° •6WDÖ÷fU7FFR…TDÔõdUõ%Tâ“° —Ð —ÒVÇ6R° •6WDö&¦V7F—fR„ô$¤T5D•dUôäôäR“° —Ð –'&V³° —Ð –66Rô$¤T5D•dUôTåDU%ô4%ô5õ54TätU#  —° ––b†Õö6$–äö&¦V7F—fR’° ––b‚$–åfV†–6ÆRbbÕö6$–äö&¦V7F—fRÓæÕöäçVÕ76VævW'2ãÒÕö6$–äö&¦V7F—fRÓæÕöäçVÔÖ…76VævW'2’° •&W7F÷&U&Wf–÷W4ö&¦V7F—fR‚“° •&W7F÷&U&Wf–÷W57FFR‚“° ––b„—5VD–ä6öçG&öÂ‚’ –Õ÷×•fV†–6ÆRÒæ–Ã°  –'&V³° —Ð  ––b†Õ÷&Wdö&¦V7F—fRÓÒô$¤T5D•dUô„”ÅõD„’bb‚„4WFöÖö&–ÆR¢–Õö6$–äö&¦V7F—fR’Óæ%F†”Æ–v‡B’° •&W7F÷&U&Wf–÷W4ö&¦V7F—fR‚“° ”6ÆV$ö&¦V7F—fR‚“° •6WEvæFW%F‚„4vVæW&Ã£¤vWE&æFöÔçVÖ&W"‚’br“° –$—5'Vææ–ærÒfÇ6S° –'&V³° —Ð ––b†Õöö&¦V7F—fUF–ÖW"bbÕöö&¦V7F—fUF–ÖW"Â5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’’° ––b‚VçFW&–æt6"‚’’° –&ööÂf÷VæE6VBÒfÇ6S° ––b†Õö6$–äö&¦V7F—fRÓç76VævW'5³ÒÇÂÕö6$–äö&¦V7F—fRÓæÕöävWGF–æt–äfÆw2b4%ôDôõ%ôdÄuõ$b’° ––b†Õö6$–äö&¦V7F—fRÓç76VævW'5³ÒÇÂÕö6$–äö&¦V7F—fRÓæÕöävWGF–æt–äfÆw2b4%ôDôõ%ôdÄuôÅ"’° ––b†Õö6$–äö&¦V7F—fRÓç76VævW'5³%ÒÇÂÕö6$–äö&¦V7F—fRÓæÕöävWGF–æt–äfÆw2b4%ôDôõ%ôdÄuõ%"’° –f÷VæE6VBÒfÇ6S° —ÒVÇ6R° –Õ÷fV„Fö÷"Ò4%ôDôõ%õ%#° –f÷VæE6VBÒG'VS° —Ð —ÒVÇ6R° –Õ÷fV„Fö÷"Ò4%ôDôõ%ôÅ#° –f÷VæE6VBÒG'VS° —Ð —ÒVÇ6R° –Õ÷fV„Fö÷"Ò4%ôDôõ%õ$c° –f÷VæE6VBÒG'VS° —Ð –f÷"†–çB’Ò#²’ÂÕö6$–äö&¦V7F—fRÓæÕöäçVÔÖ…76VævW'3²²¶’’° ––b‚Õö6$–äö&¦V7F—fRÓç76VævW'5¶•Òbb†Õö6$–äö&¦V7F—fRÓæÕöävWGF–æt–äfÆw2b4%ôDôõ%ôdÄuõ$b’’° –Õ÷fV„Fö÷"Ò4%ôDôõ%õ$c° –f÷VæE6VBÒG'VS° —Ð —Ð ––b†f÷VæE6VB’° •6WE÷6—F–öâ„vWE÷6—F–öåFô÷Vä6$Fö÷"†Õö6$–äö&¦V7F—fRÂÕ÷fV„Fö÷"’“° •6WDVçFW$6"†Õö6$–äö&¦V7F—fRÂÕ÷fV„Fö÷"“° —Ð —Ð –Õöö&¦V7F—fUF–ÖW"Ò° —Ð —Ð ’òòfÆÂF‡&÷Vv€ —Ð –66Rô$¤T5D•dUôTåDU%ô4%ô5ôE$•dU#  —° ––b‚Õö6$–äö&¦V7F—fRÇÂ$–åfV†–6ÆR’°¢6–fFVbd5õTEõõ%E0 ––b†$–åfV†–6ÆRbbÕ÷×•fV†–6ÆRÒÕö6$–äö&¦V7F—fR’° •6WDW†—D6"†Õ÷×•fV†–6ÆRÂ“° —ÒVÇ6P¢6VæF–` —° –$ö&¦V7F—fT6ö×ÆWFVBÒG'VS° –%67&—Dö&¦V7F—fT6ö×ÆWFVBÒG'VS° •&W7F÷&U&Wf–÷W57FFR‚“° —Ð —ÒVÇ6R° ––b†ÕöÆVfT6%F–ÖW"â5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’’° •6WDÖ÷fU7FFR…TDÔõdUõ5D”ÄÂ“° –'&V³° —Ð ––b„—5VD–ä6öçG&öÂ‚’’° ––b†Õ÷&Wdö&¦V7F—fRÓÒô$¤T5D•dUô´”ÄÅô4„%ôå•ôÔTå2’° ––b†F—7Ev—F…F&vWBäÖvæ—GVFR‚’Â#ãb’° •&W7F÷&U&Wf–÷W4ö&¦V7F—fR‚“° •&W7F÷&U&Wf–÷W57FFR‚“° —&WGW&ã° —Ð ––b†Õöö&¦V7F—fRÓÒô$¤T5D•dUôTåDU%ô4%ô5ôE$•dU"’° ––b†Õö6$–äö&¦V7F—fRÓçG&—fW ¢6–fFVbd5õTEõõ%E0 ’bb—5Æ–W"‚¢6VæF–` ’’° ––b†Õö6$–äö&¦V7F—fRÓçG&—fW"ÓæÕöö&¦V7F—fRÓÒô$¤T5D•dUô´”ÄÅô4„%ôå•ôÔTå2bbÕö6$–äö&¦V7F—fRÓçG&—fW"ÒÕ÷VD–äö&¦V7F—fR’° •6WDö&¦V7F—fR„ô$¤T5D•dUôTåDU%ô4%ô5õ54TätU"ÂÕö6$–äö&¦V7F—fR“° –Õö6$–äö&¦V7F—fRÓæ$—4&V–æt6$¦6¶VBÒfÇ6S° —Ð —Ð —Ð —ÒVÇ6R–b†Õöö&¦V7F—fRÒô$¤T5D•dUôTåDU%ô4%ô5õ54TätU"’° ––b†Õö6$–äö&¦V7F—fRÓçG&—fW ¢6–fFVbd5õTEõõ%E0 ’bb„6†$7&VFVD'’ÒÔ•54”ôåô4„"ÇÂÕö6$–äö&¦V7F—fRÓçG&—fW"Óä6†$7&VFVD'’Ò$äDôÕô4„"¢6VæF–` ’’° ––b†Õö6$–äö&¦V7F—fRÓçG&—fW"ÓæÕöåVEG—RÓÒÕöåVEG—R’° •6WDö&¦V7F—fR„ô$¤T5D•dUôTåDU%ô4%ô5õ54TätU"ÂÕö6$–äö&¦V7F—fR“° –Õö6$–äö&¦V7F—fRÓæ$—4&V–æt6$¦6¶VBÒfÇ6S° —Ð —Ð —Ð ––b†Õö6$–äö&¦V7F—fRÓä—5W6–FTF÷vâ‚’bbÕö6$–äö&¦V7F—fRÓæÕ÷fV…G—RÒdT„”4ÄUõE•Uô$”´R’° •&W7F÷&U&Wf–÷W4ö&¦V7F—fR‚“° •&W7F÷&U&Wf–÷W57FFR‚“° —&WGW&ã° —Ð ––b‚Õö6$–äö&¦V7F—fRÓä—4&öB‚’ÇÂÕöåVE7FFRÓÒTEõ4TTµô”åô$ôB’° ––b†ÕöåVE7FFRÒTEõ4TTµô4" •6WE6VV´6"†Õö6$–äö&¦V7F—fRÂ“° —ÒVÇ6R° •6WE6VV´&öE÷6—F–öâ†Õö6$–äö&¦V7F—fR“° —Ð ––b†ÕöäÖ÷fU7FFRÓÒTDÔõdUõ5D”ÄÂbb%fV„VçFW$Fö÷$—4&Æö6¶VB •6WDÖ÷fU7FFR…TDÔõdUõ%Tâ“°  ––b†Õö6$–äö&¦V7F—fRbbÕö6$–äö&¦V7F—fRÓæÕöd†VÇF‚âãb’° –F—7Ev—F…F&vWBÒÕö6$–äö&¦V7F—fRÓävWE÷6—F–öâ‚’ÒvWE÷6—F–öâ‚“° ––b‚$–åfV†–6ÆR’° ––b†äVçFW$6%&ævT×VÇF—Æ–W"¢TåDU%ô4%ôÔ…ôD•5BÂF—7Ev—F…F&vWBäÖvæ—GVFR‚’’° ––b‚Õö6$–äö&¦V7F—fRÓçG&—fW"bbÕö6$–äö&¦V7F—fRÓävWD—4öå67&VVâ‚’bbvWD—4öå67&VVâ‚’ •v'VEFôæV$VçF—G”öfe67&VVâ†Õö6$–äö&¦V7F—fR“°  ––b„6†$7&VFVD'’ÒÔ•54”ôåô4„"ÇÂÕ÷&Wdö&¦V7F—fRÓÒô$¤T5D•dUô´”ÄÅô4„%ôå•ôÔTå0¢6–fFVbd5õTEõõ%E0 —ÇÂ—5Æ–W"‚’bb5C£¤vWEBƒ’Óä&UÆ–W$6öçG&öÇ4F—6&ÆVB‚¢6VæF–` ’’° •&W7F÷&U&Wf–÷W4ö&¦V7F—fR‚“° •&W7F÷&U&Wf–÷W57FFR‚“° ––b„—5VD–ä6öçG&öÂ‚’ –Õ÷×•fV†–6ÆRÒæ–Ã° —ÒVÇ6R° •6WD–FÆR‚“° •6WDÖ÷fU7FFR…TDÔõdUõ5D”ÄÂ“° —Ð —Ð —Ð —ÒVÇ6R–b‚$–åfV†–6ÆR’° •&W7F÷&U&Wf–÷W4ö&¦V7F—fR‚“° •&W7F÷&U&Wf–÷W57FFR‚“° ––b„—5VD–ä6öçG&öÂ‚’ –Õ÷×•fV†–6ÆRÒæ–Ã° —Ð —Ð —Ð –'&V³° —Ð –66Rô$¤T5D•dUôDU5E$õ•ô4#  —° ––b‚Õö6$–äö&¦V7F—fR’° ”6ÆV$Æöö´fÆr‚“° –$ö&¦V7F—fT6ö×ÆWFVBÒG'VS° –'&V³° —Ð –fÆöBF—7Ev—F…F&vWE62ÒF—7Ev—F…F&vWBäÖvæ—GVFR‚“° ”5vVöä–æfò§vW–æfòÒ5vVöä–æfó£¤vWEvVöä–æfò„vWEvVöâ‚’ÓæÕöUvVöåG—R“° –fÆöBvW&ævRÒvW–æfòÓæÕöe&ævS° –Õ÷ÆööµF&vWBÒÕö6$–äö&¦V7F—fS° –Õ÷ÆööµF&vWBÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕ÷ÆööµF&vWB“°  –Õ÷6VVµF&vWBÒÕö6$–äö&¦V7F—fS° –Õ÷6VVµF&vWBÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕ÷6VVµF&vWB“°  •GW&ä&öG’‚“° ––b†Õö6$–äö&¦V7F—fRÓæÕöd†VÇF‚ÃÒãb’° ”6ÆV$Æöö´fÆr‚“° –%67&—Dö&¦V7F—fT6ö×ÆWFVBÒG'VS° –'&V³° —Ð  ––b†ÕöGF6µF–ÖW"Â5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’bbvW–æfòÓæÕöUvVöäf—&RÒtTôåôd•$UôÔTÄTP ’bbF—7Ev—F…F&vWE62ÂvW&ævR’°  ’òò’†÷R6ð ”5fV7F÷"÷W$†VBÒvWDÖG&—‚‚’¢5fV7F÷"ƒãVbÂãbÂãfb“° ”5fV7F÷"Ö…6†÷E÷2ÒÕö6$–äö&¦V7F—fRÓävWE÷6—F–öâ‚’Ò÷W$†VC° –Ö…6†÷E÷2£ÒvW–æfòÓæÕöe&ævRòÖ…6†÷E÷2äÖvæ—GVFR‚“° –Ö…6†÷E÷2³Ò÷W$†VC°  ”46öÅö–çBf÷VæD6öÃ° ”4VçF—G’¦f÷VæDVçC°  ”5v÷&ÆC£¦$–æ6ÇVFTFVEVG2ÒG'VS° ”5v÷&ÆC£¥&ö6W74Æ–æTöe6–v‡B†÷W$†VBÂÖ…6†÷E÷2Âf÷VæD6öÂÂf÷VæDVçBÂG'VRÂG'VRÂG'VRÂG'VRÂfÇ6RÂG'VRÂfÇ6R“° ”5v÷&ÆC£¦$–æ6ÇVFTFVEVG2ÒfÇ6S° ––b†f÷VæDVçBÓÒÕö6$–äö&¦V7F—fR’° •6WDGF6²†Õö6$–äö&¦V7F—fR“° •6WEvVöäÆö6´öåF&vWB†Õö6$–äö&¦V7F—fR“° •6WE6†ö÷EF–ÖW"„4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒSÂ#’“° ––b†F—7Ev—F…F&vWE62âãbbb$¶–æF7F”–å6ÖUÆ6R’° •6WDGF6µF–ÖW"„4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒ#ÂS’“° —ÒVÇ6R° •6WDGF6µF–ÖW"„4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒSÂ3’“° •6WDÖ÷fU7FFR…TDÔõdUõ5D”ÄÂ“° —Ð —Ð —ÒVÇ6R–b†ÕöåVE7FFRÒTEôED4²bb$¶–æF7F”–å6ÖUÆ6R’°  –fÆöB6fTF—7Fæ6S° ––b‡vW&ævRÃÒRãb —6fTF—7Fæ6RÒ2ãc° –VÇ6P —6fTF—7Fæ6RÒvW&ævR¢ã#Vc°  •6WE6VV²†Õö6$–äö&¦V7F—fRÂ6fTF—7Fæ6R“° •6WDÖ÷fU7FFR…TDÔõdUõ%Tâ“° —Ð •6WDÆöö´fÆr†Õö6$–äö&¦V7F—fRÂfÇ6R“° •GW&ä&öG’‚“° –'&V³° —Ð –66Rô$¤T5D•dUôtõDõô$Tôå•ôÔTå3  —° –F—7Ev—F…F&vWBÒÕöæW‡E&÷WFUö–çE÷2ÒvWE÷6—F–öâ‚“° –F—7Ev—F…F&vWBç¢Òãc° ––b„–åfV†–6ÆR‚’’° ”46$“£¤vWD6%FôvõFô6ö÷'2†Õ÷×•fV†–6ÆRÂfÕöæW‡E&÷WFUö–çE÷2“° ”46$7G&Ã£¥&Vv—7FW%fV†–6ÆTöd–çFW&W7B†Õ÷×•fV†–6ÆR“° ––b†F—7Ev—F…F&vWBäÖvæ—GVFU7"‚’Â7ƒ#ãb’’° –Õ÷×•fV†–6ÆRÓäWFõ–Æ÷BæÕöä7'V—6U7VVBÒ° ”f÷&6U7F÷&VDö&¦V7F—fR„ô$¤T5D•dUôtõDõô$Tôå•ôÔTå2“° •6WDö&¦V7F—fR„ô$¤T5D•dUôÄTdUô4"ÂÕ÷×•fV†–6ÆR“° —Ð –'&V³° —Ð ––b†F—7Ev—F…F&vWBäÖvæ—GVFR‚’â3ãb’° ––b†Õ÷×•fV†–6ÆR’° –Õ÷×•fV†–6ÆRÓäWFõ–Æ÷BæÕöä7'V—6U7VVBÒ° —ÒVÇ6R° –fÆöB6Æ÷6W7EfV„F—7BÒ5"ƒcãb“° ––çCbÆ7EfV†–6ÆS° ”4VçF—G’¢fV†–6ÆW5³…Ó° ”5v÷&ÆC£¤f–æDö&¦V7G4–å&ævR„vWE÷6—F–öâ‚’Â#RãbÂG'VRÂfÆ7EfV†–6ÆRÂbÂfV†–6ÆW2ÂfÇ6RÂG'VRÂfÇ6RÂfÇ6RÂfÇ6R“° ”5fV†–6ÆR¢f÷VæEfV‚Òæ–Ã° –f÷"†–çB’Ò²’ÂÆ7EfV†–6ÆS²’²²’° ”5fV†–6ÆR¢æV%fV‚Ò„5fV†–6ÆR¢—fV†–6ÆW5¶•Ó° ’ò  ”æ÷BW6VBà ”5fV7F÷"fV…7VVBÒæV%fV‚ÓävWE7VVB‚“° ”5fV7F÷"÷W%7VVBÒvWE7VVB‚“° ’¢ð ”5fV7F÷"fV„F—7EfV2ÒæV%fV‚ÓävWE÷6—F–öâ‚’ÒvWE÷6—F–öâ‚“° ––b‡fV„F—7EfV2äÖvæ—GVFU7"‚’Â6Æ÷6W7EfV„F—7@ ’bbÕ÷VD–äö&¦V7F—fRÓæÕ÷×•fV†–6ÆRÒæV%fV‚ —° –f÷VæEfV‚ÒæV%fVƒ° –6Æ÷6W7EfV„F—7BÒfV„F—7EfV2äÖvæ—GVFU7"‚“° —Ð —Ð –Õ÷×•fV†–6ÆRÒf÷VæEfVƒ° ––b†Õ÷×•fV†–6ÆR’° –Õ÷×•fV†–6ÆRÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕ÷×•fV†–6ÆR“° –Õ÷×•fV†–6ÆRÓäWFõ–Æ÷BæÕöä7'V—6U7VVBÒ° •6WDö&¦V7F—fR„ô$¤T5D•dUôTåDU%ô4%ô5ôE$•dU"ÂÕ÷×•fV†–6ÆR“° —Ð —Ð –'&V³° —Ð ’òòfÆÂF‡&÷Vv€ —Ð –66Rô$¤T5D•dUôtõDõô$TôôåôdôõC  –66Rô$¤T5D•dUõ%TåõDõô$T  —° ––b‚†Õöö&¦V7F—fRÓÒô$¤T5D•dUôtõDõô$TôôåôdôõBÇÂÕöö&¦V7F—fRÓÒô$¤T5D•dUõ%TåõDõô$T ’bb–åfV†–6ÆR‚’’° •6WDö&¦V7F—fR„ô$¤T5D•dUôÄTdUô4"ÂÕ÷×•fV†–6ÆR“° —ÒVÇ6R° –F—7Ev—F…F&vWBÒÕöæW‡E&÷WFUö–çE÷2ÒvWE÷6—F–öâ‚“° –F—7Ev—F…F&vWBç¢Òãc° ––b‡7†ÕöF—7Fæ6UFô6÷VçE6VV´FöæR’ãÒF—7Ev—F…F&vWBäÖvæ—GVFU7"‚’’° –$ö&¦V7F—fT6ö×ÆWFVBÒG'VS° –%67&—Dö&¦V7F—fT6ö×ÆWFVBÒG'VS° •6WDÖ÷fU7FFR…TDÔõdUõ5D”ÄÂ“° —ÒVÇ6R–b„5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’âÕöåVE7FFUF–ÖW"ÇÂÕöåVE7FFRÒTEõ4TTµõõ2’° ––b†%W6UVDæöFU6VV²’° ”5fV7F÷"&W7D6ö÷&G2ƒãbÂãbÂãb“° –Õ÷fV56VVµ÷2ÒÕöæW‡E&÷WFUö–çE÷3°  ––b‚Õ÷æW‡EF„æöFR ”f–æD&W7D6ö÷&G4g&öÔæöFW2†Õ÷fV56VVµ÷2Âf&W7D6ö÷&G2“°  ––b†Õ÷æW‡EF„æöFR –Õ÷fV56VVµ÷2ÒÕ÷æW‡EF„æöFRÓävWE÷6—F–öâ‚“° —Ð •6WE6VV²†Õ÷fV56VVµ÷2ÂÕöF—7Fæ6UFô6÷VçE6VV´FöæR“° —Ð —Ð  –'&V³° —Ð –66Rô$¤T5D•dUôuT$EôED4³  —° ––b†Õ÷VD–äö&¦V7F—fR’° •6WDÆöö´fÆr†Õ÷VD–äö&¦V7F—fRÂG'VR“° –Õ÷ÆööµF&vWBÒÕ÷VD–äö&¦V7F—fS° –Õ÷ÆööµF&vWBÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕ÷ÆööµF&vWB“° –ÕöÆööµF–ÖW"ÒÕöGF6µF–ÖW#° •GW&ä&öG’‚“° –fÆöBF—7Ev—F…F&vWE62ÒF—7Ev—F…F&vWBäÖvæ—GVFR‚“° ––b†F—7Ev—F…F&vWE62ãÒ#ãb’° •&W7F÷&U&Wf–÷W4ö&¦V7F—fR‚“° —ÒVÇ6R–b†ÕöGF6µF–ÖW"Â5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’’° ––b†ÕöåVE7FFRÒTEõ4TTµôTåD•E’bbF—7Ev—F…F&vWE62ãÒ"ãb’° •6WE6VV²†Õ÷VD–äö&¦V7F—fRÂãb“° —ÒVÇ6R° •6WDGF6²†Õ÷VD–äö&¦V7F—fR“° •6WE6†ö÷EF–ÖW"„4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒSãbÂSãb’“° —Ð •6WDGF6µF–ÖW"ƒ“° —Ð —ÒVÇ6R° •&W7F÷&U&Wf–÷W4ö&¦V7F—fR‚“° —Ð –'&V³° —Ð –66Rô$¤T5D•dUôdôÄÄõuõ$õUDS  ––b„†fU&V6†VDæW‡Eö–çDöå&÷WFRƒãb’’° ––çBæW‡Eö–çBÒvWDæW‡Eö–çDöå&÷WFR‚“° –ÕöæW‡E&÷WFUö–çE÷2Ò5&÷WFTæöFS£¤vWEö–çE÷6—F–öâ†æW‡Eö–çB“° —ÒVÇ6R° •6WE6VV²†ÕöæW‡E&÷WFUö–çE÷2Âã†b“° —Ð –'&V³° –66Rô$¤T5D•dUõ4ôÄ”4•EõdT„”4ÄS  ––b†Õö6$–äö&¦V7F—fR’° ––b†Õöö&¦V7F—fUF–ÖW"ÃÒ5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’’° ––b‚$–åfV†–6ÆR’° •6WDö&¦V7F—fR„ô$¤T5D•dUôäôäR“° •6WEvæFW%F‚„4vVæW&Ã£¤vWE&æFöÔçVÖ&W"‚’br“° –Õöö&¦V7F—fUF–ÖW"Ò5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’²° ––b„—5VD–ä6öçG&öÂ‚’ –Õ÷×•fV†–6ÆRÒæ–Ã° —Ð —ÒVÇ6R° ––b†ÕöåVE7FFRÒTEôdÄTUôTåD•E’bbÕöåVE7FFRÒTEõ4ôÄ”4•B •6WE6VV´6"†Õö6$–äö&¦V7F—fRÂ“° —Ð —ÒVÇ6R° •&W7F÷&U&Wf–÷W4ö&¦V7F—fR‚“° •&W7F÷&U&Wf–÷W57FFR‚“° ––b„—5VD–ä6öçG&öÂ‚’ –Õ÷×•fV†–6ÆRÒæ–Ã° —Ð –'&V³° –66Rô$¤T5D•dUô„”ÅõD„“  ––b‚'æ–Ô&ÆVæD6ÇV×vWD76ö6–F–öâ„vWD6ÇV×‚’Âä”Õõ5DEô„”ÅD„’’bb5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’âÕöåv—EF–ÖW"’° •6’…4õTäEõTEõD„•õt•B“° ”4æ–ÔÖævW#£¤&ÆVæDæ–ÖF–öâ„vWD6ÇV×‚’Â54ô4u%õ5DBÂä”Õõ5DEô„”ÅD„’ÂBãb“° –Õöåv—EF–ÖW"Ò5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’²#° —Ð –'&V³° –66Rô$¤T5D•dUô4D4…õE$”ã  —° ––b†Õö6$–äö&¦V7F—fR’° •6WDö&¦V7F—fR„ô$¤T5D•dUôTåDU%ô4%ô5õ54TätU"ÂÕö6$–äö&¦V7F—fR“° —ÒVÇ6R° ”5fV†–6ÆR¢G&–åFôVçFW"Òæ–Ã° –fÆöB6Æ÷6W7D6$F—7BÒ4„T4µôäT$%•õD„”äu5ôÔ…ôD•5C° ”5fV7F÷"÷2ÒvWE÷6—F–öâ‚“° ––çCbÆ7EfV†–6ÆS° ”4VçF—G’¢fV†–6ÆW5³…Ó°  ”5v÷&ÆC£¤f–æDö&¦V7G4–å&ævR‡÷2ÂãbÂG'VRÂfÆ7EfV†–6ÆRÂbÂfV†–6ÆW2ÂfÇ6RÂG'VRÂfÇ6RÂfÇ6RÂfÇ6R“° –f÷"†–çB’Ò²’ÂÆ7EfV†–6ÆS²’²²’° ”5fV†–6ÆR¢æV%fV‚Ò„5fV†–6ÆR¢—fV†–6ÆW5¶•Ó° ––b†æV%fV‚Óä—5G&–â‚’’° ”5fV7F÷"fV„F—7EfV2ÒvWE÷6—F–öâ‚’ÒæV%fV‚ÓävWE÷6—F–öâ‚“° –fÆöBfV„F—7BÒfV„F—7EfV2äÖvæ—GVFR‚“° ––b‡fV„F—7BÂ6Æ÷6W7D6$F—7BbbÕ÷VD–äö&¦V7F—fRÓæÕ÷×•fV†–6ÆRÒæV%fV‚ —° —G&–åFôVçFW"ÒæV%fVƒ° –6Æ÷6W7D6$F—7BÒfV„F—7C° —Ð —Ð —Ð ––b‡G&–åFôVçFW"’° –Õö6$–äö&¦V7F—fRÒG&–åFôVçFW#° –Õö6$–äö&¦V7F—fRÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕö6$–äö&¦V7F—fR“° —Ð —Ð –'&V³° —Ð –66Rô$¤T5D•dUô%U•ô”4Uô5$TÓ  ––b†Õö6$–äö&¦V7F—fR’° ––b†ÕöåVE7FFRÒTEôdÄTUôTåD•E’bbÕöåVE7FFRÒTEô%U•ô”4T5$TÒ •6WE6VV´6"†Õö6$–äö&¦V7F—fRÂ“° —ÒVÇ6R° •&W7F÷&U&Wf–÷W4ö&¦V7F—fR‚“° •&W7F÷&U&Wf–÷W57FFR‚“° ––b„—5VD–ä6öçG&öÂ‚’ –Õ÷×•fV†–6ÆRÒæ–Ã° —Ð –'&V³° –66Rô$¤T5D•dUõ5DTÅôå•ô4#  —° ––b†$–åfV†–6ÆR’° –%67&—Dö&¦V7F—fT6ö×ÆWFVBÒG'VS° •&W7F÷&U&Wf–÷W4ö&¦V7F—fR‚“° —ÒVÇ6R–b†Õö6$¦6µF–ÖW"Â5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’’° ”5fV†–6ÆR¦6%Fõ7FVÂÒæ–Ã° –fÆöB6Æ÷6W7D6$F—7BÒTåDU%ô4%ôÔ…ôD•5C° ”5fV7F÷"÷2ÒvWE÷6—F–öâ‚“° ––çCbÆ7EfV†–6ÆS° ”4VçF—G’§fV†–6ÆW5³…Ó°  ’òòä#¢F†—26†÷VÆBwfR&VVâTåDU%ô4%ôÔ…ôD•5B7GVÆÇ’ÂæB—2f—†VB–âd2à ”5v÷&ÆC£¤f–æDö&¦V7G4–å&ævR‡÷2Â4„T4µôäT$%•õD„”äu5ôÔ…ôD•5BÂG'VRÂfÆ7EfV†–6ÆRÂbÂfV†–6ÆW2ÂfÇ6RÂG'VRÂfÇ6RÂfÇ6RÂfÇ6R“° –f÷"†–çB’Ò²’ÂÆ7EfV†–6ÆS²’²²’° ”5fV†–6ÆR¦æV%fV‚Ò„5fV†–6ÆR¢—fV†–6ÆW5¶•Ó° ––b†æV%fV‚ÓåfV†–6ÆT7&VFVD'’ÒÔ•54”ôåõdT„”4ÄR’° ––b†æV%fV‚ÓæÕ÷fV4Ö÷fU7VVBäÖvæ—GVFR‚’ÃÒãb’° ––b†æV%fV‚Óä6åVD÷VäÆö6·2‡F†—2’’° ”5fV7F÷"fV„F—7EfV2ÒvWE÷6—F–öâ‚’ÒæV%fV‚ÓävWE÷6—F–öâ‚“° –fÆöBfV„F—7BÒfV„F—7EfV2äÖvæ—GVFR‚“° ––b‡fV„F—7BÂ6Æ÷6W7D6$F—7B’° –6%Fõ7FVÂÒæV%fVƒ° –6Æ÷6W7D6$F—7BÒfV„F—7C° —Ð —Ð —Ð —Ð —Ð ––b†6%Fõ7FVÂ’° •6WDö&¦V7F—fR„ô$¤T5D•dUôTåDU%ô4%ô5ôE$•dU"Â6%Fõ7FVÂ“° –Õö6$¦6µF–ÖW"Ò5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’²S° —ÒVÇ6R° •&W7F÷&U&Wf–÷W4ö&¦V7F—fR‚“° •&W7F÷&U&Wf–÷W57FFR‚“° —Ð —Ð –'&V³° —Ð –66Rô$¤T5D•dUôÕTuô4„#  —° ––b†Õ÷VD–äö&¦V7F—fR’° ––b†Õ÷VD–äö&¦V7F—fRÓä—5Æ–W"‚’ÇÂÕ÷VD–äö&¦V7F—fRÓæ$–åfV†–6ÆRÇÂÕ÷VD–äö&¦V7F—fRÓæÕöd†VÇF‚ÃÒãb’° ”6ÆV$ö&¦V7F—fR‚“° —&WGW&ã° —Ð ––b†Õ÷VD–äö&¦V7F—fRÓæÕöäÖ÷fU7FFRâTDÔõdUõtÄ²’° ”6ÆV$ö&¦V7F—fR‚“° —&WGW&ã° —Ð ––b†Õ÷VD–äö&¦V7F—fRÓæÕöö&¦V7F—fRÓÒô$¤T5D•dUô´”ÄÅô4„%ôôåôdôõBbbÕ÷VD–äö&¦V7F—fRÓæÕ÷VD–äö&¦V7F—fRÓÒF†—2’° •6WDö&¦V7F—fR„ô$¤T5D•dUôdÄTUô4„%ôôåôdôõEõD”ÄÅõ4dRÂÕ÷VD–äö&¦V7F—fR“° •6WDÖ÷fU7FFR…TDÔõdUõ5$”åB“° —&WGW&ã° —Ð ––b†Õ÷VD–äö&¦V7F—fRÓæÕöåVE7FFRÓÒTEôdÄTUôTåD•E’bbÕöfÆVTg&öÒÓÒF†—0 —ÇÂÕ÷VD–äö&¦V7F—fRÓæÕöö&¦V7F—fRÓÒô$¤T5D•dUôdÄTUô4„%ôôåôdôõEõD”ÄÅõ4dRbbÕ÷VD–äö&¦V7F—fRÓæÕ÷VD–äö&¦V7F—fRÓÒF†—2’° ”6ÆV$ö&¦V7F—fR‚“° •6WDf–æEF„æDfÆVR†Õ÷VD–äö&¦V7F—fRÂSÂG'VR“° —&WGW&ã° —Ð –fÆöBF—7Ev—F…F&vWE657"ÒF—7Ev—F…F&vWBäÖvæ—GVFU7"‚“° ––b†F—7Ev—F…F&vWE657"ÃÒ7ƒãb’’° ––b†F—7Ev—F…F&vWE657"ÃÒ7ƒãFb’’° ”4æ–Ô&ÆVæD76ö6–F–öâ§&VÆöD76ö2Ò'æ–Ô&ÆVæD6ÇV×vWD76ö6–F–öâ„vWD6ÇV×‚’Âä”Õõ5DEôµõ$TÄôB“° –Õöe&÷FF–öäFW7BÒ4vVæW&Ã£¤vWE&F–äævÆT&WGvVVåö–çG2€ –Õ÷VD–äö&¦V7F—fRÓävWE÷6—F–öâ‚’ç‚ÂÕ÷VD–äö&¦V7F—fRÓävWE÷6—F–öâ‚’ç’À ”vWE÷6—F–öâ‚’ç‚ÂvWE÷6—F–öâ‚’ç’“°  ––b‡&VÆöD76ö2ÇÂÕ÷VD–äö&¦V7F—fRÓä—5VE6†ö÷F&ÆR‚’’° ––b‡&VÆöD76ö2b` ’‚&VÆöD76ö2Óä—5'Vææ–ær‚’ÇÂ&VÆöD76ö2Óæ7W'&VçEF–ÖRò&VÆöD76ö2Óæ†–W&&6‡’ÓçF÷FÄÆVæwF‚âã†b’’° ”4æ–Ô&ÆVæD76ö6–F–öâ§Væ6„76ö2Ò4æ–ÔÖævW#£¤&ÆVæDæ–ÖF–öâ„vWD6ÇV×‚’Â54ô4u%õ5DBÂä”Õõ5DEõ%D”ÅõTä4‚Â‚ãb“° —Væ6„76ö2ÓæfÆw2ÃÒ54ô5ôDTÄUDTdDTDõUC° —Væ6„76ö2ÓæfÆw2ÃÒ54ô5ôdDTõUEt„TäDôäS° ”5fV7F÷#$Böfg6WB†F—7Ev—F…F&vWBç‚ÂF—7Ev—F…F&vWBç’“° ––çBF—"ÒÕ÷VD–äö&¦V7F—fRÓävWDÆö6ÄF—&V7F–öâ†öfg6WB“° –Õ÷VD–äö&¦V7F—fRÓå7F'Df–v‡DFVfVæB†F—"Â„•DÄUdTÅô„”t‚ÂR“° –Õ÷VD–äö&¦V7F—fRÓå&V7EFôGF6²‡F†—2“° –Õ÷VD–äö&¦V7F—fRÓå6’…4õTäEõTEõ$ô$$TB“° •6’…4õTäEõTEôÕTtt”är“° –%&–6„g&öÔ×Vvv–ærÒG'VS°  ’òòd2d•ƒ¢6ÆV$ö&¦V7F—fR‚’6ÆV'2Õ÷VD–äö&¦V7F—fR–âd2†Ç6ò6ÖRv—F‚d5õTEõõ%E2’Â6òvWB—B&Vf÷&R6ÆÀ ”5VB§f–7F–ÒÒÕ÷VD–äö&¦V7F—fS° ”6ÆV$ö&¦V7F—fR‚“° ––b‡f–7F–ÒÓæÕöö&¦V7F—fRÒô$¤T5D•dUô´”ÄÅô4„%ôôåôdôõ@ —ÇÂf–7F–ÒÓæÕ÷VD–äö&¦V7F—fRÒF†—2’° •6WDf–æEF„æDfÆVR‡f–7F–ÒÂSÂG'VR“° –ÕöäÆ7EVE7FFRÒTEõtäDU%õDƒ° —ÒVÇ6R° •6WDö&¦V7F—fR„ô$¤T5D•dUôdÄTUô4„%ôôåôdôõEõD”ÄÅõ4dRÂf–7F–Ò“° •6WDÖ÷fU7FFR…TDÔõdUõ5$”åB“° –ÕöäÆ7EVE7FFRÒTEõtäDU%õDƒ° —Ð —Ð —ÒVÇ6R° –UvVöåG—RvVöåG—RÒvWEvVöâ‚’ÓæÕöUvVöåG—S° ––b‡vVöåG—RÒtTôåE•UõTä$ÔTBbbvVöåG—RÒtTôåE•Uô$4T$ÄÄ$B •6WD7W'&VçEvVöâ…tTôåE•UõTä$ÔTB“°  ”4æ–Ô&ÆVæD76ö6–F–öâ¦æWu&VÆöD76ö2Ò4æ–ÔÖævW#£¤&ÆVæDæ–ÖF–öâ„vWD6ÇV×‚’Â54ô4u%õ5DBÂä”Õõ5DEôµõ$TÄôBÂ‚ãb“° –æWu&VÆöD76ö2ÓæfÆw2ÃÒ54ô5ôDTÄUDTdDTDõUC° –æWu&VÆöD76ö2ÓæfÆw2ÃÒ54ô5ôdDTõUEt„TäDôäS° —Ð —ÒVÇ6R° •6WE6VV²†Õ÷VD–äö&¦V7F—fRÂãb“° ”4æ–Ô&ÆVæD76ö6–F–öâ§vÆ´76ö2Ò'æ–Ô&ÆVæD6ÇV×vWD76ö6–F–öâ„vWD6ÇV×‚’Âä”Õõ5DEõtÄ²“°  ––b‡vÆ´76ö2 —vÆ´76ö2Óç7VVBÒã6c° —Ð —ÒVÇ6R° ”6ÆV$ö&¦V7F—fR‚“° •6WEvæFW%F‚„4vVæW&Ã£¤vWE&æFöÔçVÖ&W"‚’br“° —Ð —ÒVÇ6R°¢6–fFVbd5õTEõõ%E0 –Õöö&¦V7F—fRÒô$¤T5D•dUôäôäS°¢6VæF–` ”6ÆV$ö&¦V7F—fR‚“° —Ð –'&V³° —Ð –66Rô$¤T5D•dUôdÄTUô4#  ––b‚$–åfV†–6ÆRbbÕöåVE7FFRÒTEôdÄTUôTåD•E’bbÕ÷×•fV†–6ÆR’° •&W7F÷&U&Wf–÷W4ö&¦V7F—fR‚“° •6WDfÆVR†Õ÷×•fV†–6ÆRÂc“° –'&V³° —Ð ’òòfÆÂF‡&÷Vv€ –66Rô$¤T5D•dUôÄTdUô4#  ––b„5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’âÕöÆVfT6%F–ÖW"’° ––b„–åfV†–6ÆR‚¢6–fFVbd5õTEõõ%E0 ’bb„f–æEÆ–W%VB‚’ÒF†—2ÇÂ5C£¤vWEBƒ’ÓävWD66VÆW&FR‚ —ÇÂ$'W4¦6¶VB¢6VæF–` ’’° ––b†ÕöåVE7FFRÒTEôU„•Eô4"bbÕöåVE7FFRÒTEôE$uôe$ôÕô4"bbÕöåVE7FFRÒTEôU„•EõE$”à ’bb†ÕöåVEG—RÒTEE•Uô4õ ¢6–fFVbd5õTEõõ%E0 —ÇÂÕ÷×•fV†–6ÆRÓä—4&öB‚¢6VæF–` —ÇÂÕ÷×•fV†–6ÆRÓæÕ÷fV4Ö÷fU7VVBäÖvæ—GVFU7#$B‚’Â7ƒãVb’’’° ––b†Õ÷×•fV†–6ÆRÓä—5G&–â‚’ •6WDW†—EG&–â†Õ÷×•fV†–6ÆR“°¢6–fFVbd5õTEõõ%E0 –VÇ6R–b†Õ÷×•fV†–6ÆRÓä—4&öB‚’ •6WDW†—D&öB†Õ÷×•fV†–6ÆR“°¢6VæF–` –VÇ6P •6WDW†—D6"†Õ÷×•fV†–6ÆRÂ“° —Ð —ÒVÇ6R° •&W7F÷&U&Wf–÷W4ö&¦V7F—fR‚“° —Ð —Ð –'&V³°¢6–fFVbd5õTEõõ%E0 –66Rô$¤T5D•dUôÄTdUô4%ôäEôD”S  —° ––b„5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’âÕöÆVfT6%F–ÖW"’° ––b„–åfV†–6ÆR‚’’° ––b†ÕöåVE7FFRÒTEôU„•Eô4"bbÕöåVE7FFRÒTEôE$uôe$ôÕô4"bbÕöåVE7FFRÒTEôU„•EõE$”â’° ––b†Õ÷×•fV†–6ÆRÓä—4&öB‚’ •6WDW†—D&öB†Õ÷×•fV†–6ÆR“° –VÇ6R–b†Õ÷×•fV†–6ÆRÓæ$—4'W2 •6WDW†—D6"†Õ÷×•fV†–6ÆRÂ“° –VÇ6R° –T6$æöFW2Fö÷$æöFRÒ4%ôDôõ%ôÄc° ––b†Õ÷×•fV†–6ÆRÓçG&—fW"ÒF†—2’° ––b†Õ÷×•fV†–6ÆRÓç76VævW'5³ÒÓÒF†—2’° –Fö÷$æöFRÒ4%ôDôõ%õ$c° —ÒVÇ6R–b†Õ÷×•fV†–6ÆRÓç76VævW'5³ÒÓÒF†—2’° –Fö÷$æöFRÒ4%ôDôõ%ôÅ#° —ÒVÇ6R–b†Õ÷×•fV†–6ÆRÓç76VævW'5³%ÒÓÒF†—2’° –Fö÷$æöFRÒ4%ôDôõ%õ%#° —Ð —Ð •6WD&V–ætG&vvVDg&öÔ6"†Õ÷×•fV†–6ÆRÂFö÷$æöFRÂfÇ6R“° —Ð —Ð —Ð —Ð –'&V³° —Ð¢6VæF–` —Ð ––b†$ö&¦V7F—fT6ö×ÆWFV@ —ÇÂÕöö&¦V7F—fUF–ÖW"âbb5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’âÕöö&¦V7F—fUF–ÖW"’° •&W7F÷&U&Wf–÷W4ö&¦V7F—fR‚“° ––b†Õöö&¦V7F—fUF–ÖW"â5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’ÇÂÕöö&¦V7F—fUF–ÖW" –Õöö&¦V7F—fUF–ÖW"Ò5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚’Ò°  ––b„6†$7&VFVD'’Ò$äDôÕô4„"ÇÂ$–åfV†–6ÆR’° ––b„—5VD–ä6öçG&öÂ‚’ •&W7F÷&U&Wf–÷W57FFR‚“° —ÒVÇ6R° •6WEvæFW%F‚„4vVæW&Ã£¤vWE&æFöÔçVÖ&W"‚’br“° —Ð ”6ÆV$–ÔfÆr‚“° ”6ÆV$Æöö´fÆr‚“° —Ð —Ð§Ð §fö–@¤5VC£¥6WDföÆÆ÷u&÷WFR†–çCb7W'&VçEö–çBÂ–çCb&÷WFUG—R§° –Õ÷&÷WFTÆ7Eö–çBÒ7W'&VçEö–çC° –Õ÷&÷WFU7F'Eö–çBÒ5&÷WFTæöFS£¤vWE&÷WFU7F'B†7W'&VçEö–çB“° –Õ÷&÷WFUö–çG576VBÒ° –Õ÷&÷WFUG—RÒ&÷WFUG—S° –Õ÷&÷WFUö–çG4&V–æu76VBÒ° –Õöö&¦V7F—fRÒô$¤T5D•dUôdôÄÄõuõ$õUDS° –ÕöæW‡E&÷WFUö–çE÷2Ò5&÷WFTæöFS£¤vWEö–çE÷6—F–öâ„vWDæW‡Eö–çDöå&÷WFR‚’“°§Ð ¦–ç@¤5VC£¤vWDæW‡Eö–çDöå&÷WFR‡fö–B§° ––çCbæW‡Eö–çBÒÕ÷&÷WFUö–çG4&V–æu76VB²Õ÷&÷WFUö–çG576VB²Õ÷&÷WFU7F'Eö–çC°  ’òò&÷WFR—26ö×ÆWFP ––b†æW‡Eö–çBÂÇÂæW‡Eö–çBâåTÕTE$õUDU2ÇÂÕ÷&÷WFTÆ7Eö–çBÒ5&÷WFTæöFS£¤vWE&÷WFUF†—5ö–çD—4öâ†æW‡Eö–çB’’°  —7v—F6‚†Õ÷&÷WFUG—R’° –66RTE$õUDUõ5Dõõt„TåôDôäS  –æW‡Eö–çBÒÓ° –'&V³° –66RTE$õUDUôtõô$4µt$Eõt„TåôDôäS  –Õ÷&÷WFUö–çG4&V–æu76VBÒÖÕ÷&÷WFUö–çG4&V–æu76VC° –æW‡Eö–çBÒÕ÷&÷WFUö–çG4&V–æu76VB²Õ÷&÷WFUö–çG576VB²Õ÷&÷WFU7F'Eö–çC° –'&V³° –66RTE$õUDUôtõõDõõ5D%Eõt„TåôDôäS  –Õ÷&÷WFUö–çG576VBÒÓ° –æW‡Eö–çBÒÕ÷&÷WFUö–çG4&V–æu76VB²Õ÷&÷WFUö–çG576VB²Õ÷&÷WFU7F'Eö–çC° –'&V³° –FVfVÇC  –'&V³° —Ð —Ð —&WGW&âæW‡Eö–çC°§Ð ¦&ööÀ¤5VC£¤†fU&V6†VDæW‡Eö–çDöå&÷WFR†fÆöBF—7EFô6÷VçE&V6†VB§° ––b‚†ÕöæW‡E&÷WFUö–çE÷2ÒvWE÷6—F–öâ‚’’äÖvæ—GVFS$B‚’ãÒF—7EFô6÷VçE&V6†VB —&WGW&âfÇ6S°  –Õ÷&÷WFUö–çG576VB³ÒÕ÷&÷WFUö–çG4&V–æu76VC° —&WGW&âG'VS°§Ð ¦&ööÀ¤5VC£¤6å6VTVçF—G’„4VçF—G’¦VçF—G’ÂfÆöBF‡&W6†öÆB§° –fÆöBæVVFVDævÆRÒ4vVæW&Ã£¤vWE&F–äævÆT&WGvVVåö–çG2€ –VçF—G’ÓävWE÷6—F–öâ‚’ç‚À –VçF—G’ÓävWE÷6—F–öâ‚’ç’À ”vWE÷6—F–öâ‚’ç‚À ”vWE÷6—F–öâ‚’ç’“°  ––b†æVVFVDævÆRÂãb –æVVFVDævÆR³ÒEtõ“° –VÇ6R–b†æVVFVDævÆRâEtõ’ –æVVFVDævÆRÓÒEtõ“°  –fÆöB÷W$ævÆRÒÕöe&÷FF–öä7W#° ––b†÷W$ævÆRÂãb –÷W$ævÆR³ÒEtõ“° –VÇ6R–b†÷W$ævÆRâEtõ’ –÷W$ævÆRÓÒEtõ“°  –fÆöBæVVFVEGW&âÒ'2†æVVFVDævÆRÒ÷W$ævÆR“°  —&WGW&âæVVFVEGW&âÂF‡&W6†öÆBÇÂEtõ’ÒF‡&W6†öÆBÂæVVFVEGW&ã°§Ð ¢òòöæÇ’W6VBv†–ÆRFV6–F–ærv†–6‚wVâVB6†÷VÆB7v—F6‚FòÂ–bæòÖÖòÆVgBà¦&ööÀ¤5VC£¥6VÆV7DwVä–d&ÖVB‡fö–B§° –f÷"†–çB’Ò²’ÂÕöÖ…vVöåG—TÆÆ÷vVC²’²²’° ––b„vWEvVöâ†’’æÕöäÖÖõF÷FÂâ’° –UvVöåG—RvVöåG—RÒvWEvVöâ†’’æÕöUvVöåG—S° ––b‡vVöåG—RÓÒtTôåE•Uô$4T$ÄÄ$BÇÂvVöåG—RÓÒtTôåE•Uô4ôÅCCRÇÂvVöåG—RÓÒtTôåE•UõU¤’ÇÂvVöåG—RÓÒtTôåE•Uõ4„õDuTâÇÀ —vVöåG—RÓÒtTôåE•UôÓbÇÂvVöåG—RÓÒtTôåE•Uõ4ä•U%$”dÄRÇÂvVöåG—RÓÒtTôåE•Uõ$ô4´UDÄTä4„U"’° •6WD7W'&VçEvVöâ†’“° —&WGW&âG'VS° —Ð —Ð —Ð •6WD7W'&VçEvVöâ…tTôåE•UõTä$ÔTB“° —&WGW&âfÇ6S°§Ð §fö–@¤5VC£¥&V7EFõö–çDwVâ„4VçF—G’¦VçEv—F„wVâ§° ––b†ÕöåVEG—RÓÒTEE•UôtäsbbVçEv—F„wVâbbVçEv—F„wVâÓä—5VB‚’b` ’‚„5VB¢–VçEv—F„wVâ’Óä—5Æ–W"‚’ —&WGW&ã°  ”5VB§VEv—F„wVâÒ„5VB¢–VçEv—F„wVã° ––çBv—EF–ÖS°  ––b„—5Æ–W"‚’ÇÂ—5VD–ä6öçG&öÂ‚’ÇÂ6†$7&VFVD'’ÓÒÔ•54”ôåô4„" —&WGW&ã°  ––b†ÕöÆVFW"ÓÒVEv—F„wVâ —&WGW&ã°  ––b†Õöåv—E7FFRÓÒt•E5DDUõÄ”ä”Õô„äE5UÇÂÕöåv—E7FFRÓÒt•E5DDUõÄ”ä”Õô„äE44õtU"ÇÀ ’„vWE÷6—F–öâ‚’ÒVEv—F„wVâÓävWE÷6—F–öâ‚’’äÖvæ—GVFU7#$B‚’â##Rãb —&WGW&ã°  ––b†ÕöÆVFW"’° ––b„f–æEÆ–W%VB‚’ÓÒÕöÆVFW" —&WGW&ã°  ”6ÆV$ÆVFW"‚“° —Ð ––b†Õ÷VE7FG2ÓæÕöfÆw2b5DEôuTåõä”0 ’bb†ÕöåVE7FFRÒTEôED4²ÇÂvWEvVöâ‚’Óä—5G—TÖVÆVR‚’ ’bbÕöåVE7FFRÒTEôdÄTUôTåD•E’bbÕöåVE7FFRÒTEô”ÕôuTâ’°  —v—EF–ÖRÒ4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒ3Âc“° •6WEv—E7FFR…t•E5DDUõÄ”ä”Õô„äE44õtU"Âgv—EF–ÖR“° •6’…4õTäEõTEô„äE5ô4õtU"“° –Õ÷ÆööµF&vWBÒVEv—F„wVã° –Õ÷ÆööµF&vWBÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕ÷ÆööµF&vWB“° •6WDÖ÷fU7FFR…TDÔõdUôäôäR“°  —ÒVÇ6R–b†ÕöåVEG—RÒVEv—F„wVâÓæÕöåVEG—R’° ––b„—4vætÖVÖ&W"‚’ÇÂÕöåVEG—RÓÒTEE•UôTÔU$tTä5’ÇÂÕöåVEG—RÓÒTEE•Uôd•$TÔâ’° •&Vv—7FW%F‡&VEv—F„væuVG2‡VEv—F„wVâ“° —Ð  ––b†ÕöåVEG—RÓÒTEE•Uô4õ’° ––b‡VEv—F„wVâÓä—5Æ–W"‚’’° ’‚„5Æ–W%VB¢—VEv—F„wVâ’ÓæÕ÷vçFVBÓå6WEvçFVDÆWfVÄæôG&÷ƒ"“° ––b†$7&÷V6…v†Vå6†ö÷F–ærÇÂ$¶–æF7F”–å6ÖUÆ6R’° •6WDGV6²„4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒÂ3’“° —&WGW&ã° —Ð —Ð —Ð  ––b†ÕöåVEG—RÒTEE•Uô4õ  ’bb†ÕöåVE7FFRÒTEôED4²ÇÂvWEvVöâ‚’Óä—5G—TÖVÆVR‚’ ’bb†ÕöåVE7FFRÒTEôdÄTUôTåD•E’ÇÂVEv—F„wVâÓä—5Æ–W"‚’bbÕöfÆVTg&öÒÒVEv—F„wVâ ’bbÕöåVE7FFRÒTEô”ÕôuTâbbÕöö&¦V7F—fRÒô$¤T5D•dUô´”ÄÅô4„%ôôåôdôõB’°  —v—EF–ÖRÒ4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒ3Âc“° •6WEv—E7FFR…t•E5DDUõÄ”ä”Õô„äE5UÂgv—EF–ÖR“° •6’…4õTäEõTEô„äE5õU“° –Õ÷ÆööµF&vWBÒVEv—F„wVã° –Õ÷ÆööµF&vWBÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕ÷ÆööµF&vWB“° •6WDÖ÷fU7FFR…TDÔõdUôäôäR“° ––b†ÕöåVE7FFRÓÒTEôdÄTUôTåD•E’’° –ÕöfÆVTg&öÒÒVEv—F„wVã° –ÕöfÆVTg&öÒÓå&Vv—7FW%&VfW&Væ6R‚„4VçF—G’¢¢’fÕöfÆVTg&öÒ“° —Ð  ––b„f–æEÆ–W%VB‚’ÓÒVEv—F„wVâbb%&–6„g&öÔ×Vvv–ær’° ––çBÖöæW’Ò4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒÂ3“° ––çB–6·W6÷VçBÒÖöæW’òC²° ––çBÖöæW•W%–6·WÒÖöæW’ò–6·W6÷VçC°  –f÷"†–çB’Ò²’Â–6·W6÷VçC²’²²’° –fÆöB–6·W‚ÒãVb¢6–â‚„4vVæW&Ã£¤vWE&æFöÔçVÖ&W"‚’R#Sb’ó#Sbãb¢Etõ’’²vWE÷6—F–öâ‚’çƒ° –fÆöB–6·W’ÒãVb¢6÷2‚„4vVæW&Ã£¤vWE&æFöÔçVÖ&W"‚’R#Sb’ó#Sbãb¢Etõ’’²vWE÷6—F–öâ‚’ç“° –&ööÂf÷VæBÒfÇ6S° –fÆöBw&÷VæE¢Ò5v÷&ÆC£¤f–æDw&÷VæE¤f÷#4D6ö÷&B‡–6·W‚Â–6·W’ÂvWE÷6—F–öâ‚’ç¢Âff÷VæB’²ãVc° ––b†f÷VæB’° ”5–6·W3£¤vVæW&FTæWtöæR„5fV7F÷"‡–6·W‚Â–6·W’Âw&÷VæE¢’ÂÔ•ôÔôäU’Â”4µUôÔôäU’ÂÖöæW•W%–6·W²„4vVæW&Ã£¤vWE&æFöÔçVÖ&W"‚’br’“° —Ð —Ð –%&–6„g&öÔ×Vvv–ærÒfÇ6S° —Ð —Ð —Ð§Ð §7FF–2fö–@¤Ö¶TæV&'”ÆVöæTFVfVæEÆ–W"„4VçF—G’§F&vWB§° ––b‡F&vWBÓÒæ–ÂÇÂF&vWBÓä—5VB‚’ —&WGW&ã°  ”5Æ–W%VB§Æ–W"Òf–æEÆ–W%VB‚“° ”5VB¦VæV×’Ò„5VB¢—F&vWC° ––b‡Æ–W"ÓÒæ–ÂÇÂVæV×’ÓÒÆ–W"ÇÂVæV×’ÓæÕöåVEG—RÓÒTEE•Uôtäs —&WGW&ã°  ”5VEööÂ§ööÂÒ5ööÇ3£¤vWEVEööÂ‚“° –f÷"†–çC3"’Ò²’ÂööÂÓävWE6—¦R‚“²’²²’° ”5VB¦ÆVöæRÒööÂÓävWE6Æ÷B†’“° ––b†ÆVöæRÓÒæ–ÂÇÂÆVöæRÓÒÆ–W"ÇÀ ’ÆVöæRÓæÕöåVEG—RÒTEE•UôtäsÇÀ ’ÆVöæRÓäG––æt÷$FVB‚’ÇÂÆVöæRÓä—5VD–ä6öçG&öÂ‚’ –6öçF–çVS°  ––b‚†ÆVöæRÓävWE÷6—F–öâ‚’ÒÆ–W"ÓävWE÷6—F–öâ‚’’äÖvæ—GVFU7"‚’â5"ƒCãb’ –6öçF–çVS°  ––b†ÆVöæRÓæÕöÆVFW"ÓÒÆ–W" –ÆVöæRÓä6ÆV$ÆVFW"‚“° –ÆVöæRÓå6WDö&¦V7F—fR„ô$¤T5D•dUô´”ÄÅô4„%ôôåôdôõBÂVæV×’“° –ÆVöæRÓå6WDö&¦V7F—fUF–ÖW"ƒ3“° –ÆVöæRÓå6WDÖ÷fU7FFR…TDÔõdUõ%Tâ“° —Ð§Ð §fö–@¤5VC£¥&V7EFôGF6²„4VçF—G’¦GF6¶W"§° ––b†GF6¶W"bbGF6¶W"Óä—5VB‚’’° ”5VB¦GF6¶W%VBÒ„5VB¢–GF6¶W#°  ’òòv†VâF†RÆ–W"GF6·2æöâÔÆVöæRVBÂæV&'’ÆVöæR¦ö–âF†Rf–v‡Bà ––b†GF6¶W%VBÓä—5Æ–W"‚’bbÕöåVEG—RÒTEE•Uôtäs ”Ö¶TæV&'”ÆVöæTFVfVæEÆ–W"‡F†—2“°  ’òòÆVöæRæWfW"&WFÆ–FRÂfÆVRg&öÒÂ÷"F&vWBF†RÆ–W"à ––b†ÕöåVEG—RÓÒTEE•UôtäsbbGF6¶W%VBÓä—5Æ–W"‚’’° ––b†Õöö&¦V7F—fRÓÒô$¤T5D•dUô´”ÄÅô4„%ôôåôdôõBÇÀ ’Õöö&¦V7F—fRÓÒô$¤T5D•dUô´”ÄÅô4„%ôå•ôÔTå2ÇÀ ’Õöö&¦V7F—fRÓÒô$¤T5D•dUôdÄTUô4„%ôôåôdôõEõD”ÄÅõ4dRÇÀ ’Õöö&¦V7F—fRÓÒô$¤T5D•dUôdÄTUô4„%ôôåôdôõEôÅt•2’° ”6ÆV$ö&¦V7F—fR‚“° •&W7F÷&U&Wf–÷W57FFR‚“° —Ð ”6ÆV$Æöö´fÆr‚“° ”6ÆV%ö–çDwVäB‚“° —&WGW&ã° —Ð —Ð  ––b„—5Æ–W"‚’bbGF6¶W"Óä—5VB‚’’° ”Ö¶TæV&'”ÆVöæTFVfVæEÆ–W"†GF6¶W"“° ”–æf÷&Ô×”vætödGF6²†GF6¶W"“° •6WDÆöö´fÆr†GF6¶W"ÂG'VR“° •6WDÆööµF–ÖW"ƒs“° —&WGW&ã° —Ð ¢6–fFVbd5õTEõõ%E0 ––b†ÕöåVE7FFRÓÒTEôE$•d”ärbb–åfV†–6ÆR‚ ’bb†Õ÷×•fV†–6ÆRÓçG&—fW"ÓÒF†—2ÇÂÕ÷×•fV†–6ÆRÓçG&—fW"bbÕ÷×•fV†–6ÆRÓçG&—fW"ÓæÕöåVE7FFRÓÒTEôE$•d”ärbbÕ÷×•fV†–6ÆRÓçG&—fW"ÓæÕöö&¦V7F—fRÒô$¤T5D•dUôÄTdUô4%ôäEôD”R’’°  ––b†Õ÷×•fV†–6ÆRÓåfV†–6ÆT7&VFVD'’ÓÒ$äDôÕõdT„”4ÄP ’bb†Õ÷×•fV†–6ÆRÓävWE7FGW2‚’ÓÒ5DEU5õ4”ÕÄRÇÂÕ÷×•fV†–6ÆRÓävWE7FGW2‚’ÓÒ5DEU5õ…•4”52 ’bbÕ÷×•fV†–6ÆRÓäWFõ–Æ÷BæÕöä6$Ö—76–öâÓÒÔ•54”ôåô5%T•4R’°  ”46$7G&Ã£¥7v—F6…fV†–6ÆUFõ&VÅ‡—6–72†Õ÷×•fV†–6ÆR“° –Õ÷×•fV†–6ÆRÓäWFõ–Æ÷BæÕöäG&—f–æu7G–ÆRÒE$•d”äu5E”ÄUôdô”Eô4%3° –Õ÷×•fV†–6ÆRÓäWFõ–Æ÷BæÕöä7'V—6U7VVBÒtÔUõ5TTEõDõô4$•õ5TTB¢Õ÷×•fV†–6ÆRÓç†æFÆ–ærÓåG&ç6Ö—76–öâædÖ„7'V—6UfVÆö6—G“° –Õ÷×•fV†–6ÆRÓå6WE7FGW2…5DEU5õ…•4”52“° —Ð —ÒVÇ6P¢6VæF–` ––b„—5VD–ä6öçG&öÂ‚’bb„6†$7&VFVD'’ÒÔ•54”ôåô4„"ÇÂ%&W7öæG5FõF‡&VG2’’° ”5VB¦÷W$ÆVFW"ÒÕöÆVFW#° ––b†÷W$ÆVFW"ÒGF6¶W"bb‚÷W$ÆVFW"ÇÂf–æEÆ–W%VB‚’Ò÷W$ÆVFW" ’bbGF6¶W"Óä—5VB‚’’°  ”5VB¦GF6¶W%VBÒ„5VB¢–GF6¶W#²  ––b†$æ÷DÆÆ÷vVEFôGV6²’° ––b‚GF6¶W%VBÓävWEvVöâ‚’Óä—5G—TÖVÆVR‚’’° –ÕöGV6´æD6÷fW%F–ÖW"Ò5F–ÖW#£¤vWEF–ÖT–äÖ–ÆÆ—6V6öæG2‚“° —&WGW&ã° —Ð —ÒVÇ6R–b†$7&÷V6…v†Vå6†ö÷F–ærÇÂ$¶–æF7F”–å6ÖUÆ6R’° •6WDGV6²„4vVæW&Ã£¤vWE&æFöÔçVÖ&W$–å&ævRƒÂ3’“° —&WGW&ã° —Ð  ––b†Õ÷VE7FG2ÓæÕöfV"ÃÒÒGF6¶W%VBÓæÕ÷VE7FG2ÓæÕ÷FV×W"’° ––b†Õ÷VE7FG2ÒGF6¶W%VBÓæÕ÷VE7FG2’° ––b„—4vætÖVÖ&W"‚’ÇÂÕöåVEG—RÓÒTEE•UôTÔU$tTä5’ÇÂÕöåVEG—RÓÒTEE•Uôd•$TÔâ’° •&Vv—7FW%F‡&VEv—F„væuVG2†GF6¶W%VB“° —Ð ––b‚GF6¶W%VBÓävWEvVöâ‚’Óä—5G—TÖVÆVR‚’bbvWEvVöâ‚’Óä—5G—TÖVÆVR‚’’° •6WDö&¦V7F—fR„ô$¤T5D•dUôdÄTUô4„%ôôåôdôõEõD”ÄÅõ4dRÂGF6¶W"“° •6WDÖ÷fU7FFR…TDÔõdUõ%Tâ“° —ÒVÇ6R° •6WDö&¦V7F—fR„ô$¤T5D•dUô´”ÄÅô4„%ôôåôdôõBÂGF6¶W"“° •6WDö&¦V7F—fUF–ÖW"ƒ#“° —Ð —Ð —ÒVÇ6R° •6WDö&¦V7F—fR„ô$¤T5D•dUôdÄTUô4„%ôôåôdôõEõD”ÄÅõ4dRÂGF6¶W%VB“° •6WDÖ÷fU7FFR…TDÔõdUõ%Tâ“° ––b†GF6¶W%VBÓävWEvVöâ‚’Óä—5G—TÖVÆVR‚’ •6’…4õTäEõTEôdÄTUõ%Tâ“° —Ð —Ð —Ð§Ð §fö–@¤5VC£¥VDæ–ÔÆ–vä4"„4æ–Ô&ÆVæD76ö6–F–öâ¦æ–Ô76ö2Âfö–B¦&r§° ”5VB§VBÒ„5VB¢–&s°  ”5fV†–6ÆR§fV‚ÒVBÓæÕ÷×•fV†–6ÆS° ––b†æ–Ô76ö2 –æ–Ô76ö2Óæ&ÆVæDFVÇFÒÓãc°  ––b‚VBÓä—4æ÷D–åw&V6¶VEfV†–6ÆR‚’ —&WGW&ã°  ––b‚VBÓäVçFW&–æt6"‚’’°¢6–fFVbd5õTEõõ%E0 ––b‡VBÓæÕöåVE7FFRÒTEôE$•d”är¢6VæF–` —VBÓåV—DVçFW&–æt6"‚“°  —&WGW&ã° —Ð ––b‡VBÓæÕöd†VÇF‚ÓÒãb’° —VBÓåV—DVçFW&–æt6"‚“° —&WGW&ã° —Ð –&ööÂ—G5fâÒfV‚Óæ$—5fã° –&ööÂ—G4'W2ÒfV‚Óæ$—4'W3°¢6–fFVbd•…ô%Tu0 –&ööÂ—G4Æ÷rÒfV‚Óæ$Æ÷ufV†–6ÆS°¢6VæF–` –TFö÷'2VçFW$Fö÷#° ”æ–ÖF–öä–BVçFW$æ–Ó°  —7v—F6‚‡VBÓæÕ÷fV„Fö÷"’° –66R4%ôDôõ%õ$c  –—G5fâÒfÇ6S° –VçFW$Fö÷"ÒDôõ%ôe$ôåEõ$”t…C° –'&V³° –66R4%ôDôõ%õ%#  –VçFW$Fö÷"ÒDôõ%õ$T%õ$”t…C° –'&V³° –66R4%ôDôõ%ôÄc  –—G5fâÒfÇ6S° –VçFW$Fö÷"ÒDôõ%ôe$ôåEôÄTeC° –'&V³° –66R4%ôDôõ%ôÅ#  –VçFW$Fö÷"ÒDôõ%õ$T%ôÄTeC° –'&V³° –FVfVÇC  –'&V³° —Ð  ––b‡fV‚Óä—4Fö÷$Ö—76–ær†VçFW$Fö÷"’ÇÂfV‚Óä—4Fö÷$gVÆÇ”÷Vâ†VçFW$Fö÷"’’°  —fV‚ÓäWFõ–Æ÷BæÕöä7'V—6U7VVBÒ° ––b‡VBÓæÕöåVE7FFRÓÒTEô4$¤4²’° —VBÓåVDæ–ÔFö÷$÷Vä4"†æ–ÂÂVB“° —&WGW&ã° —Ð ––b†VçFW$Fö÷"ÒDôõ%ôe$ôåEôÄTeBbbVçFW$Fö÷"ÒDôõ%õ$T%ôÄTeB’° ––b†—G5fâ’° –VçFW$æ–ÒÒä”Õõ5DEõdåôtUEô”åõ$T%õ$…3° —ÒVÇ6R–b†—G4'W2’° –VçFW$æ–ÒÒä”Õõ5DEô4ô4…ôtUEô”åõ$…3°¢6–fFVbd•…ô%Tu0 —ÒVÇ6R–b†—G4Æ÷r’° –VçFW$æ–ÒÒä”Õõ5DEô4%ôtUEô”åôÄõõ$…3°¢6VæF–` —ÒVÇ6R° –VçFW$æ–ÒÒä”Õõ5DEô4%ôtUEô”åõ$…3° —Ð —ÒVÇ6R–b†—G5fâ’° –VçFW$æ–ÒÒä”Õõ5DEõdåôtUEô”åõ$T%ôÄ…3° —ÒVÇ6R–b†—G4'W2’° –VçFW$æ–ÒÒä”Õõ5DEô4ô4…ôtUEô”åôÄ…3°¢6–fFVbd•…ô%Tu0 —ÒVÇ6R–b†—G4Æ÷r’° –VçFW$æ–ÒÒä”Õõ5DEô4%ôtUEô”åôÄõôÄ…3°¢6VæF–` —ÒVÇ6R° –VçFW$æ–ÒÒä”Õõ5DEô4%ôtUEô”åôÄ…3° —Ð —VBÓæÕ÷fV†–6ÆTæ–ÒÒ4æ–ÔÖævW#£¤FDæ–ÖF–öâ‡VBÓävWD6ÇV×‚’Â54ô4u%õ5DBÂVçFW$æ–Ò“° —VBÓæÕ÷fV†–6ÆTæ–ÒÓå6WDf–æ—6„6ÆÆ&6²…VDæ–ÔvWD–ä4"ÂVB“°  —ÒVÇ6R–b‡fV‚Óä6åVD÷VäÆö6·2‡VB’’°  —fV‚ÓäWFõ–Æ÷BæÕöä7'V—6U7VVBÒ° ž·×kh‘éì¶»§q«^uÁ•´ùµ}Ù•¡½½È°9%5}MQ}Q=UQ}1!L°€Ä¸Á˜¤ì(($¼¨€($¼¼ÕÁ±¥…Ñ”…¹½¹±ä¥¸A™½ÈÍ½µ”É•…Í½¸(%¥˜€ …Ù• ¤ì($%A•‘M•Ñ=ÕÑ…É¡¹¥°°Á•¤ì($%É•ÑÕÉ¸ì(%ô($¨¼(%•½½ÉÌ‘½½Èì(%ÍÝ¥Ñ €¡Á•´ùµ}Ù•¡½½È¤ì($%…Í”I}==I}Iè($$%‘½½È€ô==I}I=9Q}I%!Pì($$%‰É•…¬ì($%…Í”I}==I}IHè($$%‘½½È€ô==I}II}I%!Pì($$%‰É•…¬ì($%…Í”I}==I}1è($$%‘½½È€ô==I}I=9Q}1Pì($$%‰É•…¬ì($%…Í”I}==I}1Hè($$%‘½½È€ô==I}II}1Pì($$%‰É•…¬ì($%‘•™…Õ±Ðè($$%‰É•…¬ì(%ô(%‰½½°±½Í•½½È€ô€…Ù• ´ù%Í½½É5¥ÍÍ¥¹œ¡‘½½È¤ì((%¥¹ÐÁ…‘9¼ì(%¥˜€¡Á•´ù%ÍA±…å•È ¤¤ì(($$¼¼	UüQ¡¥ÌÝ¥±°…ÕÍ”É…Í ¥˜µ}¹A•‘QåÁ”¥Ì‰¥•ÈÑ¡•¸€Ä°Ñ¡•É”…É”½¹±ä€ÈÁ…‘Ì($%ÍÝ¥Ñ €¡Á•´ùµ}¹A•‘QåÁ”¤ì($$%…Í”AQeA}A1eHÄè($$$%Á…‘9¼€ô€Àì($$$%‰É•…¬ì($$%…Í”AQeA}A1eHÈè($$$%Á…‘9¼€ô€Äì($$$%‰É•…¬ì($$%…Í”AQeA}A1eHÌè($$$%Á…‘9¼€ô€Èì($$$%‰É•…¬ì($$%…Í”AQeA}A1eHÐè($$$%Á…‘9¼€ô€Ìì($$$%‰É•…¬ì($%ô($%A…¨Á…€ôA…èé•ÑA…¡Á…‘9¼¤ì($%‰½½°•¹¥¹•%Í%¹Ñ…Ð€ôÙ• ´ù%Í…È ¤€˜˜€ ¡ÕÑ½µ½‰¥±”¨¥Ù• ¤´ù…µ…”¹•Ñ¹¥¹•MÑ…ÑÕÌ ¤€øô€ÈÈÔì($%¥˜€ …Á…´ùÉ•A±…å•É½¹ÑÉ½±Í¥Í…‰±• ¤€˜˜Ù• ´ùµ}¹½½É1½¬€„ôI1=-}=I}M!UQ}==IL($$$˜˜€¡Á…´ù•ÑQ…É•Ð ¤($$$%ñðÁ…´ù9•ÝMÑ…Ñ”¹1•™ÑMÑ¥­`($$$%ñðÁ…´ù9•ÝMÑ…Ñ”¹1•™ÑMÑ¥­d($$$%ñðÁ…´ù9•ÝMÑ…Ñ”¹A…‘UÀ($$$%ñðÁ…´ù9•ÝMÑ…Ñ”¹A…‘½Ý¸($$$%ñðÁ…´ù9•ÝMÑ…Ñ”¹A…‘1•™Ð($$$%ñðÁ…´ù9•ÝMÑ…Ñ”¹A…‘I¥¡Ð¤($$%ñðÙ• ´ù‰%Í	ÕÌ($$%ñðÙ• ´ùµ}Á…É¥É”($$%ñð•¹¥¹•%Í%¹Ñ…Ð¤ì($$%±½Í•½½È€ô™…±Í”ì($%ô(%ô((¥™‘•˜Y}A}A=IQL(%¥˜€¡Á•´ùµ}½‰©•Ñ¥Ù”€ôô=	)Q%Y}1Y}I}9}%¤($%±½Í•½½È€ô™…±Í”ì(•¹‘¥˜((%¥˜€ …±½Í•½½È¤ì($%¥˜€ …Ù• ´ù%Í½½É5¥ÍÍ¥¹œ¡‘½½È¤€˜˜€…Ù• ´ù‰%Í	ÕÌ¤ì($$$ ¡ÕÑ½µ½‰¥±”¨¥Ù• ¤´ù…µ…”¹M•Ñ½½ÉMÑ…ÑÕÌ¡‘½½È°==I}MQQUM}M]%9%9¤ì($%ô($%A•‘M•Ñ=ÕÑ…É¡¹¥°°Á•¤ì($%É•ÑÕÉ¸ì(%ô((%¥˜€¡Á•´ù‰±••™Ñ•Éá¥Ñ¥¹…ÈñðÁ•´ù‰½¹¹…-¥±±Q¡•…É)…­•È¤ì(¥™‘•˜%a}	UL($%¥˜€ …Ù• ´ù%Í½½É5¥ÍÍ¥¹œ¡‘½½È¤¤($$$ ¡ÕÑ½µ½‰¥±”¨¥Ù• ¤´ù…µ…”¹M•Ñ½½ÉMÑ…ÑÕÌ¡‘½½È°==I}MQQUM}M]%9%9¤ì($%A•‘M•Ñ=ÕÑ…É¡¹¥°°Á•¤ì($%É•ÑÕÉ¸ì(•±Í”($%¥˜€ …Ù• ´ù%Í½½É5¥ÍÍ¥¹œ¡‘½½È¤¤($$$ ¡ÕÑ½µ½‰¥±”¨¥Ù• ¤´ù…µ…”¹M•Ñ½½ÉMÑ…ÑÕÌ¡==I}I=9Q}1P°==I}MQQUM}M]%9%9¤ì(•¹‘¥˜(%ô•±Í”ì($%ÍÝ¥Ñ €¡‘½½È¤ì($$%…Í”==I}I=9Q}1Pè($$$%Á•´ùµ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé‘‘¹¥µ…Ñ¥½¸¡Á•´ù•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}I}1=M}1!L¤ì($$$%‰É•…¬ì($$%…Í”==I}I=9Q}I%!Pè($$$%Á•´ùµ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé‘‘¹¥µ…Ñ¥½¸¡Á•´ù•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}I}1=M}I!L¤ì($$$%‰É•…¬ì($$%…Í”==I}II}1Pè($$$%Á•´ùµ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé‘‘¹¥µ…Ñ¥½¸¡Á•´ù•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}I}1=M}1!L¤ì($$$%‰É•…¬ì($$%…Í”==I}II}I%!Pè($$$%Á•´ùµ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé‘‘¹¥µ…Ñ¥½¸¡Á•´ù•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}I}1=M}I!L¤ì($$$%‰É•…¬ì($$%‘•™…Õ±Ðè($$$%‰É•…¬ì($%ô(%ô((%¥˜€¡Á•´ùµ}ÁY•¡¥±•¹¥´¤($%Á•´ùµ}ÁY•¡¥±•¹¥´´ùM•Ñ¥¹¥Í¡…±±‰…¬¡A•‘M•Ñ=ÕÑ…É°Á•¤ì(%É•ÑÕÉ¸ì)ô()Ù½¥)A•èé1¥¹•UÁA•‘]¥Ñ¡…È¡A•‘1¥¹•UÁA¡…Í”Á¡…Í”¤)ì(%‰½½°Ù•¡%ÍUÁÍ¥‘•½Ý¸€ô™…±Í”ì(%‰½½°ÍÑ¥±±•ÑÑ¥¹%¹=ÕÐ€ô™…±Í”ì(%¥¹ÐÙ•¡¹¥´ì(%™±½…ÐÍ•…ÑA½Í5Õ±Ð€ô€À¸Á˜ì(%™±½…ÐÕÉÉ•¹Ñhì(%™±½…Ð…‘©ÕÍÑ•‘Q¥µ•MÑ•Àì((%¥˜€¡I•Á±…äèé%ÍA±…å¥¹	…¬ ¤¤($%É•ÑÕÉ¸ì((%¥˜€ …‰¡…¹•‘M•…Ð€˜˜Á¡…Í”€„ô1%9}UA}Q=}I|È¤ì($%¥˜€¡IÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}I}M%P¤¤ì($$%M•ÑA•‘A½Í¥Ñ¥½¹%¹…È ¤ì($$%É•ÑÕÉ¸ì($%ô($%¥˜€¡IÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}I}M%Q}1<¤¤ì($$%M•ÑA•‘A½Í¥Ñ¥½¹%¹…È ¤ì($$%É•ÑÕÉ¸ì($%ô($%¥˜€¡IÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}I}M%Q}@¤¤ì($$%M•ÑA•‘A½Í¥Ñ¥½¹%¹…È ¤ì($$%É•ÑÕÉ¸ì($%ô($%¥˜€¡IÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}I}M%Q}A}1<¤¤ì($$%M•ÑA•‘A½Í¥Ñ¥½¹%¹…È ¤ì($$%É•ÑÕÉ¸ì($%ô($%‰¡…¹•‘M•…Ð€ôÑÉÕ”ì(%ô(%¥˜€¡Á¡…Í”€ôô1%9}UA}Q=}I}MQIP¤ì($%µ}Ù•5½Ù•MÁ••€ôY•Ñ½È À¸Á˜°€À¸Á˜°€À¸Á˜¤ì(%ô(%Y•¡¥±”€©Ù• €ôµ}Á5åY•¡¥±”ì(($¼¼9½ÐÅÕ¥Ñ”É¥¡Ð°%ÍUÁÍ¥‘•½Ý¸™Õ¹Œ¸¡•­Ì™½È€ðô€´À¸å˜¸(%¥˜€¡Ù• ´ù•ÑUÀ ¤¹è€ðô€´À¸á˜¤($%Ù•¡%ÍUÁÍ¥‘•½Ý¸€ôÑÉÕ”ì((%¥˜€¡µ}Ù•¡½½È€ôôI}==I}Iñðµ}Ù•¡½½È€ôôI}==I}IH¤ì($%¥˜€¡Ù•¡%ÍUÁÍ¥‘•½Ý¸¤ì($$%µ}™I½Ñ…Ñ¥½¹•ÍÐ€ô€µA$€¬Ù• ´ù•Ñ½ÉÝ…É ¤¹!•…‘¥¹œ ¤ì($%ô•±Í”¥˜€¡Ù• ´ù‰%Í	ÕÌ¤ì($$%µ}™I½Ñ…Ñ¥½¹•ÍÐ€ô€À¸Õ˜€¨A$€¬Ù• ´ù•Ñ½ÉÝ…É ¤¹!•…‘¥¹œ ¤ì($%ô•±Í”ì($$%µ}™I½Ñ…Ñ¥½¹•ÍÐ€ôÙ• ´ù•Ñ½ÉÝ…É ¤¹!•…‘¥¹œ ¤ì($%ô(%ô•±Í”¥˜€¡µ}Ù•¡½½È€ôôI}==I}1ñðµ}Ù•¡½½È€ôôI}==I}1H¤ì($%¥˜€¡Ù•¡%ÍUÁÍ¥‘•½Ý¸¤ì($$%µ}™I½Ñ…Ñ¥½¹•ÍÐ€ôÙ• ´ù•Ñ½ÉÝ…É ¤¹!•…‘¥¹œ ¤ì($%ô•±Í”¥˜€¡Ù• ´ù‰%Í	ÕÌ¤ì($$%µ}™I½Ñ…Ñ¥½¹•ÍÐ€ô€´À¸Õ˜€¨A$€¬Ù• ´ù•Ñ½ÉÝ…É ¤¹!•…‘¥¹œ ¤ì($%ô•±Í”ì($$%µ}™I½Ñ…Ñ¥½¹•ÍÐ€ôÙ• ´ù•Ñ½ÉÝ…É ¤¹!•…‘¥¹œ ¤ì($%ô(%ô•±Í”ì($$¼¼$‘½¸Ð­¹½ÜÝ¥±°Ñ¡¥ÌÁ…ÉÐ•Ù•ÈÉÕ¸¡µ…å‰”‰½…ÑÌü¤°‰ÕÐÑ¡”…µ”…±Í¼¡…¹‘±•ÌÑ¡…Ð¸$‘½¸Ð­¹½Ü¥Ì¥Ð¥¹Ñ•¹Ñ¥½¹…°¸(($%¥˜€¡Ù•¡%ÍUÁÍ¥‘•½Ý¸¤ì($$%µ}™I½Ñ…Ñ¥½¹•ÍÐ€ôÙ• ´ù•Ñ½ÉÝ…É ¤¹!•…‘¥¹œ ¤ì($%ô•±Í”¥˜€¡Ù• ´ù‰%Í	ÕÌ¤ì($$%µ}™I½Ñ…Ñ¥½¹•ÍÐ€ô€À¸Õ˜€¨A$€¬Ù• ´ù•Ñ½ÉÝ…É ¤¹!•…‘¥¹œ ¤ì($%ô•±Í”ì($$%µ}™I½Ñ…Ñ¥½¹•ÍÐ€ôÙ• ´ù•Ñ½ÉÝ…É ¤¹!•…‘¥¹œ ¤ì($%ô(%ô((%¥˜€ …‰%¹Y•¡¥±”¤($%Í•…ÑA½Í5Õ±Ð€ô€Ä¸Á˜ì((¥™‘•˜Y}A}A=IQL(%‰½½°µÕ±ÑáÑÉ…Ñ•‘É½µ¹¥´€ô™…±Í”ì(%‰½½°µÕ±ÑáÑÉ…Ñ•‘É½µ¹¥µ	ÕÌ€ô™…±Í”ì(%™±½…Ðé	±•¹ì(•¹‘¥˜(%¥˜€¡µ}ÁY•¡¥±•¹¥´¤ì($%Ù•¡¹¥´€ôµ}ÁY•¡¥±•¹¥´´ù…¹¥µ%ì(($%ÍÝ¥Ñ €¡Ù•¡¹¥´¤ì($$%…Í”9%5}MQ})-I}I!Lè($$%…Í”9%5}MQ})-I}1=}I!Lè($$%…Í”9%5}MQ})-I}1!Lè($$%…Í”9%5}MQ})-I}1=}1!Lè($$%…Í”9%5}MQ}Y9}Q}%9}II}1!Lè($$%…Í”9%5}MQ}Y9}Q}%9}II}I!Lè(¥™‘•˜Y}A}A=IQL($$$%µÕ±ÑáÑÉ…Ñ•‘É½µ¹¥´€ôÑÉÕ”ì($$$%é	±•¹€ô5…à¡µ}ÁY•¡¥±•¹¥´´ùÕÉÉ•¹ÑQ¥µ”€¼µ}ÁY•¡¥±•¹¥´´ù¡¥•É…É¡ä´ùÑ½Ñ…±1•¹Ñ €´€À¸Í˜°€À¸Á˜¤€¼€ Ä¸Á˜€´€À¸Í˜¤ì($$$$¼¼™…±°Ñ¡É½Õ (•¹‘¥˜($$%…Í”9%5}MQ}EU%-)-è($$%…Í”9%5}MQ}Q=UQ}1!Lè($$%…Í”9%5}MQ}Q=UQ}1=}1!Lè($$%…Í”9%5}MQ}Q=UQ}I!Lè($$%…Í”9%5}MQ}Q=UQ}1=}I!Lè(¥™‘•˜Y}A}A=IQL($$$%¥˜€ …µÕ±ÑáÑÉ…Ñ•‘É½µ¹¥´¤ì($$$$%µÕ±ÑáÑÉ…Ñ•‘É½µ¹¥´€ôÑÉÕ”ì($$$$%é	±•¹€ô5…à¡µ}ÁY•¡¥±•¹¥´´ùÕÉÉ•¹ÑQ¥µ”€¼µ}ÁY•¡¥±•¹¥´´ù¡¥•É…É¡ä´ùÑ½Ñ…±1•¹Ñ €´€À¸Õ˜°€À¸Á˜¤€¼€ Ä¸Á˜€´€À¸Õ˜¤ì($$$%ô($$$$¼¼™…±°Ñ¡É½Õ (•¹‘¥˜($$%…Í”9%5}MQ}I]1=UQ}1!Lè($$%…Í”9%5}MQ}I]1=UQ}I!Lè($$%…Í”9%5}MQ}Y9}Q}=UQ}II}1!Lè($$%…Í”9%5}MQ}Y9}Q}=UQ}II}I!Lè($$$%Í•…ÑA½Í5Õ±Ð€ôµ}ÁY•¡¥±•¹¥´´ùÕÉÉ•¹ÑQ¥µ”€¼µ}ÁY•¡¥±•¹¥´´ù¡¥•É…É¡ä´ùÑ½Ñ…±1•¹Ñ ì($$$%‰É•…¬ì($$%…Í”9%5}MQ}I}Q}%9}I!Lè($$%…Í”9%5}MQ}I}Q}%9}1!Lè(¥™‘•˜Y}A}A=IQL($$$%¥˜€¡Ù• €˜˜Ù• ´ù%Í…È ¤€˜˜Ù• ´ù‰%Í	ÕÌ¤ì($$$$%µÕ±ÑáÑÉ…Ñ•‘É½µ¹¥µ	ÕÌ€ôÑÉÕ”ì($$$$%é	±•¹€ô5¥¸¡µ}ÁY•¡¥±•¹¥´´ùÕÉÉ•¹ÑQ¥µ”€¼µ}ÁY•¡¥±•¹¥´´ù¡¥•É…É¡ä´ùÑ½Ñ…±1•¹Ñ °€À¸Õ˜¤€¼€À¸Õ˜ì($$$%ô($$$$¼¼™…±°Ñ¡É½Õ (•¹‘¥˜($$%…Í”9%5}MQ}EU%-),è($$%…Í”9%5}MQ}I}Q}%9}1=}1!Lè($$%…Í”9%5}MQ}I}Q}%9}1=}I!Lè($$%…Í”9%5}MQ}	=Q}I%Yè($$$%Í•…ÑA½Í5Õ±Ð€ôµ}ÁY•¡¥±•¹¥´´ù•ÑQ¥µ•1•™Ð ¤€¼µ}ÁY•¡¥±•¹¥´´ù¡¥•É…É¡ä´ùÑ½Ñ…±1•¹Ñ ì($$$%‰É•…¬ì($$%…Í”9%5}MQ}I}1=M}==I}1!Lè($$%…Í”9%5}MQ}I}1=M}==I}1=}1!Lè($$%…Í”9%5}MQ}I}1=M}==I}I!Lè($$%…Í”9%5}MQ}I}1=M}==I}1=}I!Lè($$%…Í”9%5}MQ}I}M!U1}I!Lè($$%…Í”9%5}MQ}I}M!U1}1=}I!Lè($$$%Í•…ÑA½Í5Õ±Ð€ô€À¸Á˜ì($$$%‰É•…¬ì($$%…Í”9%5}MQ}I}1=M}1!Lè($$%…Í”9%5}MQ}I}1=M}I!Lè($$%…Í”9%5}MQ}=!}=A9}1!Lè($$%…Í”9%5}MQ}=!}=A9}I!Lè($$%…Í”9%5}MQ}=!}Q}%9}1!Lè($$%…Í”9%5}MQ}=!}Q}%9}I!Lè($$%…Í”9%5}MQ}=!}Q}=UQ}1!Lè($$$%Í•…ÑA½Í5Õ±Ð€ô€Ä¸Á˜ì($$$%‰É•…¬ì($$%‘•™…Õ±Ðè($$$%‰É•…¬ì($%ô(%ô((%Y•Ñ½È¹••‘•‘A½Ìì((%¥˜€¡Á¡…Í”€ôô1%9}UA}Q=}I|È¤ì($%¹••‘•‘A½Ì€ô•ÑA½Í¥Ñ¥½¸ ¤ì(%ô•±Í”ì($%¹••‘•‘A½Ì€ô•ÑA½Í¥Ñ¥½¹Q½=Á•¹…É½½È¡Ù• °µ}Ù•¡½½È°Í•…ÑA½Í5Õ±Ð¤ì(%ô((%Y•Ñ½È…ÕÑ½iA½Ì€ô¹••‘•‘A½Ìì((%¥˜€¡Ù• ´ù‰%Í%¹]…Ñ•È¤ì($%¥˜€¡Ù• ´ùµ}Ù•¡QåÁ”€ôôY!%1}QeA}	=P€˜˜Ù• ´ù%ÍUÁÍ¥‘•½Ý¸ ¤¤($$%…ÕÑ½iA½Ì¹è€¬ô€Ä¸Á˜ì(%ô•±Í”ì($%A•‘A±…•µ•¹Ðèé¥¹‘i½½É½ÉA• ™…ÕÑ½iA½Ì¤ì(%ô((%¥˜€¡Á¡…Í”€ôô1%9}UA}Q=}I}9ñðÁ¡…Í”€ôô1%9}UA}Q=}I|È¤ì($%¹••‘•‘A½Ì¹è€ô•ÑA½Í¥Ñ¥½¸ ¤¹èì(($$¼¼•ÑÑ¥¹œ½ÕÐ($%¥˜€ …Ù• ´ù‰%Í	ÕÌñð€¡Ù• ´ù‰%Í	ÕÌ€˜˜Ù•¡%ÍUÁÍ¥‘•½Ý¸¤¤ì($$%™±½…Ð¹•áÑiMÁ••€ôµ}Ù•5½Ù•MÁ••¹è€´IY%Qd€¨Q¥µ•Èèé•ÑQ¥µ•MÑ•À ¤ì(($$$¼¼%˜Ý”É”¹½Ð¥¸É½Õ¹…Ð¹•áÐÍÑ•À°…ÁÁ±ä…¹¥µ…Ñ¥½¸($$%¥˜€¡¹••‘•‘A½Ì¹è€¬¹•áÑiMÁ••€øô…ÕÑ½iA½Ì¹è¤ì($$$%µ}Ù•5½Ù•MÁ••¹è€ô¹•áÑiMÁ••ì($$$%ÁÁ±å5½Ù•MÁ•• ¤ì($$$$¼¼I•µ½Ù¥¹œ‰•±½Ü±¥¹”‰É•…­ÌÑ¡”…¹¥µ…Ñ¥½¸($$$%¹••‘•‘A½Ì¹è€ô•ÑA½Í¥Ñ¥½¸ ¤¹èì($$%ô•±Í”ì($$$%¹••‘•‘A½Ì¹è€ô…ÕÑ½iA½Ì¹èì($$$%µ}Ù•5½Ù•MÁ••€ôY•Ñ½È À¸Á˜°€À¸Á˜°€À¸Á˜¤ì($$%ô($%ô(%ô((%¥˜€¡…ÕÑ½iA½Ì¹è€ø¹••‘•‘A½Ì¹è¤ì(¥™‘•˜Y}A}A=IQL($%¥˜€¡µÕ±ÑáÑÉ…Ñ•‘É½µ¹¥´¤ì($$%¹••‘•‘A½Ì¹è€¬ô€¡…ÕÑ½iA½Ì¹è€´¹••‘•‘A½Ì¹è¤€¨é	±•¹ì($%ô•±Í”ì(•¹‘¥˜($$%ÕÉÉ•¹Ñh€ô•ÑA½Í¥Ñ¥½¸ ¤¹èì($$%¥˜€¡µ}ÁY•¡¥±•¹¥´€˜˜Ù•¡¹¥´€„ô9%5}MQ}Y9}Q}%9}II}1!L€˜˜Ù•¡¹¥´€„ô9%5}MQ}Y9}1=M}==I}II}1!L€˜˜Ù•¡¹¥´€„ô9%5}MQ}Y9}1=M}==I}II}I!L€˜˜Ù•¡¹¥´€„ô9%5}MQ}Y9}Q}%9}II}I!L¤ì($$$%¹••‘•‘A½Ì¹è€ô…ÕÑ½iA½Ì¹èì($$$%µ}Ù•5½Ù•MÁ••€ôY•Ñ½È À¸Á˜°€À¸Á˜°€À¸Á˜¤ì($$%ô•±Í”¥˜€¡¹••‘•‘A½Ì¹è€ðÕÉÉ•¹Ñh€˜˜µ}ÁY•¡¥±•¹¥´€˜˜Ù•¡¹¥´€„ô9%5}MQ}Y9}1=M}==I}II}1!L€˜˜Ù•¡¹¥´€„ô9%5}MQ}Y9}1=M}==I}II}I!L¤ì($$$%…‘©ÕÍÑ•‘Q¥µ•MÑ•À€ô5…à¡µ}ÁY•¡¥±•¹¥´´ùÑ¥µ•MÑ•À°€À¸Å˜¤ì(($$$$¼¼Mµ½½Ñ¡±ä¡…¹”Á•Á½Í¥Ñ¥½¸($$$%¹••‘•‘A½Ì¹è€ôÕÉÉ•¹Ñh€´€¡ÕÉÉ•¹Ñh€´¹••‘•‘A½Ì¹è¤€¼€¡µ}ÁY•¡¥±•¹¥´´ù•ÑQ¥µ•1•™Ð ¤€¼…‘©ÕÍÑ•‘Q¥µ•MÑ•À¤ì($$%ô(¥™‘•˜Y}A}A=IQL($%ô(•¹‘¥˜(%ô•±Í”ì($$¼¼]”µ…ä¹••Ñ¼É…¥Í”ÕÀÑ¡”Á•($%¥˜€¡Á¡…Í”€ôô1%9}UA}Q=}I}MQIP¤ì($$%ÕÉÉ•¹Ñh€ô•ÑA½Í¥Ñ¥½¸ ¤¹èì(($$%¥˜€¡¹••‘•‘A½Ì¹è€øÕÉÉ•¹Ñh¤ì(¥™‘•˜Y}A}A=IQL($$$%¥˜€¡µÕ±ÑáÑÉ…Ñ•‘É½µ¹¥µ	ÕÌ¤ì($$$$%¹••‘•‘A½Ì¹è€ô€¡¹••‘•‘A½Ì¹è€´ÕÉÉ•¹Ñh¤€¨é	±•¹€¬ÕÉÉ•¹Ñhì($$$%ô•±Í”ì(•¹‘¥˜($$$$%¥˜€¡µ}ÁY•¡¥±•¹¥´€˜˜($$$$$$¡Ù•¡¹¥´€ôô9%5}MQ}I}Q}%9}I!LñðÙ•¡¹¥´€ôô9%5}MQ}I}Q}%9}1=}I!LñðÙ•¡¹¥´€ôô9%5}MQ}I}Q}%9}1!LñðÙ•¡¹¥´€ôô9%5}MQ}I}Q}%9}1=}1!L($$$$$$%ñðÙ•¡¹¥´€ôô9%5}MQ}EU%-),ñðÙ•¡¹¥´€ôô9%5}MQ}Y9}Q}%9}II}1!LñðÙ•¡¹¥´€ôô9%5}MQ}Y9}Q}%9}II}I!L¤¤ì($$$$$%…‘©ÕÍÑ•‘Q¥µ•MÑ•À€ô5…à¡µ}ÁY•¡¥±•¹¥´´ùÑ¥µ•MÑ•À°€À¸Å˜¤ì(($$$$$$¼¼Mµ½½Ñ¡±ä¡…¹”Á•Á½Í¥Ñ¥½¸($$$$$%¹••‘•‘A½Ì¹è€ô€¡¹••‘•‘A½Ì¹è€´ÕÉÉ•¹Ñh¤€¼€¡µ}ÁY•¡¥±•¹¥´´ù•ÑQ¥µ•1•™Ð ¤€¼…‘©ÕÍÑ•‘Q¥µ•MÑ•À¤€¬ÕÉÉ•¹Ñhì($$$$%ô•±Í”¥˜€¡¹Ñ•É¥¹…È ¤¤ì($$$$$%¹••‘•‘A½Ì¹è€ô5…à¡ÕÉÉ•¹Ñh°…ÕÑ½iA½Ì¹è¤ì($$$$%ô(¥™‘•˜Y}A}A=IQL($$$%ô(•¹‘¥˜($$%ô($%ô(%ô((%¥˜€¡Q¥µ•Èèé•ÑQ¥µ•%¹5¥±±¥Í•½¹‘Ì ¤€ðµ}¹A•‘MÑ…Ñ•Q¥µ•È¤($%ÍÑ¥±±•ÑÑ¥¹%¹=ÕÐ€ôÙ• ´ùµ}Ù•¡QåÁ”€„ôY!%1}QeA}	=Pñð‰=¹	½…Ðì((%¥˜€ …ÍÑ¥±±•ÑÑ¥¹%¹=ÕÐ¤ì($%µ}™I½Ñ…Ñ¥½¹ÕÈ€ôµ}™I½Ñ…Ñ¥½¹•ÍÐì(%ô•±Í”ì($%™±½…Ð±¥µ¥Ñ•‘•ÍÐ€ô•¹•É…°èé1¥µ¥ÑI…‘¥…¹¹±”¡µ}™I½Ñ…Ñ¥½¹•ÍÐ¤ì($%™±½…ÐÑ¥µ•U¹Ñ¥±MÑ…Ñ•¡…¹”€ô€¡µ}¹A•‘MÑ…Ñ•Q¥µ•È€´Q¥µ•Èèé•ÑQ¥µ•%¹5¥±±¥Í•½¹‘Ì ¤¤¼ØÀÀ¸Á˜ì(($%¥˜€¡Ñ¥µ•U¹Ñ¥±MÑ…Ñ•¡…¹”€ðô€À¸Á˜¤ì($$%µ}Ù•=™™Í•ÑM••¬¹à€ô€À¸Á˜ì($$%µ}Ù•=™™Í•ÑM••¬¹ä€ô€À¸Á˜ì($%ô($%µ}Ù•=™™Í•ÑM••¬¹è€ô€À¸Á˜ì(($%¹••‘•‘A½Ì€´ôÑ¥µ•U¹Ñ¥±MÑ…Ñ•¡…¹”€¨µ}Ù•=™™Í•ÑM••¬ì(($%¥˜€¡A$€¬µ}™I½Ñ…Ñ¥½¹ÕÈ€ð±¥µ¥Ñ•‘•ÍÐ¤ì($$%±¥µ¥Ñ•‘•ÍÐ€´ô€È€¨A$ì($%ô•±Í”¥˜€¡µ}™I½Ñ…Ñ¥½¹ÕÈ€´A$€ø±¥µ¥Ñ•‘•ÍÐ¤ì($$%±¥µ¥Ñ•‘•ÍÐ€¬ô€È€¨A$ì($%ô($%µ}™I½Ñ…Ñ¥½¹ÕÈ€´ô€¡µ}™I½Ñ…Ñ¥½¹ÕÈ€´±¥µ¥Ñ•‘•ÍÐ¤€¨€ Ä¸Á˜€´Ñ¥µ•U¹Ñ¥±MÑ…Ñ•¡…¹”¤ì(%ô((%¥˜€¡Í•…ÑA½Í5Õ±Ð€ø€À¸É˜ñðÙ•¡%ÍUÁÍ¥‘•½Ý¸¤ì($%M•ÑA½Í¥Ñ¥½¸¡¹••‘•‘A½Ì¤ì($%M•Ñ!•…‘¥¹œ¡µ}™I½Ñ…Ñ¥½¹ÕÈ¤ì(%ô•±Í”ì($%5…ÑÉ¥àÙ•¡½½É5…Ð¡Ù• ´ù•Ñ5…ÑÉ¥à ¤¤ì($%Ù•¡½½É5…Ð¹•ÑA½Í¥Ñ¥½¸ ¤€¬ô5Õ±Ñ¥Á±äÍàÌ¡Ù•¡½½É5…Ð°•Ñ1½…±A½Í¥Ñ¥½¹Q½=Á•¹…É½½È¡Ù• °µ}Ù•¡½½È°€À¸Á˜¤¤ì($$¼¼Y½Õ …¹¥µÌ…É”¥¹Ù•ÉÑ•°Í¼Ñ¡•äÉ”™¥á¥¹œ¥Ð¡•É”¸($%•Ñ5…ÑÉ¥à ¤€ôÙ•¡½½É5…Ðì(%ô()ô()Ù½¥)A•èéM•Ñ…É)…¬¡Y•¡¥±”¨…È¤)ì(%Õ¥¹Ðà‘½½É±…œì(%•½½ÉÌ‘½½Èì(%A•€©Á•‘%¹M•…Ð€ô¹¥°ì((%¥˜€¡…È´ù%Í	½…Ð ¤¤($%É•ÑÕÉ¸ì((%ÍÝ¥Ñ €¡µ}Ù•¡½½È¤ì($%…Í”I}==I}Iè($$%‘½½É±…œ€ôI}==I}1}Iì($$%‘½½È€ô==I}I=9Q}I%!Pì($$%¥˜€¡…È´ùÁA…ÍÍ•¹•ÉÍlÁt¤ì($$$%Á•‘%¹M•…Ð€ô…È´ùÁA…ÍÍ•¹•ÉÍlÁtì($$%ô•±Í”¥˜€¡µ}¹A•‘QåÁ”€ôôAQeA}=@¤ì($$$%Á•‘%¹M•…Ð€ô…È´ùÁÉ¥Ù•Èì($$%ô($$%‰É•…¬ì($%…Í”I}==I}IHè($$%‘½½É±…œ€ôI}==I}1}IHì($$%‘½½È€ô==I}II}I%!Pì($$%Á•‘%¹M•…Ð€ô…È´ùÁA…ÍÍ•¹•ÉÍlÉtì($$%‰É•…¬ì($%…Í”I}==I}1è($$%‘½½É±…œ€ôI}==I}1}1ì($$%‘½½È€ô==I}I=9Q}1Pì($$%Á•‘%¹M•…Ð€ô…È´ùÁÉ¥Ù•Èì($$%‰É•…¬ì($%…Í”I}==I}1Hè($$%‘½½É±…œ€ôI}==I}1}1Hì($$%‘½½È€ô==I}II}1Pì($$%Á•‘%¹M•…Ð€ô…È´ùÁA…ÍÍ•¹•ÉÍlÅtì($$%‰É•…¬ì($%‘•™…Õ±Ðè($$%‘½½É±…œ€ôI}==I}1}U9-9=]8ì($$%‰É•…¬ì(%ô((%¥˜¡…È´ù‰%Í	ÕÌ¤($%Á•‘%¹M•…Ð€ô…È´ùÁÉ¥Ù•Èì((%¥˜€¡µ}™!•…±Ñ €ø€À¸Á˜€˜˜€¡%ÍA±…å•È ¤ñðµ}½‰©•Ñ¥Ù”€ôô=	)Q%Y}-%11}!I}=9}==Pñðµ}½‰©•Ñ¥Ù”€ôô=	)Q%Y}-%11}!I}9e}59Lñð($$€€€€€€€€€€€€€€€€€€€€€¡…È´ùY•¡¥±•É•…Ñ•‘	ä€„ô5%MM%=9}Y!%1€˜˜…È´ù•Ñ5½‘•±%¹‘•à ¤€„ô5%}=<¤¤¤($%¥˜€¡Á•‘%¹M•…Ð€˜˜€…Á•‘%¹M•…Ð´ù%ÍA•‘½¥¹É¥Ù•	åM¡½½Ñ¥¹œ ¤€˜˜Á•‘%¹M•…Ð´ùµ}¹A•‘MÑ…Ñ”€ôôA}I%Y%9¤($$%¥˜€¡µ}¹A•‘MÑ…Ñ”€„ôA}I),€˜˜€…µ}ÁY•¡¥±•¹¥´¤($$$%¥˜€ ¡…È´ù%Í½½ÉI•…‘ä¡‘½½È¤ñð…È´ù%Í½½ÉÕ±±å=Á•¸¡‘½½È¤¤¤($$$$%¥˜€ ……È´ù‰%Í	•¥¹…É)…­•€˜˜€„¡‘½½É±…œ€˜…È´ùµ}¹•ÑÑ¥¹%¹±…Ì¤€˜˜€„¡‘½½É±…œ€˜…È´ùµ}¹•ÑÑ¥¹=ÕÑ±…Ì¤¤($$$$$%M•Ñ…É)…­}±±±•…È¡…È°µ}Ù•¡½½È°‘½½É±…œ¤ì)ô()Ù½¥)A•èéM•Ñ…É)…­}±±±•…È¡Y•¡¥±”€©…È°Õ¥¹ÐÌÈ‘½½É9½‘”°Õ¥¹ÐÌÈ‘½½É±…œ¤)ì(%I•µ½Ù•]•…Á½¹]¡•¹¹Ñ•É¥¹Y•¡¥±” ¤ì(%¥˜€¡µ}¹A•‘MÑ…Ñ”€„ôA}M-}H¤($%M•ÑMÑ½É•‘MÑ…Ñ” ¤ì((%µ}ÁM••­Q…É•Ð€ô…Èì(%µ}ÁM••­Q…É•Ð´ùI•¥ÍÑ•ÉI•™•É•¹” ¡¹Ñ¥Ñä¨¨¤™µ}ÁM••­Q…É•Ð¤ì(%M•ÑA•‘MÑ…Ñ”¡A}I),¤ì(%…È´ù‰%Í	•¥¹…É)…­•€ôÑÉÕ”ì(%µ}Á5åY•¡¥±”€ô€¡Y•¡¥±”¨¥µ}ÁM••­Q…É•Ðì(%µ}Á5åY•¡¥±”´ùI•¥ÍÑ•ÉI•™•É•¹” ¡¹Ñ¥Ñä¨¨¤™µ}Á5åY•¡¥±”¤ì($ ¡Y•¡¥±”¨¥µ}ÁM••­Q…É•Ð¤´ùµ}¹9Õµ•ÑÑ¥¹%¸¬¬ì((%M…ä¡µ}¹A•‘QåÁ”€ôôAQeA}=@€üM=U9}A}IIMQ}=@€èM=U9}A}I})-%9¤ì(%Y•Ñ½È…É¹Ñ•ÉA½Ìì(%…É¹Ñ•ÉA½Ì€ô•ÑA½Í¥Ñ¥½¹Q½=Á•¹…É½½È¡…È°µ}Ù•¡½½È¤ì((%…È´ùµ}¹•ÑÑ¥¹%¹±…Ìðô‘½½É±…œì(%µ}Ù•=™™Í•ÑM••¬€ô…É¹Ñ•ÉA½Ì€´•ÑA½Í¥Ñ¥½¸ ¤ì(%µ}¹A•‘MÑ…Ñ•Q¥µ•È€ôQ¥µ•Èèé•ÑQ¥µ•%¹5¥±±¥Í•½¹‘Ì ¤€¬€ØÀÀì(%™±½…Ðé¥™˜€ô5…à À¸Á˜°…É¹Ñ•ÉA½Ì¹è€´•ÑA½Í¥Ñ¥½¸ ¤¹è¤ì(%‰UÍ•Í½±±¥Í¥½¸€ô™…±Í”ì((%¥˜€¡µ}Ù•¡½½È€ôôI}==I}1ñðµ}Ù•¡½½È€ôôI}==I}1H¤($%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé	±•¹‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°é¥™˜€ø€Ð¸Ñ˜€ü9%5}MQ}I}1%9!%}==I}1!L€è9%5}MQ}I}1%9}==I}1!L°€Ð¸Á˜¤ì(%•±Í”($%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé	±•¹‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°é¥™˜€ø€Ð¸Ñ˜€ü9%5}MQ}I}1%9!%}==I}I!L€è9%5}MQ}I}1%9}==I}I!L°€Ð¸Á˜¤ì((%µ}ÁY•¡¥±•¹¥´´ùM•Ñ¥¹¥Í¡…±±‰…¬¡A•‘¹¥µ±¥¹°Ñ¡¥Ì¤ì)ô()Ù½¥)A•èéM•Ñ	•¥¹É…•‘É½µ…È¡Y•¡¥±”€©Ù• °Õ¥¹ÐÌÈÙ•¡¹Ñ•ÉQåÁ”°‰½½°ÅÕ¥­)…¬¤)ì(%¥˜€¡µ}¹A•‘MÑ…Ñ”€ôôA}I}I=5}H¤($%É•ÑÕÉ¸ì((%‰UÍ•Í½±±¥Í¥½¸€ô™…±Í”ì(%µ}Ù•5½Ù•MÁ••€ôY•Ñ½È À¸Á˜°€À¸Á˜°€À¸Á˜¤ì(%µ}¹1…ÍÑA•‘MÑ…Ñ”€ôA}%1ì(%M•Ñ5½Ù•MÑ…Ñ”¡A5=Y}MQ%10¤ì(%µ}ÁM••­Q…É•Ð€ôÙ• ì(%µ}ÁM••­Q…É•Ð´ùI•¥ÍÑ•ÉI•™•É•¹” ¡¹Ñ¥Ñä€¨¨¤€™µ}ÁM••­Q…É•Ð¤ì(%µ}Ù•¡½½È€ôÙ•¡¹Ñ•ÉQåÁ”ì(%¥˜€¡µ}Ù•¡½½È€ôôI}==I}1¤ì($%¥˜€¡Ù• ´ùÁÉ¥Ù•È€˜˜Ù• ´ùÁÉ¥Ù•È´ù%ÍA±…å•È ¤¤($$%Ù• ´ùM•ÑMÑ…ÑÕÌ¡MQQUM}A1eI}%M	1¤ì($%•±Í”($$%Ù• ´ùM•ÑMÑ…ÑÕÌ¡MQQUM}	9=9¤ì(%ô(%I•µ½Ù•%¹…É¹¥µÌ ¤ì(%M•Ñ5½Ù•MÑ…Ñ”¡A5=Y}9=9¤ì(%1¥¹•UÁA•‘]¥Ñ¡…È¡1%9}UA}Q=}I}MQIP¤ì(%µ}ÁY•¡¥±•¹¥´€ô¹¥°ì(%M•ÑA•‘MÑ…Ñ”¡A}I}I=5}H¤ì(%‰¡…¹•‘M•…Ð€ô™…±Í”ì(%‰]¥±±	•EÕ¥­)…­•€ôÅÕ¥­)…¬ì((%M•Ñ!•…‘¥¹œ¡µ}™I½Ñ…Ñ¥½¹ÕÈ¤ì((%M…ä¡M=U9}A}I})-¤ì(%M•ÑI…‘¥½MÑ…Ñ¥½¸ ¤ì(%Ù• ´ùµ}¹•ÑÑ¥¹=ÕÑ±…Ìðô•Ñ…É½½É±…œ¡µ}Ù•¡½½È¤ì)ô()Ù½¥)A•èé	•¥¹É…•‘É½µ…È¡Ù½¥¤)ì(%¹¥µ	±•¹‘ÍÍ½¥…Ñ¥½¸€©…¹¥µÍÍ½Œì(%¹¥µ…Ñ¥½¹%•¹Ñ•É¹¥´ì(%‰½½°‘½¹ÑIÕ¹¹¥´€ô™…±Í”ì(%A•‘1¥¹•UÁA¡…Í”±¥¹•UÁQåÁ”ì((%¥˜€ …µ}ÁY•¡¥±•¹¥´¤ì($%¹¥µ5…¹…•Èèé	±•¹‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°µ}…¹¥µÉ½ÕÀ°9%5}MQ}%1°€ÄÀÀ¸Á˜¤ì($%…¹¥µÍÍ½Œ€ôIÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}I}M%P¤ì($%¥˜€ ……¹¥µÍÍ½Œ¤ì($$%…¹¥µÍÍ½Œ€ôIÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}I}M%Q}1<¤ì($$%¥˜€ ……¹¥µÍÍ½Œ¤ì($$$%…¹¥µÍÍ½Œ€ôIÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}I}M%Q}@¤ì($$$%¥˜€ ……¹¥µÍÍ½Œ¤($$$$%…¹¥µÍÍ½Œ€ôIÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}I}M%Q}A}1<¤ì($$%ô($%ô($%¥˜€¡…¹¥µÍÍ½Œ¤($$%…¹¥µÍÍ½Œ´ù‰±•¹‘•±Ñ„€ô€´ÄÀÀÀ¸Á˜ì(($%¥˜€¡µ}Ù•¡½½È€ôôI}==I}1ñðµ}Ù•¡½½È€ôôI}==I}1H¤ì($$%¥˜€¡‰]¥±±	•EÕ¥­)…­•¤ì($$$%•¹Ñ•É¹¥´€ô9%5}MQ}EU%-)-ì($$%ô•±Í”¥˜€¡µ}Á5åY•¡¥±”´ù‰1½ÝY•¡¥±”¤ì($$$%•¹Ñ•É¹¥´€ô9%5}MQ})-I}1=}1!Lì($$%ô•±Í”ì($$$%•¹Ñ•É¹¥´€ô9%5}MQ})-I}1!Lì($$%ô($%ô•±Í”¥˜€¡µ}Ù•¡½½È€ôôI}==I}Iñðµ}Ù•¡½½È€ôôI}==I}IH¤ì($$%¥˜€¡µ}Á5åY•¡¥±”´ù‰1½ÝY•¡¥±”¤($$$%•¹Ñ•É¹¥´€ô9%5}MQ})-I}1=}I!Lì($$%•±Í”($$$%•¹Ñ•É¹¥´€ô9%5}MQ})-I}I!Lì($%ô•±Í”($$%‘½¹ÑIÕ¹¹¥´€ôÑÉÕ”ì((($%¥˜€ …‘½¹ÑIÕ¹¹¥´¤($$%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé‘‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°•¹Ñ•É¹¥´¤ì(($%µ}ÁY•¡¥±•¹¥´´ùM•Ñ¥¹¥Í¡…±±‰…¬¡A•‘M•ÑÉ…•‘=ÕÑ…É°Ñ¡¥Ì¤ì($%±¥¹•UÁQåÁ”€ô1%9}UA}Q=}I}MQIPì(%ô•±Í”¥˜€¡µ}ÁY•¡¥±•¹¥´´ùÕÉÉ•¹ÑQ¥µ”€ðô€Ä¸Ñ˜¤ì($%µ}Ù•5½Ù•MÁ••€ôY•Ñ½È À¸Á˜°€À¸Á˜°€À¸Á˜¤ì($%±¥¹•UÁQåÁ”€ô1%9}UA}Q=}I}MQIPì(%ô•±Í”ì($%±¥¹•UÁQåÁ”€ô1%9}UA}Q=}I|Èì(%ô($(%1¥¹•UÁA•‘]¥Ñ¡…È¡±¥¹•UÁQåÁ”¤ì(¥™‘•˜Y}A}A=IQL(%¥˜€¡µ}½‰©•Ñ¥Ù”€ôô=	)Q%Y}1Y}I}9}%¤ì($%¥˜€¡µ}Á5åY•¡¥±”¤ì($$%µ}Á5åY•¡¥±”´ùAÉ½•ÍÍ=Á•¹½½È¡µ}Ù•¡½½È°9%5}MQ}9U4°µ}ÁY•¡¥±•¹¥´´ùÕÉÉ•¹ÑQ¥µ”€¨€Ô¸Á˜¤ì($%ô(%ô(•¹‘¥˜)ô()Ù½¥)A•èéM•Ñ¹Ñ•É…È¡Y•¡¥±”€©…È°Õ¥¹ÐÌÈÕ¹ÕÍ•¤)ì(%¥˜€¡É…¹•Ìèé%ÍQ¡¥Í…É	•¥¹…ÉÉ¥•‘	å¹åÉ…¹”¡…È¤¤ì($%I•ÍÑ½É•AÉ•Ù¥½ÕÍMÑ…Ñ” ¤ì($%I•ÍÑ½É•AÉ•Ù¥½ÕÍ=‰©•Ñ¥Ù” ¤ì(%ô•±Í”ì($%Õ¥¹Ðà‘½½É±…œì($%•½½ÉÌ‘½½Èì($%ÍÝ¥Ñ €¡µ}Ù•¡½½È¤ì($$%…Í”I}==I}Iè($$$%‘½½É±…œ€ôI}==I}1}Iì($$$%‘½½È€ô==I}I=9Q}I%!Pì($$$%‰É•…¬ì($$%…Í”I}==I}IHè($$$%‘½½É±…œ€ôI}==I}1}IHì($$$%‘½½È€ô==I}II}I%!Pì($$$%‰É•…¬ì($$%…Í”I}==I}1è($$$%‘½½É±…œ€ôI}==I}1}1ì($$$%‘½½È€ô==I}I=9Q}1Pì($$$%‰É•…¬ì($$%…Í”I}==I}1Hè($$$%‘½½É±…œ€ôI}==I}1}1Hì($$$%‘½½È€ô==I}II}1Pì($$$%‰É•…¬ì($$%‘•™…Õ±Ðè($$$%‘½½É±…œ€ôI}==I}1}U9-9=]8ì($$$%‰É•…¬ì($%ô($%¥˜€ …%ÍA•‘%¹½¹ÑÉ½° ¤ñðµ}™!•…±Ñ €ðô€À¸Á˜($$%ñð‘½½É±…œ€˜…È´ùµ}¹•ÑÑ¥¹%¹±…Ìñð‘½½É±…œ€˜…È´ùµ}¹•ÑÑ¥¹=ÕÑ±…Ì($$%ñð…È´ù‰%Í	•¥¹…É)…­•ñðµ}ÁY•¡¥±•¹¥´($$%ñð‘½½É±…œ€˜˜€……È´ù%Í½½ÉI•…‘ä¡‘½½È¤€˜˜€……È´ù%Í½½ÉÕ±±å=Á•¸¡‘½½È¤¤($$%M•Ñ5½Ù•MÑ…Ñ”¡A5=Y}MQ%10¤ì($%•±Í”($$%M•Ñ¹Ñ•É…É}±±±•…È¡…È°µ}Ù•¡½½È°‘½½É±…œ¤ì(%ô)ô()Ù½¥)A•èéM•Ñ¹Ñ•É…É}±±±•…È¡Y•¡¥±”€©…È°Õ¥¹ÐÌÈ‘½½É9½‘”°Õ¥¹ÐÌÈ‘½½É±…œ¤)ì(%™±½…Ðé¥™˜€ô€À¸Á˜ì(%I•µ½Ù•]•…Á½¹]¡•¹¹Ñ•É¥¹Y•¡¥±” ¤ì(%…È´ùµ}¹•ÑÑ¥¹%¹±…Ìðô‘½½É±…œì(%‰Y•¡¹Ñ•É½½É%Í	±½­•€ô™…±Í”ì(%¥˜€¡µ}¹A•‘MÑ…Ñ”€„ôA}M-}H€˜˜µ}¹A•‘MÑ…Ñ”€„ôA}M-}%9}	=P¤($%M•ÑMÑ½É•‘MÑ…Ñ” ¤ì((%µ}ÁM••­Q…É•Ð€ô…Èì(%µ}ÁM••­Q…É•Ð´ùI•¥ÍÑ•ÉI•™•É•¹” ¡¹Ñ¥Ñä€¨¨¤€™µ}ÁM••­Q…É•Ð¤ì(%µ}Ù•¡½½È€ô‘½½É9½‘”ì(%M•ÑA•‘MÑ…Ñ”¡A}9QI}H¤ì(%¥˜€¡µ}Ù•¡½½È€ôôI}==I}I€˜˜µ}½‰©•Ñ¥Ù”€ôô=	)Q%Y}9QI}I}M}I%YH€˜˜…È´ùµ}Ù•¡QåÁ”€„ôY!%1}QeA}	%-¤ì($%…È´ù‰%Í	•¥¹…É)…­•€ôÑÉÕ”ì(%ô((%µ}Á5åY•¡¥±”€ô€¡Y•¡¥±”¨¥µ}ÁM••­Q…É•Ðì(%µ}Á5åY•¡¥±”´ùI•¥ÍÑ•ÉI•™•É•¹” ¡¹Ñ¥Ñä¨¨¤€™µ}Á5åY•¡¥±”¤ì($ ¡Y•¡¥±”¨¥µ}ÁM••­Q…É•Ð¤´ùµ}¹9Õµ•ÑÑ¥¹%¸¬¬ì(%‰UÍ•Í½±±¥Í¥½¸€ô™…±Í”ì(%Y•Ñ½È‘½½É=Á•¹A½Ì€ô•ÑA½Í¥Ñ¥½¹Q½=Á•¹…É½½È¡…È°µ}Ù•¡½½È¤ì(($¼¼	•…ÕÍ”‰ÕÍ•Ì¡…Ù”ÍÑ…¥ÉÌ(%¥˜€ …µ}Á5åY•¡¥±”´ù‰%Í	ÕÌ¤($%é¥™˜€ô5…à À¸Á˜°‘½½É=Á•¹A½Ì¹è€´•ÑA½Í¥Ñ¥½¸ ¤¹è¤ì((%µ}Ù•=™™Í•ÑM••¬€ô‘½½É=Á•¹A½Ì€´•ÑA½Í¥Ñ¥½¸ ¤ì(%µ}¹A•‘MÑ…Ñ•Q¥µ•È€ôQ¥µ•Èèé•ÑQ¥µ•%¹5¥±±¥Í•½¹‘Ì ¤€¬€ØÀÀì(%¥˜€¡…È´ù%Í	½…Ð ¤¤ì(¥™¹‘•˜%a}	UL($%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé	±•¹‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}	=Q}I%Y°€ÄÀÀ¸Á˜¤ì(•±Í”($%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé	±•¹‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°…È´ù•ÑÉ¥Ù•É¹¥´ ¤°€ÄÀÀ¸Á˜¤ì(•¹‘¥˜(($$¼¼=Ñ¡•ÉÝ¥Í”‰½…Ð•¹Ñ•È­•äÍ½µ•Ñ¥µ•ÌÁÉ½•ÍÍ•µÕ±Ñ¥Á±”Ñ¥µ•Ì°Í¼å½Ô•¹Ñ•È½•á¥Ð¥¹ÍÑ…¹Ñ±ä(¥˜‘•™¥¹•Y}A}A=IQLñð‘•™¥¹•%a}	UL($%A•‘M•Ñ%¹…É¡¹¥°°Ñ¡¥Ì¤ì($%‰Y•¡á¥Ñ]¥±±	•%¹ÍÑ…¹Ð€ôÑÉÕ”ì(•±Í”($%µ}ÁY•¡¥±•¹¥´´ùM•Ñ¥¹¥Í¡…±±‰…¬¡A•‘M•Ñ%¹…É°Ñ¡¥Ì¤ì(•¹‘¥˜($%¥˜€¡%ÍA±…å•È ¤¤($$%]…Ñ•É1•Ù•°èé±±½…Ñ•	½…Ñ]…­•ÉÉ…ä ¤ì(%ô•±Í”ì($%¥˜€¡é¥™˜€ø€Ð¸Ñ˜¤ì($$%¥˜€¡µ}Ù•¡½½È€ôôI}==I}Iñðµ}Ù•¡½½È€ôôI}==I}IH¤($$$%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé	±•¹‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}I}1%9!%}==I}I!L°€Ð¸Á˜¤ì($$%•±Í”($$$%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé	±•¹‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}I}1%9!%}==I}1!L°€Ð¸Á˜¤ì(($%ô•±Í”ì($$%¥˜€¡µ}Ù•¡½½È€ôôI}==I}Iñðµ}Ù•¡½½È€ôôI}==I}IH¤($$$%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé	±•¹‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}I}1%9}==I}I!L°€Ð¸Á˜¤ì($$%•±Í”($$$%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé	±•¹‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}I}1%9}==I}1!L°€Ð¸Á˜¤ì($%ô($%µ}ÁY•¡¥±•¹¥´´ùM•Ñ¥¹¥Í¡…±±‰…¬¡A•‘¹¥µ±¥¹°Ñ¡¥Ì¤ì($%…È´ùÕÑ½A¥±½Ð¹µ}¹ÉÕ¥Í•MÁ••€ô€Àì(%ô)ô()Ù½¥)A•èé¹Ñ•É…È¡Ù½¥¤)ì(%¥˜€¡%Í9½Ñ%¹]É•­•‘Y•¡¥±” ¤€˜˜µ}™!•…±Ñ €ø€À¸Á˜¤ì($%Y•¡¥±”€©Ù• €ô€¡Y•¡¥±”¨¥µ}ÁM••­Q…É•Ðì(($$¼¼9½ÐÕÍ•¸($$¼¼Y•Ñ½ÈÁ½Í½É½½È€ô•ÑA½Í¥Ñ¥½¹Q½=Á•¹…É½½È¡Ù• °µ}Ù•¡½½È¤ì(($%¥˜€¡Ù• ´ù…¹A•‘=Á•¹1½­Ì¡Ñ¡¥Ì¤¤ì($$%¥˜€¡µ}Ù•¡½½È€˜˜µ}ÁY•¡¥±•¹¥´¤ì($$$%Ù• ´ùAÉ½•ÍÍ=Á•¹½½È¡µ}Ù•¡½½È°µ}ÁY•¡¥±•¹¥´´ù…¹¥µ%°µ}ÁY•¡¥±•¹¥´´ùÕÉÉ•¹ÑQ¥µ”¤ì($$%ô($%ô($%‰%Í%¹Q¡•¥È€ô™…±Í”ì($%1¥¹•UÁA•‘]¥Ñ¡…È¡1%9}UA}Q=}I}MQIP¤ì(%ô•±Í”ì($%EÕ¥Ñ¹Ñ•É¥¹…È ¤ì($%M•Ñ¥”¡9%5}MQ}-=}I=9P°€Ð¸Á˜°€À¸Á˜¤ì(%ô)ô()Ù½¥)A•èéEÕ¥Ñ¹Ñ•É¥¹…È¡Ù½¥¤)ì(%Y•¡¥±”€©Ù• €ôµ}Á5åY•¡¥±”ì(%¥˜€¡µ}ÁY•¡¥±•¹¥´¤($%µ}ÁY•¡¥±•¹¥´´ù‰±•¹‘•±Ñ„€ô€´ÄÀÀÀ¸Á˜ì($(%I•ÍÑ…ÉÑ9½¹A…ÉÑ¥…±¹¥µÌ ¤ì((%¥˜€ …IÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}%1¤¤($%¹¥µ5…¹…•Èèé	±•¹‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°µ}…¹¥µÉ½ÕÀ°9%5}MQ}%1°€ÄÀÀ¸Á˜¤ì($(%¥˜€¡Ù• ¤ì($%¥˜€¡µ}½‰©•Ñ¥Ù”€ôô=	)Q%Y}9QI}I}M}I%YHñðµ}¹A•‘MÑ…Ñ”€ôôA}I),¤($$%Ù• ´ù‰%Í	•¥¹…É)…­•€ô™…±Í”ì(($%¥˜€¡Ù• ´ùµ}¹9Õµ•ÑÑ¥¹%¸€„ô€À¤($$%Ù• ´ùµ}¹9Õµ•ÑÑ¥¹%¸´´ì((¥™‘•˜Y}A}A=IQL($%¥˜€¡µ}½‰©•Ñ¥Ù”€ôô=	)Q%Y}9QI}I}M}I%YHñðµ}½‰©•Ñ¥Ù”€ôô=	)Q%Y}9QI}I}M}AMM9H¤($$%I•ÍÑ½É•AÉ•Ù¥½ÕÍ=‰©•Ñ¥Ù” ¤ì(•¹‘¥˜(($%Ù• ´ùµ}¹•ÑÑ¥¹%¹±…Ì€˜ôù•Ñ…É½½É±…œ¡µ}Ù•¡½½È¤ì(%ô((%‰UÍ•Í½±±¥Í¥½¸€ôÑÉÕ”ì((%I•Á±…•]•…Á½¹]¡•¹á¥Ñ¥¹Y•¡¥±” ¤ì((%¥˜€¡å¥¹=É•… ¤¤ì($%¥˜€¡µ}ÁY•¡¥±•¹¥´¤ì($$%µ}ÁY•¡¥±•¹¥´´ù‰±•¹‘•±Ñ„€ô€´Ð¸Á˜ì($$%µ}ÁY•¡¥±•¹¥´´ù™±…ÌðôMM=}1Q=UPì($$%µ}ÁY•¡¥±•¹¥´´ù™±…Ì€˜ôùMM=}IU99%9ì($%ô(%ô•±Í”($%M•Ñ%‘±” ¤ì((%µ}ÁY•¡¥±•¹¥´€ô¹¥°ì($(%¥˜€¡Ù• ¤ì(¥™‘•˜Y}A}A=IQL($%¥˜€¡Ù• ´ùÕÑ½A¥±½Ð¹µ}¹ÉÕ¥Í•MÁ••€ôô€À€˜˜Ù• ´ùY•¡¥±•É•…Ñ•‘	ä€ôôI9=5}Y!%1¤(•±Í”($%¥˜€¡Ù• ´ùÕÑ½A¥±½Ð¹µ}¹ÉÕ¥Í•MÁ••€ôô€À¤(•¹‘¥˜($$%Ù• ´ùÕÑ½A¥±½Ð¹µ}¹ÉÕ¥Í•MÁ••€ô€ÄÜì(%ô)ô()Ù½¥)‘‘e…É‘¥•½½ÉMµ½­”¡Y•¡¥±”€©Ù• °Õ¥¹ÐÌÈ‘½½É9½‘”¤)ì(%•½½ÉÌ‘½½Èì(%ÍÝ¥Ñ €¡‘½½É9½‘”¤ì($%…Í”I}==I}Iè($$%‘½½È€ô==I}I=9Q}I%!Pì($$%‰É•…¬ì($%…Í”I}==I}1è($$%‘½½È€ô==I}I=9Q}1Pì($$%‰É•…¬ì($%‘•™…Õ±Ðè($$%‰É•…¬ì(%ô((%¥˜€ …Ù• ´ù%Í½½É5¥ÍÍ¥¹œ¡‘½½È¤€˜˜Ù• ´ù%Í½µÁ½¹•¹ÑAÉ•Í•¹Ð¡‘½½É9½‘”¤¤ì($%Y•Ñ½ÈÁ½Ìì(¥™‘•˜%a}	UL($%Ù• ´ù•Ñ½µÁ½¹•¹Ñ]½É±‘A½Í¥Ñ¥½¸¡‘½½É9½‘”°Á½Ì¤ì(•±Í”($%Ù• ´ù•Ñ½µÁ½¹•¹Ñ]½É±‘A½Í¥Ñ¥½¸¡I}==I}1°Á½Ì¤ì(•¹‘¥˜($%A…ÉÑ¥±”èé‘‘e…É‘¥•½½ÉMµ½­”¡Á½Ì°Ù• ´ù•Ñ5…ÑÉ¥à ¤¤ì(%ô)ô((¼¼M•Á•É…Ñ”™Õ¹Ñ¥½¸¥¸Y°µ½É”±½¥…°¸9½ÐÍÕÉ”¥Ì¥Ð¥¹±¥¹•¥¸%%$¸)Ù½¥)A•èéM•Ñá¥Ñ	½…Ð¡Y•¡¥±”€©‰½…Ð¤)ì(¥™¹‘•˜Y}A}A=IQL(%M•ÑA•‘MÑ…Ñ”¡A}%1¤ì(%Y•Ñ½È™¥ÉÍÑA½Ì€ô•ÑA½Í¥Ñ¥½¸ ¤ì(%¹¥µ5…¹…•Èèé	±•¹‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°µ}…¹¥µÉ½ÕÀ°9%5}MQ}%1°€ÄÀÀ¸Á˜¤ì(%¥˜€¡‰½…Ð´ù•Ñ5½‘•±%¹‘•à ¤€ôô5%}MAH€˜˜‰½…Ð´ù%ÍUÁÍ¥‘•½Ý¸ ¤¤ì($%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé	±•¹‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}I]1=UQ}1!L°€à¸Á˜¤ì($%µ}ÁY•¡¥±•¹¥´´ùM•Ñ¥¹¥Í¡…±±‰…¬¡A•‘M•Ñ=ÕÑ…É°Ñ¡¥Ì¤ì($%µ}Ù•¡½½È€ôI}==I}Iì($%M•ÑA•‘MÑ…Ñ”¡A}a%Q}H¤ì(%ô•±Í”ì($%µ}Ù•¡½½È€ôI}==I}Iì($%A•‘M•Ñ=ÕÑ…É¡¹¥°°Ñ¡¥Ì¤ì($%‰%ÍMÑ…¹‘¥¹œ€ôÑÉÕ”ì($%µ}ÁÕÉMÕÉ™…”€ô‰½…Ðì($%µ}ÁÕÉMÕÉ™…”´ùI•¥ÍÑ•ÉI•™•É•¹” ¡¹Ñ¥Ñä¨¨¤™µ}ÁÕÉMÕÉ™…”¤ì(%ô(%M•ÑA½Í¥Ñ¥½¸¡™¥ÉÍÑA½Ì¤ì(%M•Ñ5½Ù•MÑ…Ñ”¡A5=Y}MQ%10¤ì(%µ}Ù•5½Ù•MÁ••€ô‰½…Ð´ùµ}Ù•5½Ù•MÁ••ì(%‰QÉå¥¹Q½I•…¡Éå1…¹€ôÑÉÕ”ì(•±Í”(%M•ÑA•‘MÑ…Ñ”¡A}%1¤ì(%Y•Ñ½È¹•ÝA½Ì€ô•ÑA½Í¥Ñ¥½¸ ¤ì(%I•µ½Ù•%¹…É¹¥µÌ ¤ì(%½±5½‘•°¨‰½…Ñ½°€ô‰½…Ð´ù•Ñ½±5½‘•° ¤ì(%¥˜€¡‰½…Ð´ù%ÍUÁÍ¥‘•½Ý¸ ¤¤ì($%¹•ÝA½Ì€ôì€À¸Á˜°€À¸Á˜°‰½…Ñ½°´ù‰½Õ¹‘¥¹	½à¹µ¥¸¹èôì($%¹•ÝA½Ì€ô‰½…Ð´ù•Ñ5…ÑÉ¥à ¤€¨¹•ÝA½Ìì($%¹•ÝA½Ì¹è€¬ô€Ä¸Á˜ì($%µ}Ù•¡½½È€ôI}==I}Iì($%A•‘M•Ñ=ÕÑ…É¡¹¥°°Ñ¡¥Ì¤ì($%‰%ÍMÑ…¹‘¥¹œ€ôÑÉÕ”ì($%µ}ÁÕÉMÕÉ™…”€ô‰½…Ðì($%µ}ÁÕÉMÕÉ™…”´ùI•¥ÍÑ•ÉI•™•É•¹” ¡¹Ñ¥Ñä¨¨¤™µ}ÁÕÉMÕÉ™…”¤ì($%µ}ÁÕÉÉ•¹ÑA¡åÍMÕÉ™…”€ô‰½…Ðì(%ô•±Í”ì(¼¨$%¥˜€¡‰½…Ð´ùµ}µ½‘•±%¹‘•à€„ô5%}M-%55Hñð‰½…Ð´ù‰%Í%¹]…Ñ•È¤ì($$%¥˜€¡‰½…Ð´ùµ}µ½‘•±%¹‘•à€ôô5%}M-%55H¤($$$%¹•ÝA½Ì¹è€¬ô€È¸Á˜(¨¼($$%µ}Ù•¡½½È€ôI}==I}Iì($$%A•‘M•Ñ=ÕÑ…É¡¹¥°°Ñ¡¥Ì¤ì($$%‰%ÍMÑ…¹‘¥¹œ€ôÑÉÕ”ì($$%µ}ÁÕÉMÕÉ™…”€ô‰½…Ðì($$%µ}ÁÕÉMÕÉ™…”´ùI•¥ÍÑ•ÉI•™•É•¹” ¡¹Ñ¥Ñä¨¨¤™µ}ÁÕÉMÕÉ™…”¤ì($$%µ}ÁÕÉÉ•¹ÑA¡åÍMÕÉ™…”€ô‰½…Ðì($$%½±A½¥¹Ð™½Õ¹‘½°ì($$%¹Ñ¥Ñä€©™½Õ¹‘¹Ð€ô¹¥°ì($$%¥˜€¡]½É±èéAÉ½•ÍÍY•ÉÑ¥…±1¥¹”¡¹•ÝA½Ì°¹•ÝA½Ì¹è€´€Ä¸Ñ˜°™½Õ¹‘½°°™½Õ¹‘¹Ð°™…±Í”°ÑÉÕ”°™…±Í”°™…±Í”°™…±Í”°™…±Í”°¹¥°¤¤($$$%¹•ÝA½Ì¹è€ôQ}=MP€¬™½Õ¹‘½°¹Á½¥¹Ð¹èì(¼¨$$¼¼YÍÁ•¥™¥Œ($%ô•±Í”ì($$%µ}Ù•¡½½È€ôI}==I}Iì($$%A•‘M•Ñ=ÕÑ…É¡¹¥°°Ñ¡¥Ì¤ì($$%‰%ÍMÑ…¹‘¥¹œ€ôÑÉÕ”ì($$%M•Ñ5½Ù•MÑ…Ñ”¡A5=Y}MQ%10¤ì($$%‰QÉå¥¹Q½I•…¡Éå1…¹€ôÑÉÕ”ì($$%™±½…ÐÕÁ5Õ±Ð€ô€Ä¸ÀÑ˜€¬‰½…Ñ½°´ù‰½Õ¹‘¥¹	½à¹µ¥¸¹èì($$%™±½…ÐÉ¥¡Ñ5Õ±Ð€ô€À¸Ù˜€¨‰½…Ñ½°´ù‰½Õ¹‘¥¹	½à¹µ…à¹àì($$%¹•ÝA½Ì€ôÕÁ5Õ±Ð€¨‰½…Ð´ù•ÑUÀ ¤€¬É¥¡Ñ5Õ±Ð€¨‰½…Ð´ù•ÑI¥¡Ð ¤€¬‰½…Ð´ù•ÑA½Í¥Ñ¥½¸ ¤ì($$%•ÑA½Í¥Ñ¥½¸ ¤€ô¹•ÝA½Ìì($$%¥˜€¡µ}Á5åY•¡¥±”¤ì($$$%A½Í¥Ñ¥½¹A•‘=ÕÑ=™½±±¥Í¥½¸ ¤ì($$%ô•±Í”ì($$$%µ}Á5åY•¡¥±”€ô‰½…Ðì($$$%A½Í¥Ñ¥½¹A•‘=ÕÑ=™½±±¥Í¥½¸ ¤ì($$$%µ}Á5åY•¡¥±”€ô¹¥°ì($$%ô($$%É•ÑÕÉ¸ì($%ô(¨¼%ô(%M•ÑA½Í¥Ñ¥½¸¡¹•ÝA½Ì¤ì(%M•Ñ5½Ù•MÑ…Ñ”¡A5=Y}MQ%10¤ì(%µ}Ù•5½Ù•MÁ••€ô‰½…Ð´ùµ}Ù•5½Ù•MÁ••ì(•¹‘¥˜($¼¼9½ÐÑ¡•É”¥¸Y¸(%]…Ñ•É1•Ù•°èéÉ••	½…Ñ]…­•ÉÉ…ä ¤ì)ô((¼¼Ý…¹Ñ•‘½½É9½‘”€ô€Àµ•…¹ÌÑ¡…Ð™Õ¹Œ¸Ý¥±°‘•Ñ•Éµ¥¹”¥Ð)Ù½¥)A•èéM•Ñá¥Ñ…È¡Y•¡¥±”€©Ù• °Õ¥¹ÐÌÈÝ…¹Ñ•‘½½É9½‘”¤)ì(%Õ¥¹ÐÌÈ½ÁÑ•‘½½É9½‘”€ôÝ…¹Ñ•‘½½É9½‘”ì(%‰½½°Ñ•±•Á½ÉÑ9••‘•€ô™…±Í”ì(%‰½½°¥Í1½Ü€ô€„…Ù• ´ù‰1½ÝY•¡¥±”ì(%¥˜€ …Ù• ´ù…¹A•‘á¥Ñ…È ¤¤ì($%¥˜€¡Ù• ´ùÁÉ¥Ù•È€˜˜€…Ù• ´ùÁÉ¥Ù•È´ù%ÍA±…å•È ¤¤ì($$%Ù• ´ùÕÑ½A¥±½Ð¹µ}¹ÉÕ¥Í•MÁ••€ô€Àì($$%Ù• ´ùÕÑ½A¥±½Ð¹µ}¹…É5¥ÍÍ¥½¸€ô5%MM%=9}9=9ì($%ô($%É•ÑÕÉ¸ì(%ô((%¥˜€¡µ}¹A•‘MÑ…Ñ”€ôôA}a%Q}Hñðµ}¹A•‘MÑ…Ñ”€ôôA}I}I=5}H¤($%É•ÑÕÉ¸ì((%µ}Ù•5½Ù•MÁ••€ôY•Ñ½È À¸Á˜°€À¸Á˜°€À¸Á˜¤ì(%µ}Ù•QÕÉ¹MÁ••€ôY•Ñ½È À¸Á˜°€À¸Á˜°€À¸Á˜¤ì(%¥˜€¡Ý…¹Ñ•‘½½É9½‘”€ôô€À¤ì($%½ÁÑ•‘½½É9½‘”€ôI}==I}1ì($%¥˜€ …Ù• ´ù‰%Í	ÕÌ¤ì($$%¥˜€¡Ù• ´ùÁÉ¥Ù•È€ôôÑ¡¥Ì¤ì($$$%½ÁÑ•‘½½É9½‘”€ôI}==I}1ì($$%ô•±Í”¥˜€¡Ù• ´ùÁA…ÍÍ•¹•ÉÍlÁt€ôôÑ¡¥Ì¤ì($$$%½ÁÑ•‘½½É9½‘”€ôI}==I}Iì($$%ô•±Í”¥˜€¡Ù• ´ùÁA…ÍÍ•¹•ÉÍlÅt€ôôÑ¡¥Ì¤ì($$$%½ÁÑ•‘½½É9½‘”€ôI}==I}1Hì($$%ô•±Í”¥˜€¡Ù• ´ùÁA…ÍÍ•¹•ÉÍlÉt€ôôÑ¡¥Ì¤ì($$$%½ÁÑ•‘½½É9½‘”€ôI}==I}IHì($$%ô•±Í”ì($$$%™½È€¡¥¹Ð¤€ô€Ìì¤€ðÙ• ´ùµ}¹9Õµ5…áA…ÍÍ•¹•ÉÌì€¬­¤¤ì($$$$%¥˜€¡Ù• ´ùÁA…ÍÍ•¹•ÉÍm¥t€ôôÑ¡¥Ì¤ì($$$$$%¥˜€¡¤€˜€Ä¤($$$$$$%½ÁÑ•‘½½É9½‘”€ôI}==I}IHì($$$$$%•±Í”($$$$$$%½ÁÑ•‘½½É9½‘”€ôI}==I}1Hì(($$$$$%‰É•…¬ì($$$$%ô($$$%ô($$%ô($%ô(%ô(%‰½½°Í½µ•½¹•á¥ÑÍÉ½µ=ÕÉá¥Ñ½½È€ô™…±Í”ì(%‰½½°Í½µ•½¹•¹Ñ•ÉÍÉ½µ=ÕÉá¥Ñ½½È€ô™…±Í”ì(%ÍÝ¥Ñ €¡½ÁÑ•‘½½É9½‘”¤ì($%…Í”I}==I}Iè($$%¥˜€¡Ù• ´ùµ}¹•ÑÑ¥¹%¹±…Ì€˜I}==I}1}I¤($$$%Í½µ•½¹•¹Ñ•ÉÍÉ½µ=ÕÉá¥Ñ½½È€ôÑÉÕ”ì($$%¥˜€¡Ù• ´ùµ}¹•ÑÑ¥¹=ÕÑ±…Ì€˜I}==I}1}I¤($$$%Í½µ•½¹•á¥ÑÍÉ½µ=ÕÉá¥Ñ½½È€ôÑÉÕ”ì($$%‰É•…¬ì($%…Í”I}==I}IHè($$%¥˜€¡Ù• ´ùµ}¹•ÑÑ¥¹%¹±…Ì€˜I}==I}1}IH¤($$$%Í½µ•½¹•¹Ñ•ÉÍÉ½µ=ÕÉá¥Ñ½½È€ôÑÉÕ”ì($$%¥˜€¡Ù• ´ùµ}¹•ÑÑ¥¹=ÕÑ±…Ì€˜I}==I}1}IH¤($$$%Í½µ•½¹•á¥ÑÍÉ½µ=ÕÉá¥Ñ½½È€ôÑÉÕ”ì($$%‰É•…¬ì($%…Í”I}==I}1è($$%¥˜€¡Ù• ´ùµ}¹•ÑÑ¥¹%¹±…Ì€˜I}==I}1}1¤($$$%Í½µ•½¹•¹Ñ•ÉÍÉ½µ=ÕÉá¥Ñ½½È€ôÑÉÕ”ì($$%¥˜€¡Ù• ´ùµ}¹•ÑÑ¥¹=ÕÑ±…Ì€˜I}==I}1}1¤($$$%Í½µ•½¹•á¥ÑÍÉ½µ=ÕÉá¥Ñ½½È€ôÑÉÕ”ì($$%‰É•…¬ì($%…Í”I}==I}1Hè($$%¥˜€¡Ù• ´ùµ}¹•ÑÑ¥¹%¹±…Ì€˜I}==I}1}1H¤($$$%Í½µ•½¹•¹Ñ•ÉÍÉ½µ=ÕÉá¥Ñ½½È€ôÑÉÕ”ì($$%¥˜€¡Ù• ´ùµ}¹•ÑÑ¥¹=ÕÑ±…Ì€˜I}==I}1}1H¤($$$%Í½µ•½¹•á¥ÑÍÉ½µ=ÕÉá¥Ñ½½È€ôÑÉÕ”ì($$%‰É•…¬ì($%‘•™…Õ±Ðè($$%‰É•…¬ì(%ô(%¥˜€¡Í½µ•½¹•¹Ñ•ÉÍÉ½µ=ÕÉá¥Ñ½½È€˜˜µ}½‰©•Ñ¥Ù”€ôô=	)Q%Y}1Y}H¤ì($%I•ÍÑ½É•AÉ•Ù¥½ÕÍ=‰©•Ñ¥Ù” ¤ì($%É•ÑÕÉ¸ì(%ô(%¥˜€ …Í½µ•½¹•á¥ÑÍÉ½µ=ÕÉá¥Ñ½½Èñðµ}¹A•‘QåÁ”€ôôAQeA}=@€˜˜Ù• ´ù‰%Í	ÕÌ¤ì($$¼¼…¥¸°Õ¹ÕÍ•¸¸¸($$¼¼Y•Ñ½È•á¥ÑA½Ì€ô•ÑA½Í¥Ñ¥½¹Q½=Á•¹…É½½È¡Ù• °½ÁÑ•‘½½É9½‘”¤ì($%‰½½°Ñ¡•É•%ÍI½½´€ôÙ• ´ù%ÍI½½µ½ÉA•‘Q½1•…Ù•…È¡½ÁÑ•‘½½É9½‘”°¹¥°¤ì($%¥˜€¡Ù• ´ù%Í=¹%ÑÍM¥‘” ¤¤ì($$%Ñ•±•Á½ÉÑ9••‘•€ôÑÉÕ”ì($%ô•±Í”¥˜€ …Ñ¡•É•%ÍI½½´¤ì($$%‰½½°ÑÉåM¥‘•M•…Ð€ô™…±Í”ì($$%A•€©Á•‘=¹M¥‘•M•…Ð€ô¹¥°ì($$%ÍÝ¥Ñ €¡½ÁÑ•‘½½É9½‘”¤ì($$$%…Í”I}==I}Iè($$$$%¥˜€¡Ù• ´ùÁÉ¥Ù•ÈñðÙ• ´ùµ}¹•ÑÑ¥¹%¹±…Ì€˜I}==I}1}1¤ì($$$$$%Á•‘=¹M¥‘•M•…Ð€ôÙ• ´ùÁÉ¥Ù•Èì($$$$$%ÑÉåM¥‘•M•…Ð€ôÑÉÕ”ì($$$$%ô•±Í”($$$$$%½ÁÑ•‘½½É9½‘”€ôI}==I}1ì(($$$$%‰É•…¬ì($$$%…Í”I}==I}IHè($$$$%¥˜€¡Ù• ´ùÁA…ÍÍ•¹•ÉÍlÅtñðÙ• ´ùµ}¹•ÑÑ¥¹%¹±…Ì€˜I}==I}1}1H¤ì($$$$$%Á•‘=¹M¥‘•M•…Ð€ôÙ• ´ùÁA…ÍÍ•¹•ÉÍlÅtì($$$$$%ÑÉåM¥‘•M•…Ð€ôÑÉÕ”ì($$$$%ô•±Í”($$$$$%½ÁÑ•‘½½É9½‘”€ôI}==I}1Hì(($$$$%‰É•…¬ì($$$%…Í”I}==I}1è($$$$%¥˜€¡Ù• ´ùÁA…ÍÍ•¹•ÉÍlÁtñðÙ• ´ùµ}¹•ÑÑ¥¹%¹±…Ì€˜I}==I}1}I¤ì($$$$$%Á•‘=¹M¥‘•M•…Ð€ôÙ• ´ùÁA…ÍÍ•¹•ÉÍlÁtì($$$$$%ÑÉåM¥‘•M•…Ð€ôÑÉÕ”ì($$$$%ô•±Í”($$$$$%½ÁÑ•‘½½É9½‘”€ôI}==I}Iì(($$$$%‰É•…¬ì($$$%…Í”I}==I}1Hè($$$$%¥˜€¡Ù• ´ùÁA…ÍÍ•¹•ÉÍlÉtñðÙ• ´ùµ}¹•ÑÑ¥¹%¹±…Ì€˜I}==I}1}IH¤ì($$$$$%Á•‘=¹M¥‘•M•…Ð€ô€¡A•¨¥Ù• ´ùÁA…ÍÍ•¹•ÉÍlÉtì($$$$$%ÑÉåM¥‘•M•…Ð€ôÑÉÕ”ì($$$$%ô•±Í”($$$$$%½ÁÑ•‘½½É9½‘”€ôI}==I}IHì(($$$$%‰É•…¬ì($$$%‘•™…Õ±Ðè($$$$%‰É•…¬ì($$%ô($$%¥˜€¡ÑÉåM¥‘•M•…Ð¤ì($$$%¥˜€ …Á•‘=¹M¥‘•M•…Ðñð€…%ÍA±…å•È ¤€˜˜¡…ÉÉ•…Ñ•‘	ä€„ô5%MM%=9}!H¤($$$$%É•ÑÕÉ¸ì(($$$%ÍÝ¥Ñ €¡½ÁÑ•‘½½É9½‘”¤ì($$$$%…Í”I}==I}Iè($$$$$%½ÁÑ•‘½½É9½‘”€ôI}==I}1ì($$$$$%‰É•…¬ì($$$$%…Í”I}==I}IHè($$$$$%½ÁÑ•‘½½É9½‘”€ôI}==I}1Hì($$$$$%‰É•…¬ì($$$$%…Í”I}==I}1è($$$$$%½ÁÑ•‘½½É9½‘”€ôI}==I}Iì($$$$$%‰É•…¬ì($$$$%…Í”I}==I}1Hè($$$$$%½ÁÑ•‘½½É9½‘”€ôI}==I}IHì($$$$$%‰É•…¬ì($$$$%‘•™…Õ±Ðè($$$$$%‰É•…¬ì($$$%ô($$%ô($$$¼¼€¸¸¸($$$¼¼Y•Ñ½È•á¥ÑA½Ì€ô•ÑA½Í¥Ñ¥½¹Q½=Á•¹…É½½È¡Ù• °½ÁÑ•‘½½É9½‘”¤ì($$%¥˜€ …Ù• ´ù%ÍI½½µ½ÉA•‘Q½1•…Ù•…È¡½ÁÑ•‘½½É9½‘”°¹¥°¤¤ì($$$%¥˜€ …%ÍA±…å•È ¤€˜˜¡…ÉÉ•…Ñ•‘	ä€„ô5%MM%=9}!H¤($$$$%É•ÑÕÉ¸ì(($$$%Ñ•±•Á½ÉÑ9••‘•€ôÑÉÕ”ì($$%ô($%ô($%¥˜€¡µ}¹A•‘MÑ…Ñ”€ôôA}1}A=L¤ì($$%µ}¹1…ÍÑA•‘MÑ…Ñ”€ôA}1}A=Lì($$%µ}¹AÉ•Ù5½Ù•MÑ…Ñ”€ôA5=Y}IU8ì($$%M•Ñ5½Ù•MÑ…Ñ”¡A5=Y}MAI%9P¤ì($%ô•±Í”ì($$%µ}¹1…ÍÑA•‘MÑ…Ñ”€ôA}%1ì($$%µ}¹AÉ•Ù5½Ù•MÑ…Ñ”€ôA5=Y}MQ%10ì($$%M•Ñ5½Ù•MÑ…Ñ”¡A5=Y}MQ%10¤ì($%ô(($%I•Á±…•]•…Á½¹]¡•¹á¥Ñ¥¹Y•¡¥±” ¤ì($%‰UÍ•Í½±±¥Í¥½¸€ô™…±Í”ì($%µ}ÁM••­Q…É•Ð€ôÙ• ì($%µ}ÁM••­Q…É•Ð´ùI•¥ÍÑ•ÉI•™•É•¹” ¡¹Ñ¥Ñä¨¨¤€™µ}ÁM••­Q…É•Ð¤ì($%µ}Ù•¡½½È€ô½ÁÑ•‘½½É9½‘”ì($%M•ÑA•‘MÑ…Ñ”¡A}a%Q}H¤ì($%¥˜€¡µ}ÁY•¡¥±•¹¥´€˜˜µ}ÁY•¡¥±•¹¥´´ù™±…Ì€˜MM=}AIQ%0¤($$%µ}ÁY•¡¥±•¹¥´´ù‰±•¹‘•±Ñ„€ô€´ÄÀÀÀ¸Á˜ì($%M•Ñ5½Ù•MÑ…Ñ”¡A5=Y}9=9¤ì($%¹¥µ5…¹…•Èèé	±•¹‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°µ}…¹¥µÉ½ÕÀ°9%5}MQ}%1°€ÄÀÀ¸Á˜¤ì($%I•µ½Ù•%¹…É¹¥µÌ ¤ì($%Ù• ´ùÕÑ½A¥±½Ð¹µ}¹ÉÕ¥Í•MÁ••€ô€Àì($%¥˜€¡Ñ•±•Á½ÉÑ9••‘•¤ì($$%A•‘M•Ñ=ÕÑ…É¡¹¥°°Ñ¡¥Ì¤ì(($$$¼¼Q¡¥Ì¥ÌÍ…µ”½‘”Ý¥Ñ A•‘A±…•µ•¹Ðèé¥¹‘i½½É½ÉA•°•á•ÁÐÝ”ÍÑ…ÉÐ™É½´è€¬€Ä¸Ô…¹…±Í¼¡•¬Ù•¡¥±•Ì¸($$%™±½…Ðé½ÉA•ì($$%™±½…ÐÍÑ…ÉÑh€ô•ÑA½Í¥Ñ¥½¸ ¤¹è€´€ÄÀÀ¸Á˜ì($$%™±½…Ð™½Õ¹‘½±h€ô€´ÄÀÀ¸Á˜ì($$%™±½…Ð™½Õ¹‘½±hÈ€ô€´ÄÀÀ¸Á˜ì($$%½±A½¥¹Ð™½Õ¹‘½°ì($$%¹Ñ¥Ñä¨™½Õ¹‘¹Ðì(($$%Y•Ñ½ÈÙ•Œ€ô•ÑA½Í¥Ñ¥½¸ ¤ì($$%Ù•Œ¹è€¬ô€Ä¸Õ˜ì(($$%¥˜€¡]½É±èéAÉ½•ÍÍY•ÉÑ¥…±1¥¹”¡Ù•Œ°ÍÑ…ÉÑh°™½Õ¹‘½°°™½Õ¹‘¹Ð°ÑÉÕ”°ÑÉÕ”°™…±Í”°™…±Í”°ÑÉÕ”°™…±Í”°¹¥°¤¤($$$%™½Õ¹‘½±h€ô™½Õ¹‘½°¹Á½¥¹Ð¹èì(($$$¼¼‘©ÕÍÐ½½É‘Ì…¹‘¼„Í•½¹Ñ•ÍÐ($$%Ù•Œ¹à€¬ô€À¸Å˜ì($$%Ù•Œ¹ä€¬ô€À¸Å˜ì(($$%¥˜€¡]½É±èéAÉ½•ÍÍY•ÉÑ¥…±1¥¹”¡Ù•Œ°ÍÑ…ÉÑh°™½Õ¹‘½°°™½Õ¹‘¹Ð°ÑÉÕ”°ÑÉÕ”°™…±Í”°™…±Í”°ÑÉÕ”°™…±Í”°¹¥°¤¤($$$%™½Õ¹‘½±hÈ€ô™½Õ¹‘½°¹Á½¥¹Ð¹èì(($$%é½ÉA•€ô5…à¡™½Õ¹‘½±h°™½Õ¹‘½±hÈ¤ì(($$%¥˜€¡é½ÉA•€ø€´ää¸Á˜¤($$$%•Ñ5…ÑÉ¥à ¤¹•ÑA½Í¥Ñ¥½¸ ¤¹è€ôQ}=MP€¬é½ÉA•ì($%ô•±Í”ì($$%¥˜€¡Ù• ´ù•ÑUÀ ¤¹è€ø€´À¸á˜¤ì($$$%‰½½°…‘‘½½ÉMµ½­”€ô™…±Í”ì($$$%¥˜€¡Ù• ´ù•Ñ5½‘•±%¹‘•à ¤€ôô5%}eI%¤($$$$%…‘‘½½ÉMµ½­”€ôÑÉÕ”ì(($$$%ÍÝ¥Ñ €¡µ}Ù•¡½½È¤ì($$$$%…Í”I}==I}Iè($$$$$%¥˜€¡Ù• ´ù‰%Í	ÕÌ¤ì($$$$$$%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé‘‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}=!}Q}=UQ}1!L¤ì($$$$$%ô•±Í”ì($$$$$$%¥˜€¡¥Í1½Ü¤($$$$$$$%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé‘‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}Q=UQ}1=}I!L¤ì($$$$$$%•±Í”($$$$$$$%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé‘‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}Q=UQ}I!L¤ì(($$$$$$%¥˜€¡…‘‘½½ÉMµ½­”¤($$$$$$$%‘‘e…É‘¥•½½ÉMµ½­”¡Ù• °I}==I}I¤ì($$$$$%ô($$$$$%‰É•…¬ì($$$$%…Í”I}==I}IHè($$$$$%¥˜€¡Ù• ´ù‰%ÍY…¸¤ì($$$$$$%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé‘‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}Y9}Q}=UQ}II}I!L¤ì($$$$$%ô•±Í”¥˜€¡¥Í1½Ü¤ì($$$$$$%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé‘‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}Q=UQ}1=}I!L¤ì($$$$$%ô•±Í”ì($$$$$$%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé‘‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}Q=UQ}I!L¤ì($$$$$%ô($$$$$%‰É•…¬ì($$$$%…Í”I}==I}1è($$$$$%¥˜€¡Ù• ´ù‰%Í	ÕÌ¤ì($$$$$$%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé‘‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}=!}Q}=UQ}1!L¤ì($$$$$%ô•±Í”ì($$$$$$%¥˜€¡¥Í1½Ü¤($$$$$$$%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé‘‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}Q=UQ}1=}1!L¤ì($$$$$$%•±Í”($$$$$$$%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé‘‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}Q=UQ}1!L¤ì(($$$$$$%¥˜€¡…‘‘½½ÉMµ½­”¤($$$$$$$%‘‘e…É‘¥•½½ÉMµ½­”¡Ù• °I}==I}1¤ì($$$$$%ô($$$$$%‰É•…¬ì($$$$%…Í”I}==I}1Hè($$$$$%¥˜€¡Ù• ´ù‰%ÍY…¸¤ì($$$$$$%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé‘‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}Y9}Q}=UQ}II}1!L¤ì($$$$$%ô•±Í”¥˜€¡¥Í1½Ü¤ì($$$$$$%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé‘‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}Q=UQ}1=}1!L¤ì($$$$$%ô•±Í”ì($$$$$$%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé‘‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}Q=UQ}1!L¤ì($$$$$%ô($$$$$%‰É•…¬ì($$$$%‘•™…Õ±Ðè($$$$$%‰É•…¬ì($$$%ô($$$%¥˜€ …‰	ÕÍ)…­•¤ì($$$$%ÍÝ¥Ñ €¡µ}Ù•¡½½È¤ì($$$$$%…Í”I}==I}Iè($$$$$$%Ù• ´ùµ}¹•ÑÑ¥¹=ÕÑ±…ÌðôI}==I}1}Iì($$$$$$%‰É•…¬ì($$$$$%…Í”I}==I}IHè($$$$$$%Ù• ´ùµ}¹•ÑÑ¥¹=ÕÑ±…ÌðôI}==I}1}IHì($$$$$$%‰É•…¬ì($$$$$%…Í”I}==I}1è($$$$$$%Ù• ´ùµ}¹•ÑÑ¥¹=ÕÑ±…ÌðôI}==I}1}1ì($$$$$$%‰É•…¬ì($$$$$%…Í”I}==I}1Hè($$$$$$%Ù• ´ùµ}¹•ÑÑ¥¹=ÕÑ±…ÌðôI}==I}1}1Hì($$$$$$%‰É•…¬ì($$$$$%‘•™…Õ±Ðè($$$$$$%‰É•…¬ì($$$$%ô($$$%ô($$$%µ}ÁY•¡¥±•¹¥´´ùM•Ñ¥¹¥Í¡…±±‰…¬¡A•‘¹¥µMÑ•Á=ÕÑ…É°Ñ¡¥Ì¤ì($$%ô•±Í”ì($$$%¥˜€¡µ}Ù•¡½½È€ôôI}==I}Iñðµ}Ù•¡½½È€ôôI}==I}IH¤ì($$$$%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé‘‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}I]1=UQ}I!L¤ì($$$%ô•±Í”¥˜€¡µ}Ù•¡½½È€ôôI}==I}1ñðµ}Ù•¡½½È€ôôI}==I}1H¤ì($$$$%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé‘‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}I]1=UQ}1!L¤ì($$$%ô($$$%µ}ÁY•¡¥±•¹¥´´ùM•Ñ¥¹¥Í¡…±±‰…¬¡A•‘M•Ñ=ÕÑ…É°Ñ¡¥Ì¤ì($$%ô($%ô($%‰¡…¹•‘M•…Ð€ô™…±Í”ì($%¥˜€¡Ù• ´ù‰%Í	ÕÌ¤($$%‰I•¹‘•ÉA•‘%¹…È€ôÑÉÕ”ì(($%M•ÑI…‘¥½MÑ…Ñ¥½¸ ¤ì($%¥˜€¡Ù• ´ùÁÉ¥Ù•È€ôôÑ¡¥Ì¤ì($$%¥˜€¡%ÍA±…å•È ¤¤($$$%Ù• ´ùM•ÑMÑ…ÑÕÌ¡MQQUM}A1eI}%M	1¤ì($$%•±Í”($$$%Ù• ´ùM•ÑMÑ…ÑÕÌ¡MQQUM}	9=9¤ì($%ô(%ô)ô()Ù½¥)A•èéá¥Ñ…È¡Ù½¥¤)ì(%¥˜€ …µ}ÁY•¡¥±•¹¥´¤($%É•ÑÕÉ¸ì((%¹¥µ…Ñ¥½¹%•á¥Ñ¹¥´€ô€¡¹¥µ…Ñ¥½¹%¤µ}ÁY•¡¥±•¹¥´´ù…¹¥µ%ì(%™±½…Ð…¹¥µQ¥µ”€ôµ}ÁY•¡¥±•¹¥´´ùÕÉÉ•¹ÑQ¥µ”ì((%µ}Á5åY•¡¥±”´ùAÉ½•ÍÍ=Á•¹½½È¡µ}Ù•¡½½È°•á¥Ñ¹¥´°…¹¥µQ¥µ”¤ì((%¥˜€¡µ}ÁM••­Q…É•Ð¤ì($$¼¼…È¥ÌÕÁÍ¥‘”‘½Ý¸($%¥˜€¡µ}Á5åY•¡¥±”´ù•ÑUÀ ¤¹è€ø€´À¸á˜¤ì($$%¥˜€¡•á¥Ñ¹¥´€ôô9%5}MQ}I}1=M}I!Lñð•á¥Ñ¹¥´€ôô9%5}MQ}I}1=M}1!Lñð…¹¥µQ¥µ”€ø€À¸Í˜¤($$$%1¥¹•UÁA•‘]¥Ñ¡…È¡1%9}UA}Q=}I}9¤ì($$%•±Í”($$$%1¥¹•UÁA•‘]¥Ñ¡…È ¡µ}Á5åY•¡¥±”´ù•Ñ5½‘•±%¹‘•à ¤€ôô5%}=<€ü1%9}UA}Q=}I}9€è1%9}UA}Q=}I}MQIP¤¤ì($%ô•±Í”ì($$%1¥¹•UÁA•‘]¥Ñ¡…È¡1%9}UA}Q=}I}9¤ì($%ô(%ô(($¼¼%˜Ñ¡•É”¥ÌÍ½µ•½¹”¥¸™É½¹Ð½˜Ñ¡”‘½½È°µ…­”¡¥´™…±°Ý¡¥±”Ý”•á¥Ð¸(%¥˜€¡µ}¹A•‘MÑ…Ñ”€ôôA}a%Q}H¤ì($%A•€©™½Õ¹‘A•€ô¹¥°ì($%™½È€¡¥¹Ð¤€ô€Àì¤€ðµ}¹Õµ9•…ÉA•‘Ìì¤¬¬¤ì($$%¥˜€ ¡µ}¹•…ÉA•‘Ím¥t´ù•ÑA½Í¥Ñ¥½¸ ¤€´•ÑA½Í¥Ñ¥½¸ ¤¤¹5…¹¥ÑÕ‘•MÅÈÉ ¤€ð€À¸ÀÑ˜¤ì($$$%™½Õ¹‘A•€ôµ}¹•…ÉA•‘Ím¥tì($$$%‰É•…¬ì($$%ô($%ô($%¥˜€¡™½Õ¹‘A•€˜˜…¹¥µQ¥µ”€ø€À¸Ñ˜€˜˜™½Õ¹‘A•´ù%ÍA•‘%¹½¹ÑÉ½° ¤¤($$%™½Õ¹‘A•´ùM•Ñ…±° ÄÀÀÀ°9%5}MQ}!%!%5AQ}I=9P°€Ä¤ì(%ô)ô((¼¼Q¡¥Ì™Õ¹Ñ¥½¸Ý…Ìµ½ÍÑ±ä‘ÕÁ±¥…Ñ”½˜•Ñ1½…±A½Í¥Ñ¥½¹Q½=Á•¹…É½½È°Í¼$Ù”ÕÍ•¥Ð¸)Y•Ñ½È)A•èé•ÑA½Í¥Ñ¥½¹Q½=Á•¹…É½½È¡Y•¡¥±”€©Ù• °Õ¥¹ÐÌÈ½µÁ½¹•¹Ð¤)ì(%Y•Ñ½È±½…±A½Ìì(%Y•Ñ½ÈÙ•¡½½ÉA½Ìì((%±½…±A½Ì€ô•Ñ1½…±A½Í¥Ñ¥½¹Q½=Á•¹…É½½È¡Ù• °½µÁ½¹•¹Ð°€Ä¸Á˜¤ì(%Ù•¡½½ÉA½Ì€ô5Õ±Ñ¥Á±äÍàÌ¡Ù• ´ù•Ñ5…ÑÉ¥à ¤°±½…±A½Ì¤€¬Ù• ´ù•ÑA½Í¥Ñ¥½¸ ¤ì((¼¨($¼¼9½ÐÕÍ•¸(%Y•Ñ½È±½…±Y•¡½½É=™™Í•Ðì((%¥˜€¡Ù• ´ù‰%ÍY…¸€˜˜€¡½µÁ½¹•¹Ð€ôôY!%1}9QI}II}1Pñð½µÁ½¹•¹Ð€ôôY!%1}9QI}II}I%!P¤¤ì($%±½…±Y•¡½½É=™™Í•Ð€ôÙ•A•‘Y…¹I•…É½½É¹¥µ=™™Í•Ðì(%ô•±Í”ì($%¥˜€¡Ù• ´ù‰%Í1½Ü¤ì($$%±½…±Y•¡½½É=™™Í•Ð€ôÙ•A•‘…É½½É1½¹¥µ=™™Í•Ðì($%ô•±Í”ì($$%±½…±Y•¡½½É=™™Í•Ð€ôÙ•A•‘…É½½É¹¥µ=™™Í•Ðì($%ô(%ô((%Ù•¡½½ÉA½Í]¥Ñ¡½ÕÑ=™™Í•Ð€ô5Õ±Ñ¥Á±äÍàÌ¡Ù• ´ù•Ñ5…ÑÉ¥à ¤°±½…±A½Ì€¬±½…±Y•¡½½É=™™Í•Ð¤€¬Ù• ´ù•ÑA½Í¥Ñ¥½¸ ¤ì(¨¼(%É•ÑÕÉ¸Ù•¡½½ÉA½Ìì)ô()Ù½¥)A•èé•Ñ9•…É•ÍÑ½½È¡Y•¡¥±”€©Ù• °Y•Ñ½È€™Á½ÍQ½=Á•¸¤)ì(%Y•Ñ½È€©•¹Ñ•É=™™Í•Ð€ô¹¥°ì(%¥˜€¡µ}Ù•¡½½È€ôôI}==I}1€˜˜Ù• ´ùÁÉ¥Ù•È($%ñðµ}Ù•¡½½È€ôôI}==I}I€˜˜Ù• ´ùÁA…ÍÍ•¹•ÉÍlÁt($%ñðµ}Ù•¡½½È€ôôI}==I}1H€˜˜Ù• ´ùÁA…ÍÍ•¹•ÉÍlÅt($%ñðµ}Ù•¡½½È€ôôI}==I}IH€˜˜Ù• ´ùÁA…ÍÍ•¹•ÉÍlÉt¤(%ì($%•¹Ñ•É=™™Í•Ð€ô€™Ù•A•‘EÕ¥­É…•‘=ÕÑ…É¹¥µ=™™Í•Ðì(%ô((%Y•Ñ½È±™A½Ì€ô•ÑA½Í¥Ñ¥½¹Q½=Á•¹…É½½È¡Ù• °I}==I}1¤ì(%Y•Ñ½ÈÉ™A½Ì€ô•ÑA½Í¥Ñ¥½¹Q½=Á•¹…É½½È¡Ù• °I}==I}I¤ì(($¼¼1•™Ð™É½¹Ð‘½½È¥Ì±½Í•È(%¥˜€ ¡±™A½Ì€´•ÑA½Í¥Ñ¥½¸ ¤¤¹5…¹¥ÑÕ‘•MÅÈÉ ¤€ð€¡É™A½Ì€´•ÑA½Í¥Ñ¥½¸ ¤¤¹5…¹¥ÑÕ‘•MÅÈÉ ¤¤ì(($%¥˜€¡Ù• ´ù%ÍI½½µ½ÉA•‘Q½1•…Ù•…È¡I}==I}1°•¹Ñ•É=™™Í•Ð¤¤ì($$%µ}Ù•¡½½È€ôI}==I}1ì($$%Á½ÍQ½=Á•¸€ô±™A½Ìì($%ô•±Í”¥˜€¡Ù• ´ù%ÍI½½µ½ÉA•‘Q½1•…Ù•…È¡I}==I}I°•¹Ñ•É=™™Í•Ð¤¤ì($$%µ}Ù•¡½½È€ôI}==I}Iì($$%Á½ÍQ½=Á•¸€ôÉ™A½Ìì($%ô(%ô•±Í”ì(($%¥˜€¡Ù• ´ù%ÍI½½µ½ÉA•‘Q½1•…Ù•…È¡I}==I}I°•¹Ñ•É=™™Í•Ð¤¤ì(($$%A•€©É™A…ÍÍ•¹•È€ôÙ• ´ùÁA…ÍÍ•¹•ÉÍlÁtì($$%¥˜€¡É™A…ÍÍ•¹•È€˜˜€¡É™A…ÍÍ•¹•È´ùµ}±•…‘•È€ôôÑ¡¥ÌñðÉ™A…ÍÍ•¹•È´ù‰½¹ÑÉ…5•=ÕÑ…Èñð($$$$$%Ù• ´ùY•¡¥±•É•…Ñ•‘	ä€ôô5%MM%=9}Y!%1€˜˜µ}½‰©•Ñ¥Ù”€ôô=	)Q%Y}9QI}I}M}I%YH¤($$$$$˜˜Ù• ´ù%ÍI½½µ½ÉA•‘Q½1•…Ù•…È¡I}==I}1°•¹Ñ•É=™™Í•Ð¤($$$%ñð€¡Ù• ´ùµ}¹•ÑÑ¥¹%¹±…Ì€˜I}==I}1}I¤€˜˜Ù• ´ù%ÍI½½µ½ÉA•‘Q½1•…Ù•…È¡I}==I}1°•¹Ñ•É=™™Í•Ð¤¤ì(($$$%µ}Ù•¡½½È€ôI}==I}1ì($$$%Á½ÍQ½=Á•¸€ô±™A½Ìì($$%ô•±Í”ì($$$%µ}Ù•¡½½È€ôI}==I}Iì($$$%Á½ÍQ½=Á•¸€ôÉ™A½Ìì($$%ô($%ô•±Í”¥˜€¡Ù• ´ù%ÍI½½µ½ÉA•‘Q½1•…Ù•…È¡I}==I}1°•¹Ñ•É=™™Í•Ð¤¤ì($$%µ}Ù•¡½½È€ôI}==I}1ì($$%Á½ÍQ½=Á•¸€ô±™A½Ìì($%ô(%ô)ô()‰½½°)A•èé•Ñ9•…É•ÍÑA…ÍÍ•¹•É½½È¡Y•¡¥±”€©Ù• °Y•Ñ½È€™Á½ÍQ½=Á•¸¤)ì(%Y•Ñ½ÈÉ™A½Ì°±ÉA½Ì°ÉÉA½Ìì(%‰½½°…¹¹Ñ•È€ô™…±Í”ì((%Y•¡¥±•5½‘•±%¹™¼€©Ù•¡5½‘•°€ô€¡Y•¡¥±•5½‘•±%¹™¼€¨¥5½‘•±%¹™¼èé•Ñ5½‘•±%¹™¼¡Ù• ´ù•Ñ5½‘•±%¹‘•à ¤¤ì((%ÍÝ¥Ñ €¡Ù• ´ù•Ñ5½‘•±%¹‘•à ¤¤ì($%…Í”5%}	ULè($$%µ}Ù•¡½½È€ôI}==I}Iì($$%Á½ÍQ½=Á•¸€ô•ÑA½Í¥Ñ¥½¹Q½=Á•¹…É½½È¡Ù• °I}==I}I¤ì($$%É•ÑÕÉ¸ÑÉÕ”ì($%…Í”5%}I!%9<è($%‘•™…Õ±Ðè($$%‰É•…¬ì(%ô((%Y•Ñ½ÈÉÉ™A½Í¥ÍÐ äää¸Á˜°€äää¸Á˜¤ì(%Y•Ñ½ÈÉ±ÉA½Í¥ÍÐ äää¸Á˜°€äää¸Á˜¤ì(%Y•Ñ½ÈÉÉÉA½Í¥ÍÐ äää¸Á˜°€äää¸Á˜¤ì((%¥˜€ …Ù• ´ùÁA…ÍÍ•¹•ÉÍlÁt($$˜˜€„¡Ù• ´ùµ}¹•ÑÑ¥¹%¹±…Ì€˜I}==I}1}I¤($$˜˜Ù• ´ù%ÍI½½µ½ÉA•‘Q½1•…Ù•…È¡I}==I}I°¹¥°¤¤ì(($%É™A½Ì€ô•ÑA½Í¥Ñ¥½¹Q½=Á•¹…É½½È¡Ù• °I}==I}I¤ì($%…¹¹Ñ•È€ôÑÉÕ”ì($%É™A½Í¥ÍÐ€ôÉ™A½Ì€´•ÑA½Í¥Ñ¥½¸ ¤ì(%ô(%¥˜€¡Ù•¡5½‘•°´ùµ}¹Õµ½½ÉÌ€ôô€Ð¤ì($%¥˜€ …Ù• ´ùÁA…ÍÍ•¹•ÉÍlÅt($$$˜˜€„¡Ù• ´ùµ}¹•ÑÑ¥¹%¹±…Ì€˜I}==I}1}1H¤($$$˜˜Ù• ´ù%ÍI½½µ½ÉA•‘Q½1•…Ù•…È¡I}==I}1H°¹¥°¤¤ì($$%±ÉA½Ì€ô•ÑA½Í¥Ñ¥½¹Q½=Á•¹…É½½È¡Ù• °I}==I}1H¤ì($$%…¹¹Ñ•È€ôÑÉÕ”ì($$%±ÉA½Í¥ÍÐ€ô±ÉA½Ì€´•ÑA½Í¥Ñ¥½¸ ¤ì($%ô($%¥˜€ …Ù• ´ùÁA…ÍÍ•¹•ÉÍlÉt($$$˜˜€„¡Ù• ´ùµ}¹•ÑÑ¥¹%¹±…Ì€˜I}==I}1}IH¤($$$˜˜Ù• ´ù%ÍI½½µ½ÉA•‘Q½1•…Ù•…È¡I}==I}IH°¹¥°¤¤ì($$%ÉÉA½Ì€ô•ÑA½Í¥Ñ¥½¹Q½=Á•¹…É½½È¡Ù• °I}==I}IH¤ì($$%…¹¹Ñ•È€ôÑÉÕ”ì($$%ÉÉA½Í¥ÍÐ€ôÉÉA½Ì€´•ÑA½Í¥Ñ¥½¸ ¤ì($%ô(($$¼¼]¡•¸Ñ¡”‘½½ÈÝ”Í¡½Õ±•¹Ñ•È¥Ì‰±½­•‰äÍ½µ”½‰©•Ð¸($%¥˜€ ……¹¹Ñ•È¤($$%Ù• ´ùM¡Õ™™±•A…ÍÍ•¹•ÉÍQ½5…­•MÁ…” ¤ì(%ô((%Y•Ñ½ÈÉ¹•áÑQ½½µÁ…É”€ôÉ™A½Í¥ÍÐì(%Á½ÍQ½=Á•¸€ôÉ™A½Ìì(%µ}Ù•¡½½È€ôI}==I}Iì(%¥˜€¡±ÉA½Í¥ÍÐ¹5…¹¥ÑÕ‘•MÅÈ ¤€ð¹•áÑQ½½µÁ…É”¹5…¹¥ÑÕ‘•MÅÈ ¤¤ì($%µ}Ù•¡½½È€ôI}==I}1Hì($%Á½ÍQ½=Á•¸€ô±ÉA½Ìì($%¹•áÑQ½½µÁ…É”€ô±ÉA½Í¥ÍÐì(%ô((%¥˜€¡ÉÉA½Í¥ÍÐ¹5…¹¥ÑÕ‘•MÅÈ ¤€ð¹•áÑQ½½µÁ…É”¹5…¹¥ÑÕ‘•MÅÈ ¤¤ì($%µ}Ù•¡½½È€ôI}==I}IHì($%Á½ÍQ½=Á•¸€ôÉÉA½Ìì(%ô(%É•ÑÕÉ¸…¹¹Ñ•Èì)ô()Ù½¥)A•èé½Q½9•…É•ÍÑ½½È¡Y•¡¥±”€©Ù• ¤)ì(%Y•Ñ½ÈÁ½ÍQ½=Á•¸ì(%•Ñ9•…É•ÍÑ½½È¡Ù• °Á½ÍQ½=Á•¸¤ì(%M•ÑM••¬¡Á½ÍQ½=Á•¸°€À¸Õ˜¤ì(%M•Ñ5½Ù•MÑ…Ñ”¡A5=Y}IU8¤ì)ô()Ù½¥)A•èéM•Ñ¹¥µ=™™Í•Ñ½É¹Ñ•É=Éá¥ÑY•¡¥±”¡Ù½¥¤)ì($¼¼%`è%˜Ñ¡•É”Ý•É”¹¼ÑÉ…¹Í±…Ñ¥½¹Ì½¸•¹Ñ•È…¹¥µÌ°Ñ¡•É”Ý•É”½Ù•É™±½ÝÌ…±°½Ù•ÈÑ¡¥Ì™Õ¹Ñ¥½¸¸((%¹¥µ	±•¹‘!¥•É…É¡ä€©•¹Ñ•ÉÍÍ½Œ€ô¹¥µ5…¹…•Èèé•Ñ¹¥µÍÍ½¥…Ñ¥½¸¡MM=IA}MQ°9%5}MQ})-I}1!L¤´ù¡¥•É…É¡äì(%¹¥µ	±•¹‘M•ÅÕ•¹”€©Í•Ä€ô•¹Ñ•ÉÍÍ½Œ´ùÍ•ÅÕ•¹•Ìì(%¹¥µ5…¹…•ÈèéU¹½µÁÉ•ÍÍ¹¥µ…Ñ¥½¸¡•¹Ñ•ÉÍÍ½Œ¤ì(%¥˜€¡Í•Ä´ù¹ÕµÉ…µ•Ì€ø€À¤ì($%¥˜€ …Í•Ä´ù!…ÍQÉ…¹Í±…Ñ¥½¸ ¤¤($$%Ù•A•‘É…•‘=ÕÑ…É¹¥µ=™™Í•Ð€ôY•Ñ½È À¸Á˜°€À¸Á˜°€À¸Á˜¤ì($%•±Í”ì($$%-•åÉ…µ•QÉ…¹Ì€©±…ÍÑÉ…µ”€ô€¡-•åÉ…µ•QÉ…¹Ì¨¥Í•Ä´ù•Ñ-•åÉ…µ”¡Í•Ä´ù¹ÕµÉ…µ•Ì€´€Ä¤ì($$%Ù•A•‘É…•‘=ÕÑ…É¹¥µ=™™Í•Ð€ô±…ÍÑÉ…µ”´ùÑÉ…¹Í±…Ñ¥½¸ì($%ô(%ô((%•¹Ñ•ÉÍÍ½Œ€ô¹¥µ5…¹…•Èèé•Ñ¹¥µÍÍ½¥…Ñ¥½¸¡MM=IA}MQ°9%5}MQ}I}Q}%9}1!L¤´ù¡¥•É…É¡äì(%Í•Ä€ô•¹Ñ•ÉÍÍ½Œ´ùÍ•ÅÕ•¹•Ìì(%¹¥µ5…¹…•ÈèéU¹½µÁÉ•ÍÍ¹¥µ…Ñ¥½¸¡•¹Ñ•ÉÍÍ½Œ¤ì(%¥˜€¡Í•Ä´ù¹ÕµÉ…µ•Ì€ø€À¤ì($%¥˜€ …Í•Ä´ù!…ÍQÉ…¹Í±…Ñ¥½¸ ¤¤($$%Ù•A•‘…É½½É¹¥µ=™™Í•Ð€ôY•Ñ½È À¸Á˜°€À¸Á˜°€À¸Á˜¤ì($%•±Í”ì($$%-•åÉ…µ•QÉ…¹Ì€©±…ÍÑÉ…µ”€ô€¡-•åÉ…µ•QÉ…¹Ì¨¥Í•Ä´ù•Ñ-•åÉ…µ”¡Í•Ä´ù¹ÕµÉ…µ•Ì€´€Ä¤ì($$%Ù•A•‘…É½½É¹¥µ=™™Í•Ð€ô±…ÍÑÉ…µ”´ùÑÉ…¹Í±…Ñ¥½¸ì($%ô(%ô((%•¹Ñ•ÉÍÍ½Œ€ô¹¥µ5…¹…•Èèé•Ñ¹¥µÍÍ½¥…Ñ¥½¸¡MM=IA}MQ°9%5}MQ}I}Q}%9}1=}1!L¤´ù¡¥•É…É¡äì(%Í•Ä€ô•¹Ñ•ÉÍÍ½Œ´ùÍ•ÅÕ•¹•Ìì(%¹¥µ5…¹…•ÈèéU¹½µÁÉ•ÍÍ¹¥µ…Ñ¥½¸¡•¹Ñ•ÉÍÍ½Œ¤ì(%¥˜€¡Í•Ä´ù¹ÕµÉ…µ•Ì€ø€À¤ì($%¥˜€ …Í•Ä´ù!…ÍQÉ…¹Í±…Ñ¥½¸ ¤¤($$%Ù•A•‘…É½½É1½¹¥µ=™™Í•Ð€ôY•Ñ½È À¸Á˜°€À¸Á˜°€À¸Á˜¤ì($%•±Í”ì($$%-•åÉ…µ•QÉ…¹Ì€©±…ÍÑÉ…µ”€ô€¡-•åÉ…µ•QÉ…¹Ì¨¥Í•Ä´ù•Ñ-•åÉ…µ”¡Í•Ä´ù¹ÕµÉ…µ•Ì€´€Ä¤ì($$%Ù•A•‘…É½½É1½¹¥µ=™™Í•Ð€ô±…ÍÑÉ…µ”´ùÑÉ…¹Í±…Ñ¥½¸ì($%ô(%ô((%•¹Ñ•ÉÍÍ½Œ€ô¹¥µ5…¹…•Èèé•Ñ¹¥µÍÍ½¥…Ñ¥½¸¡MM=IA}MQ°9%5}MQ}EU%-)-¤´ù¡¥•É…É¡äì(%Í•Ä€ô•¹Ñ•ÉÍÍ½Œ´ùÍ•ÅÕ•¹•Ìì(%¹¥µ5…¹…•ÈèéU¹½µÁÉ•ÍÍ¹¥µ…Ñ¥½¸¡•¹Ñ•ÉÍÍ½Œ¤ì(%¥˜€¡Í•Ä´ù¹ÕµÉ…µ•Ì€ø€À¤ì($%¥˜€ …Í•Ä´ù!…ÍQÉ…¹Í±…Ñ¥½¸ ¤¤($$%Ù•A•‘EÕ¥­É…•‘=ÕÑ…É¹¥µ=™™Í•Ð€ôY•Ñ½È À¸Á˜°€À¸Á˜°€À¸Á˜¤ì($%•±Í”ì($$%-•åÉ…µ•QÉ…¹Ì€©±…ÍÑÉ…µ”€ô€¡-•åÉ…µ•QÉ…¹Ì¨¥Í•Ä´ù•Ñ-•åÉ…µ”¡Í•Ä´ù¹ÕµÉ…µ•Ì€´€Ä¤ì($$%Ù•A•‘EÕ¥­É…•‘=ÕÑ…É¹¥µ=™™Í•Ð€ô±…ÍÑÉ…µ”´ùÑÉ…¹Í±…Ñ¥½¸ì($%ô(%ô((%•¹Ñ•ÉÍÍ½Œ€ô¹¥µ5…¹…•Èèé•Ñ¹¥µÍÍ½¥…Ñ¥½¸¡MM=IA}MQ°9%5}MQ}Y9}Q}%9}II}1!L¤´ù¡¥•É…É¡äì(%Í•Ä€ô•¹Ñ•ÉÍÍ½Œ´ùÍ•ÅÕ•¹•Ìì(%¹¥µ5…¹…•ÈèéU¹½µÁÉ•ÍÍ¹¥µ…Ñ¥½¸¡•¹Ñ•ÉÍÍ½Œ¤ì(%¥˜€¡Í•Ä´ù¹ÕµÉ…µ•Ì€ø€À¤ì($%¥˜€ …Í•Ä´ù!…ÍQÉ…¹Í±…Ñ¥½¸ ¤¤($$%Ù•A•‘Y…¹I•…É½½É¹¥µ=™™Í•Ð€ôY•Ñ½È À¸Á˜°€À¸Á˜°€À¸Á˜¤ì($%•±Í”ì($$%-•åÉ…µ•QÉ…¹Ì€©±…ÍÑÉ…µ”€ô€¡-•åÉ…µ•QÉ…¹Ì¨¥Í•Ä´ù•Ñ-•åÉ…µ”¡Í•Ä´ù¹ÕµÉ…µ•Ì€´€Ä¤ì($$%Ù•A•‘Y…¹I•…É½½É¹¥µ=™™Í•Ð€ô±…ÍÑÉ…µ”´ùÑÉ…¹Í±…Ñ¥½¸ì($%ô(%ô((%•¹Ñ•ÉÍÍ½Œ€ô¹¥µ5…¹…•Èèé•Ñ¹¥µÍÍ½¥…Ñ¥½¸¡MM=IA}MQ°9%5}MQ}QI%9}Q=UP¤´ù¡¥•É…É¡äì(%Í•Ä€ô•¹Ñ•ÉÍÍ½Œ´ùÍ•ÅÕ•¹•Ìì(%¹¥µ5…¹…•ÈèéU¹½µÁÉ•ÍÍ¹¥µ…Ñ¥½¸¡•¹Ñ•ÉÍÍ½Œ¤ì(%¥˜€¡Í•Ä´ù¹ÕµÉ…µ•Ì€ø€À¤ì($%¥˜€ …Í•Ä´ù!…ÍQÉ…¹Í±…Ñ¥½¸ ¤¤($$%Ù•A•‘QÉ…¥¹½½É¹¥µ=™™Í•Ð€ôY•Ñ½È À¸Á˜°€À¸Á˜°€À¸Á˜¤ì($%•±Í”ì($$%-•åÉ…µ•QÉ…¹Ì€©±…ÍÑÉ…µ”€ô€¡-•åÉ…µ•QÉ…¹Ì¨¥Í•Ä´ù•Ñ-•åÉ…µ”¡Í•Ä´ù¹ÕµÉ…µ•Ì€´€Ä¤ì($$%Ù•A•‘QÉ…¥¹½½É¹¥µ=™™Í•Ð€ô±…ÍÑÉ…µ”´ùÑÉ…¹Í±…Ñ¥½¸ì($%ô(%ô)ô()Ù½¥)A•èéA•‘M•ÑEÕ¥­É…•‘=ÕÑ…ÉA½Í¥Ñ¥½¹¡¹¥µ	±•¹‘ÍÍ½¥…Ñ¥½¸€©…¹¥µÍÍ½Œ°Ù½¥€©…Éœ¤)ì(%A•€©Á•€ô€¡A•¨¥…Éœì((%Y•¡¥±”€©Ù• €ôÁ•´ùµ}Á5åY•¡¥±”ì((%Y•Ñ½È™¥¹…±A½Ìì(%Y•Ñ½È‘É…•‘=ÕÑ=™™Í•Ðì((%5…ÑÉ¥àÁ•‘5…Ð¡Á•´ù•Ñ5…ÑÉ¥à ¤¤ì(%Á•´ù‰UÍ•Í½±±¥Í¥½¸€ôÑÉÕ”ì(%Á•´ùI•ÍÑ…ÉÑ9½¹A…ÉÑ¥…±¹¥µÌ ¤ì(%‘É…•‘=ÕÑ=™™Í•Ð€ôÙ•A•‘EÕ¥­É…•‘=ÕÑ…É¹¥µ=™™Í•Ðì(%¥˜€¡Á•´ùµ}Ù•¡½½È€ôôI}==I}IñðÁ•´ùµ}Ù•¡½½È€ôôI}==I}IH¤($%‘É…•‘=ÕÑ=™™Í•Ð¹à€ô€µ‘É…•‘=ÕÑ=™™Í•Ð¹àì((%™¥¹…±A½Ì€ô5Õ±Ñ¥Á±äÍàÌ¡Á•‘5…Ð°‘É…•‘=ÕÑ=™™Í•Ð¤€¬Á•´ù•ÑA½Í¥Ñ¥½¸ ¤ì(%A•‘A±…•µ•¹Ðèé¥¹‘i½½É½ÉA• ™™¥¹…±A½Ì¤ì(%Á•´ùµ}Ù•5½Ù•MÁ••€ôY•Ñ½È À¸Á˜°€À¸Á˜°€À¸Á˜¤ì(%Á•´ùM•ÑA½Í¥Ñ¥½¸¡™¥¹…±A½Ì¤ì((%¥˜€¡Ù• ¤ì($%Á•´ùµ}™I½Ñ…Ñ¥½¹•ÍÐ€ôÙ• ´ù•Ñ½ÉÝ…É ¤¹!•…‘¥¹œ ¤€´!1A$ì($%Á•´ùµ}™I½Ñ…Ñ¥½¹ÕÈ€ôÁ•´ùµ}™I½Ñ…Ñ¥½¹•ÍÐì($%Á•´ù…±Õ±…Ñ•9•Ý=É¥•¹Ñ…Ñ¥½¸ ¤ì(($%¥˜€ …Ù• ´ù%ÍI½½µ½ÉA•‘Q½1•…Ù•…È¡Á•´ùµ}Ù•¡½½È°€™Ù•A•‘EÕ¥­É…•‘=ÕÑ…É¹¥µ=™™Í•Ð¤¤($$%Á•´ùA½Í¥Ñ¥½¹A•‘=ÕÑ=™½±±¥Í¥½¸ ¤ì(%ô((%¥˜€ …Á•´ù…¹M•ÑA•‘MÑ…Ñ” ¤¤($%É•ÑÕÉ¸ì((%Á•´ùM•Ñ%‘±” ¤ì(%¥˜€¡Ù• ¤ì($%¥˜€¡Á•´ù‰±••™Ñ•Éá¥Ñ¥¹…È¤ì($$%Á•´ù‰±••™Ñ•Éá¥Ñ¥¹…È€ô™…±Í”ì($$%Á•´ùM•Ñ±•”¡Ù• ´ù•ÑA½Í¥Ñ¥½¸ ¤°€ÄÐÀÀÀ¤ì(($%ô•±Í”¥˜€¡Á•´ù‰]…¹‘•ÉA…Ñ¡™Ñ•Éá¥Ñ¥¹…È¤ì($$%Á•´ùM•Ñ]…¹‘•ÉA…Ñ ¡•¹•É…°èé•ÑI…¹‘½µ9Õµ‰•É%¹I…¹” À¸Á˜°€à¸Á˜¤¤ì($$%Á•´ù‰]…¹‘•ÉA…Ñ¡™Ñ•Éá¥Ñ¥¹…È€ô™…±Í”ì(($%ô•±Í”¥˜€¡Á•´ù‰½¹¹…-¥±±Q¡•…É)…­•È¤ì($$%Á•´ù‰½¹¹…-¥±±Q¡•…É)…­•È€ô™…±Í”ì($$%¥˜€¡Á•´ùµ}Á•‘%¹=‰©•Ñ¥Ù”€˜˜•¹•É…°èé•ÑI…¹‘½µ9Õµ‰•È ¤€˜€Ä¤ì($$$%¥˜€¡Á•´ùµ}½‰©•Ñ¥Ù”€„ô=	)Q%Y}-%11}!I}=9}==P¤($$$$%Á•´ùM•Ñ=‰©•Ñ¥Ù”¡=	)Q%Y}-%11}!I}=9}==P°Á•´ùµ}Á•‘%¹=‰©•Ñ¥Ù”¤ì(($$%ô•±Í”ì($$$%A•€©‘É¥Ù•È€ôÙ• ´ùÁÉ¥Ù•Èì($$$%¥˜€ …‘É¥Ù•Èñð‘É¥Ù•È€ôôÁ•ñð‘É¥Ù•È´ù%ÍA±…å•È ¤€˜˜Q¡•MÉ¥ÁÑÌèé%ÍA±…å•É=¹5¥ÍÍ¥½¸ ¤¤ì($$$$%Á•´ùM•Ñ±•”¡Ù• ´ù•ÑA½Í¥Ñ¥½¸ ¤°€ÄÐÀÀÀ¤ì($$$%ô•±Í”ì($$$$%Á•´ù±•…É=‰©•Ñ¥Ù” ¤ì($$$$%Á•´ùM•Ñ=‰©•Ñ¥Ù”¡=	)Q%Y}9QI}I}M}I%YH°Ù• ¤ì($$$%ô($$$%Á•´ù‰UÍ•A•‘9½‘•M••¬€ôÑÉÕ”ì($$$%Á•´ùµ}Á9•áÑA…Ñ¡9½‘”€ô¹¥°ì($$$%Á•´ùM…ä¡M=U9}A}1}IU8¤ì($$%ô($%ô•±Í”¥˜€¡Á•´ùµ}Á•‘MÑ…ÑÌ´ùµ}Ñ•µÁ•È€øÁ•´ùµ}Á•‘MÑ…ÑÌ´ùµ}™•…È($$$˜˜Á•´ù¡…ÉÉ•…Ñ•‘	ä€„ô5%MM%=9}!H€˜˜Ù• ´ùY•¡¥±•É•…Ñ•‘	ä€„ô5%MM%=9}Y!%1($$$˜˜Ù• ´ùÁÉ¥Ù•È€˜˜Ù• ´ùÁÉ¥Ù•È´ù%ÍA±…å•È ¤($$$˜˜€…Q¡•MÉ¥ÁÑÌèé%ÍA±…å•É=¹5¥ÍÍ¥½¸ ¤¤ì((¥™¹‘•˜Y}A}A=IQL($$%¥˜€¡•¹•É…°èé•ÑI…¹‘½µ9Õµ‰•È ¤€ð5eI9}5`€¼€È¤ì($$$%Á•´ùM•Ñ=‰©•Ñ¥Ù”¡=	)Q%Y}-%11}!I}=9}==P°Ù• ´ùÁÉ¥Ù•È¤ì($$%ô•±Í”(•¹‘¥˜($$$%Á•´ùM•Ñ=‰©•Ñ¥Ù”¡=	)Q%Y}9QI}I}M}I%YH°Ù• ¤ì((¥™‘•˜Y}A}A=IQL($%ô•±Í”¥˜€¡Á•´ùµ}Á•‘MÑ…ÑÌ´ùµ}Ñ•µÁ•È€øÁ•´ùµ}Á•‘MÑ…ÑÌ´ùµ}™•…È($$$˜˜Á•´ù¡…ÉÉ•…Ñ•‘	ä€„ô5%MM%=9}!H€˜˜Ù• ´ùY•¡¥±•É•…Ñ•‘	ä€„ô5%MM%=9}Y!%1($$$˜˜€…Ù• ´ùÁÉ¥Ù•È€˜˜¥¹‘A±…å•ÉA• ¤´ùµ}…É%¹=‰©•Ñ¥Ù”€ôôÙ• ($$$˜˜€…Q¡•MÉ¥ÁÑÌèé%ÍA±…å•É=¹5¥ÍÍ¥½¸ ¤¤ì($$%Á•´ùM•Ñ=‰©•Ñ¥Ù”¡=	)Q%Y}9QI}I}M}I%YH°Ù• ¤ì(•¹‘¥˜($%ô•±Í”ì($$%Á•´ùM•Ñ¥¹‘A…Ñ¡¹‘±•”¡Ù• ´ù•ÑA½Í¥Ñ¥½¸ ¤°€ÄÀÀÀÀ¤ì($$%¥˜€¡•¹•É…°èé•ÑI…¹‘½µ9Õµ‰•È ¤€˜€ÄñðÁ•´ùµ}Á•‘MÑ…ÑÌ´ùµ}™•…È€ø€ÜÀ¤ì($$$%Á•´ùM•Ñ5½Ù•MÑ…Ñ”¡A5=Y}MAI%9P¤ì($$$%Á•´ùM…ä¡M=U9}A}1}MAI%9P¤ì($$%ô•±Í”ì($$$%Á•´ùM…ä¡M=U9}A}1}IU8¤ì($$%ô($%ô(%ô(%¥˜€¡Á•´ùµ}¹1…ÍÑA•‘MÑ…Ñ”€ôôA}%1¤($%Á•´ùµ}¹1…ÍÑA•‘MÑ…Ñ”€ôA}]9I}AQ ì)ô()Ù½¥)A•èéA•‘M•ÑÉ…•‘=ÕÑ…ÉA½Í¥Ñ¥½¹¡¹¥µ	±•¹‘ÍÍ½¥…Ñ¥½¸¨…¹¥µÍÍ½Œ°Ù½¥¨…Éœ¤)ì(%A•€©Á•€ô€¡A•¨¥…Éœì((%Á•´ù‰UÍ•Í½±±¥Í¥½¸€ôÑÉÕ”ì(%Á•´ùI•ÍÑ…ÉÑ9½¹A…ÉÑ¥…±¹¥µÌ ¤ì(%‰½½°¥ÑÍI•…É½½È€ô™…±Í”ì((%¥˜€¡Á•´ùµ}Ù•¡½½È€ôôI}==I}IñðÁ•´ùµ}Ù•¡½½È€ôôI}==I}IH¤($%¥ÑÍI•…É½½È€ôÑÉÕ”ì((%5…ÑÉ¥àÁ•‘5…Ð¡Á•´ù•Ñ5…ÑÉ¥à ¤¤ì(%Y•Ñ½ÈÁ½Í™Ñ•É	•¥¹É…•€ô5Õ±Ñ¥Á±äÍàÌ¡Á•‘5…Ð°€¡¥ÑÍI•…É½½È€ü€µÙ•A•‘É…•‘=ÕÑ…É¹¥µ=™™Í•Ð€èÙ•A•‘É…•‘=ÕÑ…É¹¥µ=™™Í•Ð¤¤ì(%Á½Í™Ñ•É	•¥¹É…•€¬ôÁ•´ù•ÑA½Í¥Ñ¥½¸ ¤ì(¥™¹‘•˜Y}A}A=IQL(%Á½Í™Ñ•É	•¥¹É…•¹è€¬ô€Ä¸Á˜ì(•¹‘¥˜(%A•‘A±…•µ•¹Ðèé¥¹‘i½½É½ÉA• ™Á½Í™Ñ•É	•¥¹É…•¤ì(%Á•´ùµ}Ù•5½Ù•MÁ••€ôY•Ñ½È À¸Á˜°€À¸Á˜°€À¸Á˜¤ì(%Á•´ùM•ÑA½Í¥Ñ¥½¸¡Á½Í™Ñ•É	•¥¹É…•¤ì((%¥˜€¡Á•´ùµ}Á5åY•¡¥±”€˜˜€…Á•´ùµ}Á5åY•¡¥±”´ù%ÍI½½µ½ÉA•‘Q½1•…Ù•…È¡Á•´ùµ}Ù•¡½½È°€™Ù•A•‘É…•‘=ÕÑ…É¹¥µ=™™Í•Ð¤¤ì($%Á•´ùA½Í¥Ñ¥½¹A•‘=ÕÑ=™½±±¥Í¥½¸ ¤ì(%ô((%¥˜€ …Á•´ù…¹M•ÑA•‘MÑ…Ñ” ¤¤($%É•ÑÕÉ¸ì($(%¥˜€ …Á•´ùµ}Á5åY•¡¥±”¤ì($%Á•´ùM•Ñ%‘±” ¤ì($%Á•´ùM•Ñ•ÑUÀ ¤ì($%É•ÑÕÉ¸ì(%ô((%A•€©‘É¥Ù•È€ôÁ•´ùµ}Á5åY•¡¥±”´ùÁÉ¥Ù•Èì((%¥˜€¡Á•´ù%ÍA±…å•È ¤¤ì($%Á•´ùM•Ñ%‘±” ¤ì((%ô•±Í”¥˜€¡Á•´ù‰±••™Ñ•Éá¥Ñ¥¹…È¤ì($%Á•´ù‰±••™Ñ•Éá¥Ñ¥¹…È€ô™…±Í”ì($%Á•´ùM•Ñ±•”¡Á•´ùµ}Á5åY•¡¥±”´ù•ÑA½Í¥Ñ¥½¸ ¤°€ÐÀÀÀ¤ì((%ô•±Í”¥˜€¡Á•´ù‰]…¹‘•ÉA…Ñ¡™Ñ•Éá¥Ñ¥¹…È¤ì($%Á•´ùM•Ñ]…¹‘•ÉA…Ñ ¡•¹•É…°èé•ÑI…¹‘½µ9Õµ‰•É%¹I…¹” À¸Á˜°€à¸Á˜¤¤ì($%Á•´ù‰]…¹‘•ÉA…Ñ¡™Ñ•Éá¥Ñ¥¹…È€ô™…±Í”ì((%ô•±Í”¥˜€¡Á•´ù‰½¹¹…-¥±±Q¡•…É)…­•È¤ì($$¼¼-¥±°½‰©•Ñ¥Ù”¥Ì…±É•…‘äÍ•Ð…ÐÑ¡¥ÌÁ½¥¹Ð¸(($%Á•´ù‰½¹¹…-¥±±Q¡•…É)…­•È€ô™…±Í”ì($%¥˜€ …Á•´ùµ}Á•‘%¹=‰©•Ñ¥Ù”ñð€„¡•¹•É…°èé•ÑI…¹‘½µ9Õµ‰•È ¤€˜€Ä¤¤ì($$%¥˜€ …‘É¥Ù•Èñð‘É¥Ù•È€ôôÁ•ñð‘É¥Ù•È´ù%ÍA±…å•È ¤€˜˜Q¡•MÉ¥ÁÑÌèé%ÍA±…å•É=¹5¥ÍÍ¥½¸ ¤¤ì($$$%Á•´ùM•ÑA•‘MÑ…Ñ”¡A}9=9¤ì($$$%Á•´ùµ}¹1…ÍÑA•‘MÑ…Ñ”€ôA}9=9ì($$$%Á•´ùM•Ñ±•”¡Á•´ùµ}Á5åY•¡¥±”´ù•ÑA½Í¥Ñ¥½¸ ¤°€ÐÀÀÀ¤ì($$%ô•±Í”ì($$$%Á•´ù±•…É=‰©•Ñ¥Ù” ¤ì($$$%Á•´ùM•Ñ=‰©•Ñ¥Ù”¡=	)Q%Y}9QI}I}M}I%YH°Á•´ùµ}Á5åY•¡¥±”¤ì($$%ô($%ô((%ô•±Í”¥˜€¡Á•´ùµ}Á•‘MÑ…ÑÌ´ùµ}Ñ•µÁ•È€øÁ•´ùµ}Á•‘MÑ…ÑÌ´ùµ}™•…È€˜˜Á•´ù¡…ÉÉ•…Ñ•‘	ä€„ô5%MM%=9}!H($$˜˜Á•´ùµ}Á5åY•¡¥±”´ùY•¡¥±•É•…Ñ•‘	ä€„ô5%MM%=9}Y!%1€˜˜‘É¥Ù•È($$˜˜‘É¥Ù•È´ù%ÍA±…å•È ¤€˜˜€…Q¡•MÉ¥ÁÑÌèé%ÍA±…å•É=¹5¥ÍÍ¥½¸ ¤¤ì((¥™¹‘•˜Y}A}A=IQL($%¥˜€¡•¹•É…°èé•ÑI…¹‘½µ9Õµ‰•È ¤€˜€Ä¤($$%Á•´ùM•Ñ=‰©•Ñ¥Ù”¡=	)Q%Y}-%11}!I}=9}==P°‘É¥Ù•È¤ì($%•±Í”(•¹‘¥˜($$%Á•´ùM•Ñ=‰©•Ñ¥Ù”¡=	)Q%Y}9QI}I}M}I%YH°Á•´ùµ}Á5åY•¡¥±”¤ì((%ô•±Í”ì(¥™‘•˜Y}A}A=IQL($%¥˜€¡Á•´ùµ}Á•‘MÑ…ÑÌ´ùµ}Ñ•µÁ•È€øÁ•´ùµ}Á•‘MÑ…ÑÌ´ùµ}™•…È€˜˜Á•´ù¡…ÉÉ•…Ñ•‘	ä€„ô5%MM%=9}!H($$$˜˜Á•´ùµ}Á5åY•¡¥±”´ùY•¡¥±•É•…Ñ•‘	ä€„ô5%MM%=9}Y!%1€˜˜€…‘É¥Ù•È($$$˜˜¥¹‘A±…å•ÉA• ¤´ùµ}…É%¹=‰©•Ñ¥Ù”€ôôÁ•´ùµ}Á5åY•¡¥±”€˜˜€…Q¡•MÉ¥ÁÑÌèé%ÍA±…å•É=¹5¥ÍÍ¥½¸ ¤¤($$%Á•´ùM•Ñ=‰©•Ñ¥Ù”¡=	)Q%Y}9QI}I}M}I%YH°Á•´ùµ}Á5åY•¡¥±”¤ì($%•±Í”(•¹‘¥˜($%ì($$%Á•´ùM•ÑA•‘MÑ…Ñ”¡A}9=9¤ì($$%Á•´ùµ}¹1…ÍÑA•‘MÑ…Ñ”€ôA}9=9ì($$%Á•´ùM•Ñ¥¹‘A…Ñ¡¹‘±•”¡Á•´ùµ}Á5åY•¡¥±”´ù•ÑA½Í¥Ñ¥½¸ ¤°€ÄÀÀÀÀ¤ì($%ô(%ô(%Á•´ùM•Ñ•ÑUÀ ¤ì)ô()Õ¥¹Ðà)A•èé•Ñ9•…É•ÍÑQÉ…¥¹½½È¡Y•¡¥±”€©ÑÉ…¥¸°Y•Ñ½È€™‘½½ÉA½Ì¤)ì(%•Ñ9•…É•ÍÑQÉ…¥¹A•‘A½Í¥Ñ¥½¸¡ÑÉ…¥¸°‘½½ÉA½Ì¤ì(¼¨($¼¼9½ÐÕÍ•¸(%Y•¡¥±•5½‘•±%¹™¼¨ÑÉ…¥¹5½‘•°€ô€¡Y•¡¥±•5½‘•±%¹™¼¨¥5½‘•±%¹™¼èé•Ñ5½‘•±%¹™¼¡ÑÉ…¥¸´ùµ}µ½‘•±%¹‘•à¤ì(%5…ÑÉ¥àÑÉ…¥¹5…Ð€ô5…ÑÉ¥à¡ÑÉ…¥¸´ù•Ñ5…ÑÉ¥à ¤¤ì((%‘½½ÉA½Ì€ôÑÉ…¥¹5½‘•°´ùµ}Á½Í¥Ñ¥½¹Ímµ}Ù•¡½½Étì(%‘½½ÉA½Ì¹à€´ô€Ä¸Õ˜ì(%‘½½ÉA½Ì€ô5Õ±Ñ¥Á±äÍàÌ¡ÑÉ…¥¹5…Ð°‘½½ÉA½Ì¤ì(%‘½½ÉA½Ì€¬ôÑÉ…¥¸´ù•ÑA½Í¥Ñ¥½¸ ¤ì(¨¼(%É•ÑÕÉ¸€Äì)ô()Õ¥¹Ðà)A•èé•Ñ9•…É•ÍÑQÉ…¥¹A•‘A½Í¥Ñ¥½¸¡Y•¡¥±”€©ÑÉ…¥¸°Y•Ñ½È€™•¹Ñ•ÉA½Ì¤)ì(%Y•Ñ½È•¹Ñ•ÉMÑ•Á=™™Í•Ðì(%Y•¡¥±•5½‘•±%¹™¼€©ÑÉ…¥¹5½‘•°€ô€¡Y•¡¥±•5½‘•±%¹™¼€¨¥5½‘•±%¹™¼èé•Ñ5½‘•±%¹™¼¡ÑÉ…¥¸´ù•Ñ5½‘•±%¹‘•à ¤¤ì(%5…ÑÉ¥àÑÉ…¥¹5…Ð€ô5…ÑÉ¥à¡ÑÉ…¥¸´ù•Ñ5…ÑÉ¥à ¤¤ì(%Y•Ñ½È±•™Ñ¹ÑÉåA½Ì°É¥¡Ñ¹ÑÉåA½Ì°µ¥‘¹ÑÉåA½Ìì(%™±½…Ð‘¥ÍÑ1•™Ñ¹ÑÉä°‘¥ÍÑI¥¡Ñ¹ÑÉä°‘¥ÍÑ5¥‘¹ÑÉäì(($¼¼•¹Ñ•ÉMÑ•Á=™™Í•Ð€ôÙ•A•‘…É½½É¹¥µ=™™Í•Ðì(%•¹Ñ•ÉMÑ•Á=™™Í•Ð€ôY•Ñ½È Ä¸Õ˜°€À¸Á˜°€À¸Á˜¤ì((%¥˜€¡ÑÉ…¥¸´ùÁA…ÍÍ•¹•ÉÍmQI%9}A=M}1Q}9QIet¤ì($%‘¥ÍÑ1•™Ñ¹ÑÉä€ô€äää¸Á˜ì(%ô•±Í”ì($%±•™Ñ¹ÑÉåA½Ì€ôÑÉ…¥¹5½‘•°´ùµ}Á½Í¥Ñ¥½¹ÍmQI%9}A=M}1Q}9QIet€´•¹Ñ•ÉMÑ•Á=™™Í•Ðì($%±•™Ñ¹ÑÉåA½Ì€ô5Õ±Ñ¥Á±äÍàÌ¡ÑÉ…¥¹5…Ð°±•™Ñ¹ÑÉåA½Ì¤ì($%±•™Ñ¹ÑÉåA½Ì€¬ôÑÉ…¥¸´ù•ÑA½Í¥Ñ¥½¸ ¤ì($%‘¥ÍÑ1•™Ñ¹ÑÉä€ô€¡±•™Ñ¹ÑÉåA½Ì€´•ÑA½Í¥Ñ¥½¸ ¤¤¹5…¹¥ÑÕ‘” ¤ì(%ô((%¥˜€¡ÑÉ…¥¸´ùÁA…ÍÍ•¹•ÉÍmQI%9}A=M}5%}9QIet¤ì($%‘¥ÍÑ5¥‘¹ÑÉä€ô€äää¸Á˜ì(%ô•±Í”ì($%µ¥‘¹ÑÉåA½Ì€ôÑÉ…¥¹5½‘•°´ùµ}Á½Í¥Ñ¥½¹ÍmQI%9}A=M}5%}9QIet€´•¹Ñ•ÉMÑ•Á=™™Í•Ðì($%µ¥‘¹ÑÉåA½Ì€ô5Õ±Ñ¥Á±äÍàÌ¡ÑÉ…¥¹5…Ð°µ¥‘¹ÑÉåA½Ì¤ì($%µ¥‘¹ÑÉåA½Ì€¬ôÑÉ…¥¸´ù•ÑA½Í¥Ñ¥½¸ ¤ì($%‘¥ÍÑ5¥‘¹ÑÉä€ô€¡µ¥‘¹ÑÉåA½Ì€´•ÑA½Í¥Ñ¥½¸ ¤¤¹5…¹¥ÑÕ‘” ¤ì(%ô((%¥˜€¡ÑÉ…¥¸´ùÁA…ÍÍ•¹•ÉÍmQI%9}A=M}I%!Q}9QIet¤ì($%‘¥ÍÑI¥¡Ñ¹ÑÉä€ô€äää¸Á˜ì(%ô•±Í”ì($%É¥¡Ñ¹ÑÉåA½Ì€ôÑÉ…¥¹5½‘•°´ùµ}Á½Í¥Ñ¥½¹ÍmQI%9}A=M}I%!Q}9QIet€´•¹Ñ•ÉMÑ•Á=™™Í•Ðì($%É¥¡Ñ¹ÑÉåA½Ì€ô5Õ±Ñ¥Á±äÍàÌ¡ÑÉ…¥¹5…Ð°É¥¡Ñ¹ÑÉåA½Ì¤ì($%É¥¡Ñ¹ÑÉåA½Ì€¬ôÑÉ…¥¸´ù•ÑA½Í¥Ñ¥½¸ ¤ì($%‘¥ÍÑI¥¡Ñ¹ÑÉä€ô€¡É¥¡Ñ¹ÑÉåA½Ì€´•ÑA½Í¥Ñ¥½¸ ¤¤¹5…¹¥ÑÕ‘” ¤ì(%ô((%¥˜€¡‘¥ÍÑ5¥‘¹ÑÉä€ð‘¥ÍÑ1•™Ñ¹ÑÉä¤ì($%¥˜€¡‘¥ÍÑ5¥‘¹ÑÉä€ð‘¥ÍÑI¥¡Ñ¹ÑÉä¤ì($$%•¹Ñ•ÉA½Ì€ôµ¥‘¹ÑÉåA½Ìì($$%µ}Ù•¡½½È€ôQI%9}A=M}5%}9QIdì($%ô•±Í”ì($$%•¹Ñ•ÉA½Ì€ôÉ¥¡Ñ¹ÑÉåA½Ìì($$%µ}Ù•¡½½È€ôQI%9}A=M}I%!Q}9QIdì($%ô(%ô•±Í”¥˜€¡‘¥ÍÑI¥¡Ñ¹ÑÉä€ð‘¥ÍÑ1•™Ñ¹ÑÉä¤ì($%•¹Ñ•ÉA½Ì€ôÉ¥¡Ñ¹ÑÉåA½Ìì($%µ}Ù•¡½½È€ôQI%9}A=M}I%!Q}9QIdì(%ô•±Í”ì($%•¹Ñ•ÉA½Ì€ô±•™Ñ¹ÑÉåA½Ìì($%µ}Ù•¡½½È€ôQI%9}A=M}1Q}9QIdì(%ô((%É•ÑÕÉ¸€Äì)ô()Ù½¥)A•èéA•‘M•Ñ%¹QÉ…¥¹¡¹¥µ	±•¹‘ÍÍ½¥…Ñ¥½¸¨…¹¥µÍÍ½Œ°Ù½¥¨…Éœ¤)ì(%A•€©Á•€ô€¡A•¨¥…Éœì(%QÉ…¥¸€©Ù• €ô€¡QÉ…¥¸¨¥Á•´ùµ}Á5åY•¡¥±”ì((%¥˜€ …Ù• ¤($%É•ÑÕÉ¸ì((%Á•´ù‰%¹Y•¡¥±”€ôÑÉÕ”ì(%Á•´ùM•ÑA•‘MÑ…Ñ”¡A}I%Y%9¤ì(%Á•´ùI•ÍÑ½É•AÉ•Ù¥½ÕÍ=‰©•Ñ¥Ù” ¤ì(%Á•´ùM•Ñ5½Ù•MÑ…Ñ”¡A5=Y}MQ%10¤ì(%Ù• ´ù‘‘A…ÍÍ•¹•È¡Á•¤ì)ô()Ù½¥)A•èéM•Ñ¹Ñ•ÉQÉ…¥¸¡Y•¡¥±”€©ÑÉ…¥¸°Õ¥¹ÐÌÈÕ¹ÕÍ•¤)ì(%¥˜€¡µ}¹A•‘MÑ…Ñ”€ôôA}9QI}QI%8ñð€„ ¡QÉ…¥¸¨¥ÑÉ…¥¸¤´ù½½ÉÍlÁt¹%ÍÕ±±å=Á•¸ ¤¤($%É•ÑÕÉ¸ì(($¼¨($¼¼9½ÐÕÍ•(%Y•Ñ½È•¹Ñ•ÉA½Ìì(%•Ñ9•…É•ÍÑQÉ…¥¹A•‘A½Í¥Ñ¥½¸¡ÑÉ…¥¸°•¹Ñ•ÉA½Ì¤ì($¨¼(%µ}™I½Ñ…Ñ¥½¹ÕÈ€ôÑÉ…¥¸´ù•Ñ½ÉÝ…É ¤¹!•…‘¥¹œ ¤€´!1A$ì(%µ}Á5åY•¡¥±”€ôÑÉ…¥¸ì(%µ}Á5åY•¡¥±”´ùI•¥ÍÑ•ÉI•™•É•¹” ¡¹Ñ¥Ñä€¨¨¤€™µ}Á5åY•¡¥±”¤ì((%M•ÑA•‘MÑ…Ñ”¡A}9QI}QI%8¤ì(%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé	±•¹‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}QI%9}Q%8°€Ð¸Á˜¤ì(%µ}ÁY•¡¥±•¹¥´´ùM•Ñ¥¹¥Í¡…±±‰…¬¡A•‘M•Ñ%¹QÉ…¥¹°Ñ¡¥Ì¤ì(%‰UÍ•Í½±±¥Í¥½¸€ô™…±Í”ì(%1¥¹•UÁA•‘]¥Ñ¡QÉ…¥¸ ¤ì(%¥˜€¡%ÍA±…å•È ¤¤ì($%¥˜€  ¡A±…å•ÉA•¨¥Ñ¡¥Ì¤´ùµ}‰‘É•¹…±¥¹•Ñ¥Ù”¤($$$ ¡A±…å•ÉA•¨¥Ñ¡¥Ì¤´ù±•…É‘É•¹…±¥¹” ¤ì(%ô)ô()Ù½¥)A•èé¹Ñ•ÉQÉ…¥¸¡Ù½¥¤)ì(%1¥¹•UÁA•‘]¥Ñ¡QÉ…¥¸ ¤ì)ô()Ù½¥)A•èéM•ÑA•‘A½Í¥Ñ¥½¹%¹QÉ…¥¸¡Ù½¥¤)ì(%1¥¹•UÁA•‘]¥Ñ¡QÉ…¥¸ ¤ì)ô()Ù½¥)A•èé1¥¹•UÁA•‘]¥Ñ¡QÉ…¥¸¡Ù½¥¤)ì(%Y•Ñ½È±¥¹•UÁA½Ìì(%Y•¡¥±•5½‘•±%¹™¼€©ÑÉ…¥¹5½‘•°€ô€¡Y•¡¥±•5½‘•±%¹™¼€¨¥5½‘•±%¹™¼èé•Ñ5½‘•±%¹™¼¡µ}Á5åY•¡¥±”´ù•Ñ5½‘•±%¹‘•à ¤¤ì(%Y•Ñ½È•¹Ñ•É=™™Í•Ð Ä¸Õ˜°€À¸Á˜°€´À¸É˜¤ì((%µ}Ù•5½Ù•MÁ••€ôY•Ñ½È À¸Á˜°€À¸Á˜°€À¸Á˜¤ì(%µ}™I½Ñ…Ñ¥½¹ÕÈ€ôµ}Á5åY•¡¥±”´ù•Ñ½ÉÝ…É ¤¹!•…‘¥¹œ ¤€´!1A$ì(%µ}™I½Ñ…Ñ¥½¹•ÍÐ€ôµ}™I½Ñ…Ñ¥½¹ÕÈì((%¥˜€ …‰%¹Y•¡¥±”¤ì($%•Ñ9•…É•ÍÑQÉ…¥¹½½È¡µ}Á5åY•¡¥±”°±¥¹•UÁA½Ì¤ì($%±¥¹•UÁA½Ì¹è€¬ô€À¸É˜ì(%ô•±Í”ì($%¥˜€¡µ}Á5åY•¡¥±”´ùÁA…ÍÍ•¹•ÉÍmQI%9}A=M}1Q}9QIet€ôôÑ¡¥Ì¤ì(($$%±¥¹•UÁA½Ì€ôÑÉ…¥¹5½‘•°´ùµ}Á½Í¥Ñ¥½¹ÍmQI%9}A=M}1Q}9QIet€´•¹Ñ•É=™™Í•Ðì(($%ô•±Í”¥˜€¡µ}Á5åY•¡¥±”´ùÁA…ÍÍ•¹•ÉÍmQI%9}A=M}5%}9QIet€ôôÑ¡¥Ì¤ì(($$%±¥¹•UÁA½Ì€ôÑÉ…¥¹5½‘•°´ùµ}Á½Í¥Ñ¥½¹ÍmQI%9}A=M}5%}9QIet€´•¹Ñ•É=™™Í•Ðì(($%ô•±Í”¥˜€¡µ}Á5åY•¡¥±”´ùÁA…ÍÍ•¹•ÉÍmQI%9}A=M}I%!Q}9QIet€ôôÑ¡¥Ì¤ì(($$%±¥¹•UÁA½Ì€ôÑÉ…¥¹5½‘•°´ùµ}Á½Í¥Ñ¥½¹ÍmQI%9}A=M}I%!Q}9QIet€´•¹Ñ•É=™™Í•Ðì($%ô($%±¥¹•UÁA½Ì€ô5Õ±Ñ¥Á±äÍàÌ¡µ}Á5åY•¡¥±”´ù•Ñ5…ÑÉ¥à ¤°±¥¹•UÁA½Ì¤ì($%±¥¹•UÁA½Ì€¬ôµ}Á5åY•¡¥±”´ù•ÑA½Í¥Ñ¥½¸ ¤ì(%ô((%¥˜€¡µ}ÁY•¡¥±•¹¥´¤ì($%™±½…ÐÁ•É•¹Ñ…•1•™Ð€ôµ}ÁY•¡¥±•¹¥´´ù•ÑQ¥µ•1•™Ð ¤€¼µ}ÁY•¡¥±•¹¥´´ù¡¥•É…É¡ä´ùÑ½Ñ…±1•¹Ñ ì($%±¥¹•UÁA½Ì€¬ô€¡•ÑA½Í¥Ñ¥½¸ ¤€´±¥¹•UÁA½Ì¤€¨Á•É•¹Ñ…•1•™Ðì(%ô((%M•ÑA½Í¥Ñ¥½¸¡±¥¹•UÁA½Ì¤ì(%M•Ñ!•…‘¥¹œ¡µ}™I½Ñ…Ñ¥½¹ÕÈ¤ì)ô()Ù½¥)A•èéM•Ñá¥ÑQÉ…¥¸¡Y•¡¥±”¨ÑÉ…¥¸¤)ì(%¥˜€¡µ}¹A•‘MÑ…Ñ”€ôôA}a%Q}QI%8ñðÑÉ…¥¸´ù•ÑMÑ…ÑÕÌ ¤€„ôMQQUM}QI%9}9=Q}5=Y%9ñð€„ ¡QÉ…¥¸¨¥ÑÉ…¥¸¤´ù½½ÉÍlÁt¹%ÍÕ±±å=Á•¸ ¤¤($%É•ÑÕÉ¸ì(($¼¨($¼¼9½ÐÕÍ•(%Y•Ñ½È•á¥ÑA½Ìì(%•Ñ9•…É•ÍÑQÉ…¥¹A•‘A½Í¥Ñ¥½¸¡ÑÉ…¥¸°•á¥ÑA½Ì¤ì($¨¼(%M•ÑA•‘MÑ…Ñ”¡A}a%Q}QI%8¤ì(%µ}ÁY•¡¥±•¹¥´€ô¹¥µ5…¹…•Èèé	±•¹‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}QI%9}Q=UP°€Ð¸Á˜¤ì(%µ}ÁY•¡¥±•¹¥´´ùM•Ñ¥¹¥Í¡…±±‰…¬¡A•‘M•Ñ=ÕÑQÉ…¥¹°Ñ¡¥Ì¤ì(%‰UÍ•Í½±±¥Í¥½¸€ô™…±Í”ì(%1¥¹•UÁA•‘]¥Ñ¡QÉ…¥¸ ¤ì)ô()Ù½¥)A•èéá¥ÑQÉ…¥¸¡Ù½¥¤)ì(%1¥¹•UÁA•‘]¥Ñ¡QÉ…¥¸ ¤ì)ô()Ù½¥)A•èéA•‘M•Ñ=ÕÑQÉ…¥¹¡¹¥µ	±•¹‘ÍÍ½¥…Ñ¥½¸€©…¹¥µÍÍ½Œ°Ù½¥€©…Éœ¤)ì(%A•€©Á•€ô€¡A•¨¥…Éœì((%Y•¡¥±”€©Ù• €ôÁ•´ùµ}Á5åY•¡¥±”ì((%¥˜€¡Á•´ùµ}ÁY•¡¥±•¹¥´¤($%Á•´ùµ}ÁY•¡¥±•¹¥´´ù‰±•¹‘•±Ñ„€ô€´ÄÀÀÀ¸Á˜ì((%Á•´ù‰UÍ•Í½±±¥Í¥½¸€ôÑÉÕ”ì(%Á•´ùµ}ÁY•¡¥±•¹¥´€ô¹¥°ì(%Á•´ù‰%¹Y•¡¥±”€ô™…±Í”ì(%Á•´ùM•ÑA•‘MÑ…Ñ”¡A}%1¤ì(%Á•´ùI•ÍÑ½É•AÉ•Ù¥½ÕÍ=‰©•Ñ¥Ù” ¤ì(%Á•´ùM•Ñ5½Ù•MÑ…Ñ”¡A5=Y}MQ%10¤ì((%5…ÑÉ¥àÁ•‘5…Ð¡Á•´ù•Ñ5…ÑÉ¥à ¤¤ì(%Á•´ùµ}™I½Ñ…Ñ¥½¹ÕÈ€ô!1A$€¬Ù• ´ù•Ñ½ÉÝ…É ¤¹!•…‘¥¹œ ¤ì(%Á•´ùµ}™I½Ñ…Ñ¥½¹•ÍÐ€ôÁ•´ùµ}™I½Ñ…Ñ¥½¹ÕÈì(%Y•Ñ½ÈÁ½Í™Ñ•Éá¥Ð€ô5Õ±Ñ¥Á±äÍàÌ¡Á•‘5…Ð°Ù•A•‘QÉ…¥¹½½É¹¥µ=™™Í•Ð¤ì(%Á½Í™Ñ•Éá¥Ð€¬ôÁ•´ù•ÑA½Í¥Ñ¥½¸ ¤ì(%A•‘A±…•µ•¹Ðèé¥¹‘i½½É½ÉA• ™Á½Í™Ñ•Éá¥Ð¤ì(%Á•´ùµ}Ù•5½Ù•MÁ••€ôY•Ñ½È À¸Á˜°€À¸Á˜°€À¸Á˜¤ì(%Á•´ùM•ÑA½Í¥Ñ¥½¸¡Á½Í™Ñ•Éá¥Ð¤ì(%Á•´ùM•Ñ!•…‘¥¹œ¡Á•´ùµ}™I½Ñ…Ñ¥½¹ÕÈ¤ì(%Ù• ´ùI•µ½Ù•A…ÍÍ•¹•È¡Á•¤ì)ô()Ù½¥)A•èéI•¥ÍÑ•ÉQ¡É•…Ñ]¥Ñ¡…¹A•‘Ì¡¹Ñ¥Ñä€©…ÑÑ…­•È¤)ì(%A•€©…ÑÑ…­•ÉA•€ô¹¥°ì(%¥˜€¡…ÑÑ…­•È¤ì($%¥˜€¡µ}½‰©•Ñ¥Ù”€„ô=	)Q%Y}-%11}!I}=9}==P€˜˜µ}½‰©•Ñ¥Ù”€„ô=	)Q%Y}-%11}!I}9e}59L¤ì($$%¥˜€¡…ÑÑ…­•È´ù%ÍA• ¤¤ì($$$%…ÑÑ…­•ÉA•€ô€¡A•¨¥…ÑÑ…­•Èì($$%ô•±Í”ì($$$%¥˜€ ……ÑÑ…­•È´ù%ÍY•¡¥±” ¤¤($$$$%É•ÑÕÉ¸ì(($$$%…ÑÑ…­•ÉA•€ô€ ¡Y•¡¥±”¨¥…ÑÑ…­•È¤´ùÁÉ¥Ù•Èì($$$%¥˜€ ……ÑÑ…­•ÉA•¤($$$$%É•ÑÕÉ¸ì($$%ô(($$%¥˜€¡…ÑÑ…­•ÉA•€˜˜€¡…ÑÑ…­•ÉA•´ù%ÍA±…å•È ¤ñð…ÑÑ…­•ÉA•´ù%Í…¹5•µ‰•È ¤¤¤ì($$$%™½È€¡¥¹Ð¤€ô€Àì¤€ðµ}¹Õµ9•…ÉA•‘Ìì€¬­¤¤ì($$$$%A•€©¹•…ÉA•€ôµ}¹•…ÉA•‘Ím¥tì($$$$%¥˜€¡¹•…ÉA•´ù%ÍA½¥¹Ñ•ÉY…±¥ ¤¤ì($$$$$%¥˜€¡¹•…ÉA•€„ôÑ¡¥Ì€˜˜¹•…ÉA•´ùµ}¹A•‘QåÁ”€ôôµ}¹A•‘QåÁ”¤($$$$$$%¹•…ÉA•´ùµ}™•…É±…ÌðôA•‘QåÁ”èé•Ñ±…œ¡…ÑÑ…­•ÉA•´ùµ}¹A•‘QåÁ”¤ì($$$$%ô($$$%ô($$%ô($%ô(%ô((%¥˜€¡…ÑÑ…­•ÉA•€˜˜…ÑÑ…­•ÉA•´ù%ÍA±…å•È ¤€˜˜€¡…ÑÑ…­•ÉA•´ùµ}¹A•‘MÑ…Ñ”€ôôA}I),ñð…ÑÑ…­•ÉA•´ù‰%¹Y•¡¥±”¤¤ì($%¥˜€ ……ÑÑ…­•ÉA•´ùµ}Á5åY•¡¥±”ñð…ÑÑ…­•ÉA•´ùµ}Á5åY•¡¥±”´ù•Ñ5½‘•±%¹‘•à ¤€„ô5%}Q=eh¤ì($$%¥¹ÐÄØ±…ÍÑY•¡¥±”ì($$%¹Ñ¥Ñä€©Ù•¡¥±•Ílátì($$%]½É±èé¥¹‘=‰©•ÑÍ%¹I…¹”¡•ÑA½Í¥Ñ¥½¸ ¤°9QI}I}5a}%MP°ÑÉÕ”°€™±…ÍÑY•¡¥±”°€Ø°Ù•¡¥±•Ì°™…±Í”°ÑÉÕ”°™…±Í”°™…±Í”°™…±Í”¤ì(($$%¥˜€¡±…ÍÑY•¡¥±”€ø€à¤($$$%±…ÍÑY•¡¥±”€ô€àì(($$%™½È€¡¥¹Ð¨€ô€Àì¨€ð±…ÍÑY•¡¥±”ì€¬­¨¤ì($$$%Y•¡¥±”€©¹•…ÉY• €ô€¡Y•¡¥±”¨¤Ù•¡¥±•Ím©tì(($$$%¥˜€¡¹•…ÉY• ´ùY•¡¥±•É•…Ñ•‘	ä€„ô5%MM%=9}Y!%1¤ì($$$$%A•€©¹•…ÉY•¡É¥Ù•È€ô¹•…ÉY• ´ùÁÉ¥Ù•Èì(($$$$%¥˜€¡¹•…ÉY•¡É¥Ù•È€˜˜¹•…ÉY•¡É¥Ù•È€„ôÑ¡¥Ì€˜˜¹•…ÉY•¡É¥Ù•È´ùµ}¹A•‘QåÁ”€ôôµ}¹A•‘QåÁ”¤ì(($$$$$%¥˜€¡¹•…ÉY• ´ù%ÍY•¡¥±•9½Éµ…° ¤€˜˜¹•…ÉY• ´ù%Í…È ¤¤ì($$$$$$%¹•…ÉY• ´ùÕÑ½A¥±½Ð¹µ}¹ÉÕ¥Í•MÁ••€ô5}MA}Q=}I%}MA€¨¹•…ÉY• ´ùÁ!…¹‘±¥¹œ´ùQÉ…¹Íµ¥ÍÍ¥½¸¹™5…áÉÕ¥Í•Y•±½¥Ñä€¨€À¸á˜ì($$$$$$%¹•…ÉY• ´ùÕÑ½A¥±½Ð¹µ}¹…É5¥ÍÍ¥½¸€ô5%MM%=9}I5A1eI}I]dì($$$$$$%¹•…ÉY• ´ùM•ÑMÑ…ÑÕÌ¡MQQUM}A!eM%L¤ì($$$$$$%¹•…ÉY• ´ùÕÑ½A¥±½Ð¹µ}¹Q•µÁÑ¥½¸€ôQ5AQ}9=9ì($$$$$$%¹•…ÉY• ´ùÕÑ½A¥±½Ð¹µ}¹É¥Ù¥¹MÑå±”€ôI%Y%9MQe1}Y=%}ILì($$$$$%ô($$$$%ô($$$%ô($$%ô($%ô(%ô)ô((¼¼M½µ”¡•±Á•È™Õ¹Ñ¥½¸Ý¡¥ ‘½•Í¸Ð•á¥ÍÐ¥¸½œ…µ”¸)¥¹±¥¹”Ù½¥)M•±•Ñ±½Í•ÍÑ9½‘•½ÉM••¬¡A•€©Á•°A…Ñ¡9½‘”€©¹½‘”°Y•Ñ½ÈÉ±½Í•¥ÍÐ°Y•Ñ½ÈÉ™…É¥ÍÐ°A…Ñ¡9½‘”€©±½Í•9½‘”°A…Ñ¡9½‘”€©±½Í•9½‘”È°¥¹ÐÉÕ¹½Õ¹Ð€ô€Ì¤)ì(%™½È€¡¥¹Ð¤€ô€Àì¤€ð¹½‘”´ù¹Õµ1¥¹­Ìì¤¬¬¤ì(($%A…Ñ¡9½‘”€©Ñ•ÍÑ9½‘”€ô€™Q¡•A…Ñ¡Ì¹µ}Á…Ñ¡9½‘•ÍmQ¡•A…Ñ¡Ì¹½¹¹•Ñ•‘9½‘”¡¤€¬¹½‘”´ù™¥ÉÍÑ1¥¹¬¥tì(($%¥˜€¡Ñ•ÍÑ9½‘”€˜˜Ñ•ÍÑ9½‘”€„ô±½Í•9½‘”€˜˜Ñ•ÍÑ9½‘”€„ô±½Í•9½‘”È¤ì($$%Y•Ñ½ÈÉÁ½Í¥™˜¡Á•´ùµ}Ù•M••­A½Ì€´Ñ•ÍÑ9½‘”´ù•ÑA½Í¥Ñ¥½¸ ¤¤ì($$%™±½…Ð‘¥ÍÐ€ôÁ½Í¥™˜¹5…¹¥ÑÕ‘•MÅÈ ¤ì(($$%¥˜€¡™…É¥ÍÐ¹5…¹¥ÑÕ‘•MÅÈ ¤€ø‘¥ÍÐ¤ì(($$$%¥˜€¡±½Í•¥ÍÐ¹5…¹¥ÑÕ‘•MÅÈ ¤€ðô‘¥ÍÐ¤ì($$$$%Á•´ùµ}Á9•áÑA…Ñ¡9½‘”€ô±½Í•9½‘”ì($$$$%±½Í•¥ÍÐ€ôÁ½Í¥™˜ì($$$%ô•±Í”ì($$$$%Á•´ùµ}Á9•áÑA…Ñ¡9½‘”€ô€¡±½Í•9½‘”È€ü±½Í•9½‘”È€èÑ•ÍÑ9½‘”¤ì($$$$%™…É¥ÍÐ€ôÁ½Í¥™˜ì($$$%ô($$%ô(($$%¥˜€ ´µÉÕ¹½Õ¹Ð€ø€À¤($$$%M•±•Ñ±½Í•ÍÑ9½‘•½ÉM••¬¡Á•°Ñ•ÍÑ9½‘”°±½Í•¥ÍÐ°™…É¥ÍÐ°±½Í•9½‘”°€¡±½Í•9½‘”È€ü±½Í•9½‘”È€èÑ•ÍÑ9½‘”¤°ÉÕ¹½Õ¹Ð¤ì($%ô(%ô)ô()‰½½°)A•èé¥¹‘	•ÍÑ½½É‘ÍÉ½µ9½‘•Ì¡Y•Ñ½ÈÕ¹ÕÍ•°Y•Ñ½È€©‰•ÍÑ½½É‘Ì¤)ì(%¥˜€¡µ}Á9•áÑA…Ñ¡9½‘”ñð€…‰UÍ•A•‘9½‘•M••¬¤($%É•ÑÕÉ¸™…±Í”ì((%Y•Ñ½È½ÕÉA½Ì€ô•ÑA½Í¥Ñ¥½¸ ¤ì((%¥¹Ð±½Í•ÍÑ9½‘•%€ôQ¡•A…Ñ¡Ì¹¥¹‘9½‘•±½Í•ÍÑQ½½½ÉÌ¡•ÑA½Í¥Ñ¥½¸ ¤°€Ä°€ääääää¸å˜¤ì((%Y•Ñ½ÈÍ••­=‰©A½Ì€ôµ}Ù•M••­A½Ìì(%Í••­=‰©A½Ì¹è€¬ô€Ä¸Á˜ì((%¥˜€¡]½É±èé•Ñ%Í1¥¹•=™M¥¡Ñ±•…È¡½ÕÉA½Ì°Í••­=‰©A½Ì°ÑÉÕ”°™…±Í”°™…±Í”°ÑÉÕ”°™…±Í”°™…±Í”°™…±Í”¤¤($%É•ÑÕÉ¸™…±Í”ì((%µ}Á9•áÑA…Ñ¡9½‘”€ô¹¥°ì((%Y•Ñ½ÈÉÍ••­A½Í¥ÍÐ€¡µ}Ù•M••­A½Ì€´½ÕÉA½Ì¤ì((%A…Ñ¡9½‘”€©±½Í•ÍÑ9½‘”€ô€™Q¡•A…Ñ¡Ì¹µ}Á…Ñ¡9½‘•Ím±½Í•ÍÑ9½‘•%‘tì(%Y•Ñ½ÈÉ±½Í•¥ÍÐ¡µ}Ù•M••­A½Ì€´±½Í•ÍÑ9½‘”´ù•ÑA½Í¥Ñ¥½¸ ¤¤ì((%M•±•Ñ±½Í•ÍÑ9½‘•½ÉM••¬¡Ñ¡¥Ì°±½Í•ÍÑ9½‘”°±½Í•¥ÍÐ°Í••­A½Í¥ÍÐ°±½Í•ÍÑ9½‘”°¹¥°¤ì(($¼¼‰½Ù”™Õ¹Ñ¥½¸‘•¥‘•Ñ¡…Ð½¥¹œÑ¼Ñ¡”¹•áÐ¹½‘”¥Ìµ½É”±½¥…°Ñ¡…¸Í••­¥¹œÑ¡”½‰©•Ð¸(%¥˜€¡µ}Á9•áÑA…Ñ¡9½‘”¤ì(($%Y•Ñ½ÈÁ…Ñ¡Q½9•áÑ9½‘”€ôµ}Á9•áÑA…Ñ¡9½‘”´ù•ÑA½Í¥Ñ¥½¸ ¤€´½ÕÉA½Ìì($%¥˜€¡Á…Ñ¡Q½9•áÑ9½‘”¹5…¹¥ÑÕ‘•MÅÈÉ ¤€ðÍ••­A½Í¥ÍÐ¹5…¹¥ÑÕ‘•MÅÈ ¤¤ì($$$©‰•ÍÑ½½É‘Ì€ôµ}Á9•áÑA…Ñ¡9½‘”´ù•ÑA½Í¥Ñ¥½¸ ¤ì($$%É•ÑÕÉ¸ÑÉÕ”ì($%ô($%µ}Á9•áÑA…Ñ¡9½‘”€ô¹¥°ì(%ô((%É•ÑÕÉ¸™…±Í”ì)ô()‰½½°)A•èéÕ­¹‘½Ù•È¡Ù½¥¤)ì(%¥˜€ …µ}Á•‘%¹=‰©•Ñ¥Ù”ñðQ¥µ•Èèé•ÑQ¥µ•%¹5¥±±¥Í•½¹‘Ì ¤€ðôµ}‘Õ­¹‘½Ù•ÉQ¥µ•È¤($%É•ÑÕÉ¸™…±Í”ì((%¥˜€¡‰-¥¹‘…MÑ…å%¹M…µ•A±…”¥ì(($%¥˜€¡Q¥µ•Èèé•ÑQ¥µ•%¹5¥±±¥Í•½¹‘Ì ¤€ðôµ}±•…Ù•…ÉQ¥µ•È¤ì($$%¥˜€ …µ}Á1½½­Q…É•Ðñðµ}Á1½½­Q…É•Ð€„ôµ}Á•‘%¹=‰©•Ñ¥Ù”¤ì($$$%µ}Á1½½­Q…É•Ð€ôµ}Á•‘%¹=‰©•Ñ¥Ù”ì($$$%µ}Á1½½­Q…É•Ð´ùI•¥ÍÑ•ÉI•™•É•¹” ¡¹Ñ¥Ñä€¨¨¤€™µ}Á1½½­Q…É•Ð¤ì($$%ô($$%¥˜€ …‰%Í¥µ¥¹Õ¸¤($$$%M•Ñ¥µ±…œ¡µ}Á•‘%¹=‰©•Ñ¥Ù”¤ì(($%ô•±Í”ì($$%‰É½Õ¡]¡•¹M¡½½Ñ¥¹œ€ô™…±Í”ì($$%‰-¥¹‘…MÑ…å%¹M…µ•A±…”€ô™…±Í”ì($$%‰%ÍÕ­¥¹œ€ô™…±Í”ì($$%‰Õ­¹‘½Ù•È€ô™…±Í”ì($$%µ}¡•…‘¥¹I…Ñ”€ô€ÄÀ¸Á˜ì($$%µ}‘Õ­¹‘½Ù•ÉQ¥µ•È€ôQ¥µ•Èèé•ÑQ¥µ•%¹5¥±±¥Í•½¹‘Ì ¤€¬•¹•É…°èé•ÑI…¹‘½µ9Õµ‰•É%¹I…¹” ÈÀÀÀÀ°ÌÀÀÀÀ¤ì($$%¥˜€¡µ}ÁM••­Q…É•Ð€˜˜µ}ÁM••­Q…É•Ð´ù%ÍY•¡¥±” ¤¤($$$$ ¡Y•¡¥±”¨¥µ}ÁM••­Q…É•Ð¤´ùµ}¹ÕµA•‘ÍUÍ•%ÑÍ½Ù•È´´ì($%ô($%É•ÑÕÉ¸™…±Í”ì(%ô((%‰½½°©ÕÍÑÕ­•€ô™…±Í”ì(%Y•¡¥±”€©™½Õ¹‘Y• €ô¹¥°ì(%™±½…Ðµ…á¥ÍÐ€ô€ÈÈÔ¸Á˜ì(%‰%ÍÕ­¥¹œ€ô™…±Í”ì(%‰É½Õ¡]¡•¹M¡½½Ñ¥¹œ€ô™…±Í”ì(%¥˜€¡Q¥µ•Èèé•ÑQ¥µ•%¹5¥±±¥Í•½¹‘Ì ¤€øµ}±•…Ù•…ÉQ¥µ•È¤ì($%Y•Ñ½ÈÁ½Ì€ô•ÑA½Í¥Ñ¥½¸ ¤ì($%¥¹ÐÄØ±…ÍÑY•¡¥±”ì($%¹Ñ¥Ñä€©Ù•¡¥±•Ílátì($%]½É±èé¥¹‘=‰©•ÑÍ%¹I…¹”¡Á½Ì°!-}9I	e}Q!%9M}5a}%MP°ÑÉÕ”°€™±…ÍÑY•¡¥±”°€Ø°Ù•¡¥±•Ì°™…±Í”°ÑÉÕ”°™…±Í”°™…±Í”°™…±Í”¤ì(($%™½È€¡¥¹Ð¤€ô€Àì¤€ð±…ÍÑY•¡¥±”ì¤¬¬¤ì($$%Y•¡¥±”€©Ù• €ô€¡Y•¡¥±”¨¤Ù•¡¥±•Ím¥tì($$%¥˜€¡Ù• ´ùµ}Ù•5½Ù•MÁ••¹5…¹¥ÑÕ‘” ¤€ðô€À¸ÀÉ˜($$$$˜˜€…Ù• ´ù‰%Í	ÕÌ($$$$˜˜€…Ù• ´ù‰%ÍY…¸($$$$˜˜€…Ù• ´ù‰%Í	¥œ($$$$˜˜Ù• ´ùµ}¹ÕµA•‘ÍUÍ•%ÑÍ½Ù•È€ð€Ì¤ì($$$%™±½…Ð‘¥ÍÐ€ô€¡•ÑA½Í¥Ñ¥½¸ ¤€´Ù• ´ù•ÑA½Í¥Ñ¥½¸ ¤¤¹5…¹¥ÑÕ‘•MÅÈ ¤ì($$$%¥˜€¡‘¥ÍÐ€ðµ…á¥ÍÐ¤ì($$$$%µ…á¥ÍÐ€ô‘¥ÍÐì($$$$%™½Õ¹‘Y• €ôÙ• ì($$$%ô($$%ô($%ô($%¥˜€¡™½Õ¹‘Y• ¤ì($$$¼¼U¹ÕÍ•¸($$$¼¼Y•Ñ½È±™]¡••±A½Ì°É™]¡••±A½Ìì($$$¼¼™½Õ¹‘Y• ´ù•Ñ½µÁ½¹•¹Ñ]½É±‘A½Í¥Ñ¥½¸¡I}]!1}I°É™]¡••±A½Ì¤ì($$$¼¼™½Õ¹‘Y• ´ù•Ñ½µÁ½¹•¹Ñ]½É±‘A½Í¥Ñ¥½¸¡I}]!1}1°±™]¡••±A½Ì¤ì($$%Y•Ñ½ÈÉ¥¡ÑM¥‘”°±•™ÑM¥‘”ì(($$$¼¼€ÌÁ•ÉÍ½¹Ì…¸ÕÍ”Ñ¡”…È…Ì½Ù•È¸½Õ¹Ñ¡”½ÉÉ•ÐÁ½Í¥Ñ¥½¸™½ÈÕÌ¸($$%¥˜€¡™½Õ¹‘Y• ´ùµ}¹ÕµA•‘ÍUÍ•%ÑÍ½Ù•È€ôô€È¤ì($$$%É¥¡ÑM¥‘”€ôY•Ñ½È Ä¸Õ˜°€´À¸Õ˜°€À¸Á˜¤ì($$$%±•™ÑM¥‘”€ôY•Ñ½È ´Ä¸Õ˜°€´À¸Õ˜°€À¸Á˜¤ì($$%ô•±Í”¥˜€¡™½Õ¹‘Y• ´ùµ}¹ÕµA•‘ÍUÍ•%ÑÍ½Ù•È€ôô€Ä¤ì($$$%É¥¡ÑM¥‘”€ôY•Ñ½È Ä¸Õ˜°€À¸Õ˜°€À¸Á˜¤ì($$$%±•™ÑM¥‘”€ôY•Ñ½È ´Ä¸Õ˜°€À¸Õ˜°€À¸Á˜¤ì($$%ô•±Í”¥˜€¡™½Õ¹‘Y• ´ùµ}¹ÕµA•‘ÍUÍ•%ÑÍ½Ù•È€ôô€À¤ì($$$%É¥¡ÑM¥‘”€ôY•Ñ½È Ä¸Õ˜°€À¸Á˜°€À¸Á˜¤ì($$$%±•™ÑM¥‘”€ôY•Ñ½È ´Ä¸Õ˜°€À¸Á˜°€À¸Á˜¤ì($$%ô(($$%5…ÑÉ¥àÙ•¡5…ÑÉ¥à¡™½Õ¹‘Y• ´ù•Ñ5…ÑÉ¥à ¤¤ì($$%Y•Ñ½È‘Õ­ÑI¥¡ÑM¥‘”€ô5Õ±Ñ¥Á±äÍàÌ¡Ù•¡5…ÑÉ¥à°É¥¡ÑM¥‘”¤€¬™½Õ¹‘Y• ´ù•ÑA½Í¥Ñ¥½¸ ¤ì(($$%Y•Ñ½È‘Õ­Ñ1•™ÑM¥‘”€ô5Õ±Ñ¥Á±äÍàÌ¡Ù•¡5…ÑÉ¥à°±•™ÑM¥‘”¤€¬™½Õ¹‘Y• ´ù•ÑA½Í¥Ñ¥½¸ ¤ì(($$%Y•Ñ½È‘¥ÍÑ]¥Ñ¡A•‘I¥¡ÑM¥‘”€ôµ}Á•‘%¹=‰©•Ñ¥Ù”´ù•ÑA½Í¥Ñ¥½¸ ¤€´‘Õ­ÑI¥¡ÑM¥‘”ì($$%Y•Ñ½È‘¥ÍÑ]¥Ñ¡A•‘1•™ÑM¥‘”€ôµ}Á•‘%¹=‰©•Ñ¥Ù”´ù•ÑA½Í¥Ñ¥½¸ ¤€´‘Õ­Ñ1•™ÑM¥‘”ì(($$%Y•Ñ½È‘Õ­A½Ìì($$%¥˜€¡‘¥ÍÑ]¥Ñ¡A•‘I¥¡ÑM¥‘”¹5…¹¥ÑÕ‘•MÅÈ ¤€ðô‘¥ÍÑ]¥Ñ¡A•‘1•™ÑM¥‘”¹5…¹¥ÑÕ‘•MÅÈ ¤¤($$$%‘Õ­A½Ì€ô‘Õ­Ñ1•™ÑM¥‘”ì($$%•±Í”($$$%‘Õ­A½Ì€ô‘Õ­ÑI¥¡ÑM¥‘”ì(($$%¥˜€¡]½É±èéQ•ÍÑMÁ¡•É•…¥¹ÍÑ]½É±¡‘Õ­A½Ì°€À¸Õ˜°¹¥°°ÑÉÕ”°ÑÉÕ”°ÑÉÕ”°™…±Í”°™…±Í”°™…±Í”¤($$$$˜˜]½É±èé•Ñ%Í1¥¹•=™M¥¡Ñ±•…È¡•ÑA½Í¥Ñ¥½¸ ¤°‘Õ­A½Ì°€Ä°€À°€À°€Ä°€À°€À°€À¤¤ì($$$%M•ÑM••¬¡‘Õ­A½Ì°€Ä¸Á˜¤ì($$$%µ}¡•…‘¥¹I…Ñ”€ô€ÄÔ¸Á˜ì($$$%‰%ÍIÕ¹¹¥¹œ€ôÑÉÕ”ì($$$%‰Õ­¹‘½Ù•È€ôÑÉÕ”ì($$$%©ÕÍÑÕ­•€ôÑÉÕ”ì($$$%µ}±•…Ù•…ÉQ¥µ•È€ôQ¥µ•Èèé•ÑQ¥µ•%¹5¥±±¥Í•½¹‘Ì ¤€¬€ÔÀÀì($$$%¥˜€¡™½Õ¹‘Y• ´ù‰%Í1…Ý¹™½É•È¤($$$$%µ}…É%¹=‰©•Ñ¥Ù”€ô™½Õ¹‘Y• ì(($$$$¼¼	UüM¡½Õ±‘¸ÐÝ”É•¥ÍÑ•ÈÑ¡”É•™•É•¹”ü($$$%µ}ÁM••­Q…É•Ð€ô™½Õ¹‘Y• ì($$$%±•…ÉA½¥¹ÑÕ¹Ð ¤ì($$%ô•±Í”ì($$$%µ}‘Õ­¹‘½Ù•ÉQ¥µ•È€ôQ¥µ•Èèé•ÑQ¥µ•%¹5¥±±¥Í•½¹‘Ì ¤€¬•¹•É…°èé•ÑI…¹‘½µ9Õµ‰•É%¹I…¹” ÄÀÀÀÀ°€ÄÔÀÀÀ¤ì($$$%‰Õ­¹‘½Ù•È€ô™…±Í”ì($$%ô($%ô•±Í”ì($$%‰Õ­¹‘½Ù•È€ô™…±Í”ì($%ô(%ô((%¥˜€ …©ÕÍÑÕ­•€˜˜€…‰Õ­¹‘½Ù•È¤($%É•ÑÕÉ¸™…±Í”ì($(%¥˜€ …M••¬ ¤¤($%É•ÑÕÉ¸ÑÉÕ”ì((%‰-¥¹‘…MÑ…å%¹M…µ•A±…”€ôÑÉÕ”ì(%‰Õ­¹‘½Ù•È€ô™…±Í”ì(%µ}Ù•M••­A½Ì€ôY•Ñ½È À¸Á˜°€À¸Á˜°€À¸Á˜¤ì(%¥˜€¡µ}ÁM••­Q…É•Ð€˜˜µ}ÁM••­Q…É•Ð´ù%ÍY•¡¥±” ¤¤($$ ¡Y•¡¥±”¨¥µ}ÁM••­Q…É•Ð¤´ùµ}¹ÕµA•‘ÍUÍ•%ÑÍ½Ù•È¬¬ì($(%M•Ñ%‘±” ¤ì(%M•Ñ5½Ù•MÑ…Ñ”¡A5=Y}MQ%10¤ì(%M•Ñ5½Ù•¹¥´ ¤ì(%¥˜€ …µ}Á1½½­Q…É•Ðñðµ}Á1½½­Q…É•Ð€„ôµ}Á•‘%¹=‰©•Ñ¥Ù”¤ì($%µ}Á1½½­Q…É•Ð€ôµ}Á•‘%¹=‰©•Ñ¥Ù”ì($%µ}Á1½½­Q…É•Ð´ùI•¥ÍÑ•ÉI•™•É•¹” ¡¹Ñ¥Ñä€¨¨¤€™µ}Á1½½­Q…É•Ð¤ì(%ô((%µ}±•…Ù•…ÉQ¥µ•È€ôQ¥µ•Èèé•ÑQ¥µ•%¹5¥±±¥Í•½¹‘Ì ¤€¬•¹•É…°èé•ÑI…¹‘½µ9Õµ‰•É%¹I…¹” ÌÀÀÀ°€ØÀÀÀ¤ì(%É•ÑÕÉ¸™…±Í”ì)ô()Y•Ñ½È)A•èé•ÑA½Í¥Ñ¥½¹Q½=Á•¹…É½½È¡Y•¡¥±”€©Ù• °Õ¥¹ÐÌÈ½µÁ½¹•¹Ð°™±½…Ð½™™Í•Ð¤)ì$(%Y•Ñ½È‘½½ÉA½Ìì(%5…ÑÉ¥àÙ•¡5…Ð¡Ù• ´ù•Ñ5…ÑÉ¥à ¤¤ì((%‘½½ÉA½Ì€ô5Õ±Ñ¥Á±äÍàÌ¡Ù•¡5…Ð°•Ñ1½…±A½Í¥Ñ¥½¹Q½=Á•¹…É½½È¡Ù• °½µÁ½¹•¹Ð°½™™Í•Ð¤¤ì((%É•ÑÕÉ¸Ù• ´ù•ÑA½Í¥Ñ¥½¸ ¤€¬‘½½ÉA½Ìì)ô()Y•Ñ½È)A•èé•Ñ1½…±A½Í¥Ñ¥½¹Q½=Á•¹…É½½È¡Y•¡¥±”€©Ù• °Õ¥¹ÐÌÈ½µÁ½¹•¹Ð°™±½…ÐÍ•…ÑA½Í5Õ±Ð¤)ì(%Y•¡¥±•5½‘•±%¹™¼€©Ù•¡5½‘•°ì€(%Y•Ñ½ÈÙ•¡½½ÉA½Ìì(%Y•Ñ½ÈÙ•¡½½É=™™Í•Ðì(%™±½…ÐÍ•…Ñ=™™Í•Ðì((%Ù•¡5½‘•°€ô€¡Y•¡¥±•5½‘•±%¹™¼€¨¥5½‘•±%¹™¼èé•Ñ5½‘•±%¹™¼¡Ù• ´ù•Ñ5½‘•±%¹‘•à ¤¤ì(%¥˜€¡Ù• ´ù‰%ÍY…¸€˜˜€¡½µÁ½¹•¹Ð€ôôI}==I}1Hñð½µÁ½¹•¹Ð€ôôI}==I}IH¤¤ì($%Í•…Ñ=™™Í•Ð€ô€À¸Á˜ì($%Ù•¡½½É=™™Í•Ð€ôÙ•A•‘Y…¹I•…É½½É¹¥µ=™™Í•Ðì(%ô•±Í”ì($%Í•…Ñ=™™Í•Ð€ôÙ• ´ùÁ!…¹‘±¥¹œ´ù™M•…Ñ=™™Í•Ñ¥ÍÑ…¹”€¨Í•…ÑA½Í5Õ±Ðì($%¥˜€¡Ù• ´ù‰1½ÝY•¡¥±”¤ì($$%Ù•¡½½É=™™Í•Ð€ôÙ•A•‘…É½½É1½¹¥µ=™™Í•Ðì($%ô•±Í”ì($$%Ù•¡½½É=™™Í•Ð€ôÙ•A•‘…É½½É¹¥µ=™™Í•Ðì($%ô(%ô((%ÍÝ¥Ñ €¡½µÁ½¹•¹Ð¤ì($%…Í”I}==I}Iè($$%Ù•¡½½ÉA½Ì€ôÙ•¡5½‘•°´ù•ÑÉ½¹ÑM•…ÑA½Í¸ ¤ì($$%Ù•¡½½ÉA½Ì¹à€¬ôÍ•…Ñ=™™Í•Ðì($$%Ù•¡½½É=™™Í•Ð¹à€ô€µÙ•¡½½É=™™Í•Ð¹àì($$%‰É•…¬ì(($%…Í”I}==I}IHè($$%Ù•¡½½ÉA½Ì€ôÙ•¡5½‘•°´ùµ}Á½Í¥Ñ¥½¹ÍmI}A=M}	-MQtì($$%Ù•¡½½ÉA½Ì¹à€¬ôÍ•…Ñ=™™Í•Ðì($$%Ù•¡½½É=™™Í•Ð¹à€ô€µÙ•¡½½É=™™Í•Ð¹àì($$%‰É•…¬ì(($%…Í”I}==I}1è($$%Ù•¡½½ÉA½Ì€ôÙ•¡5½‘•°´ù•ÑÉ½¹ÑM•…ÑA½Í¸ ¤ì($$%Ù•¡½½ÉA½Ì¹à€ô€´¡Ù•¡½½ÉA½Ì¹à€¬Í•…Ñ=™™Í•Ð¤ì($$%‰É•…¬ì(($%…Í”I}==I}1Hè($$%Ù•¡½½ÉA½Ì€ôÙ•¡5½‘•°´ùµ}Á½Í¥Ñ¥½¹ÍmI}A=M}	-MQtì($$%Ù•¡½½ÉA½Ì¹à€ô€´¡Ù•¡½½ÉA½Ì¹à€¬Í•…Ñ=™™Í•Ð¤ì($$%‰É•…¬ì(($%‘•™…Õ±Ðè($$%Ù•¡½½ÉA½Ì€ôÙ•¡5½‘•°´ù•ÑÉ½¹ÑM•…ÑA½Í¸ ¤ì($$%Ù•¡½½É=™™Í•Ð€ôY•Ñ½È À¸Á˜°€À¸Á˜°€À¸Á˜¤ì(%ô(%É•ÑÕÉ¸Ù•¡½½ÉA½Ì€´Ù•¡½½É=™™Í•Ðì)ô()Ù½¥)A•èéM•ÑÕ¬¡Õ¥¹ÐÌÈÑ¥µ”¤)ì(%¥˜€¡‰%ÍÕ­¥¹œñðQ¥µ•Èèé•ÑQ¥µ•%¹5¥±±¥Í•½¹‘Ì ¤€ðôµ}‘Õ­Q¥µ•È¤($%É•ÑÕÉ¸ì((%¥˜€¡‰É½Õ¡]¡•¹M¡½½Ñ¥¹œ€˜˜€¡µ}¹A•‘MÑ…Ñ”€ôôA}QQ,ñðµ}¹A•‘MÑ…Ñ”€ôôA}%5}U8¤¤ì($%¹¥µ	±•¹‘ÍÍ½¥…Ñ¥½¸€©‘Õ­ÍÍ½Œ€ôIÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}U-}1=\¤ì($%¥˜€ …‘Õ­ÍÍ½Œñð‘Õ­ÍÍ½Œ´ù‰±•¹‘•±Ñ„€ð€À¸Á˜¤ì($$%¹¥µ5…¹…•Èèé	±•¹‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}U-}1=\°€Ð¸Á˜¤ì($$%‰%ÍÕ­¥¹œ€ôÑÉÕ”ì($$%µ}‘Õ­Q¥µ•È€ôQ¥µ•Èèé•ÑQ¥µ•%¹5¥±±¥Í•½¹‘Ì ¤€¬Ñ¥µ”ì($%ô(%ô•±Í”ì($%¹¥µ	±•¹‘ÍÍ½¥…Ñ¥½¸€©‘Õ­ÍÍ½Œ€ôIÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}U-}=]8¤ì($%¥˜€ …‘Õ­ÍÍ½Œñð‘Õ­ÍÍ½Œ´ù‰±•¹‘•±Ñ„€ð€À¸Á˜¤ì($$%¹¥µ5…¹…•Èèé	±•¹‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}U-}=]8°€Ð¸Á˜¤ì($$%‰%ÍÕ­¥¹œ€ôÑÉÕ”ì($$%µ}‘Õ­Q¥µ•È€ôQ¥µ•Èèé•ÑQ¥µ•%¹5¥±±¥Í•½¹‘Ì ¤€¬Ñ¥µ”ì($%ô(%ô)ô()Ù½¥)A•èéÕ¬¡Ù½¥¤)ì(%¥˜€¡Q¥µ•Èèé•ÑQ¥µ•%¹5¥±±¥Í•½¹‘Ì ¤€øµ}‘Õ­Q¥µ•È¤($%±•…ÉÕ¬ ¤ì)ô()Ù½¥)A•èé±•…ÉÕ¬¡Ù½¥¤)ì(%¹¥µ	±•¹‘ÍÍ½¥…Ñ¥½¸€©…¹¥µÍÍ½Œ€ôIÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}U-}=]8¤ì(%¥˜€ ……¹¥µÍÍ½Œ¤ì($%…¹¥µÍÍ½Œ€ôIÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}U-}1=\¤ì(($%¥˜€ ……¹¥µÍÍ½Œ¤ì($$%‰%ÍÕ­¥¹œ€ô™…±Í”ì($$%É•ÑÕÉ¸ì($%ô(%ô((%¥˜€ …‰É½Õ¡]¡•¹M¡½½Ñ¥¹œ¤($%É•ÑÕÉ¸ì((%¥˜€¡µ}¹A•‘MÑ…Ñ”€„ôA}QQ,€˜˜µ}¹A•‘MÑ…Ñ”€„ôA}%5}U8¤($%É•ÑÕÉ¸ì((%…¹¥µÍÍ½Œ€ôIÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}I	1=-}M!==P¤ì(%¥˜€ ……¹¥µÍÍ½Œñð…¹¥µÍÍ½Œ´ù‰±•¹‘•±Ñ„€ð€À¸Á˜¤ì($%¹¥µ5…¹…•Èèé	±•¹‘¹¥µ…Ñ¥½¸¡•Ñ±ÕµÀ ¤°MM=IA}MQ°9%5}MQ}I	1=-}M!==P°€Ð¸Á˜¤ì(%ô)ô()Ù½¥)A•èé%¹™½Éµ5å…¹=™ÑÑ…¬¡¹Ñ¥Ñä€©…ÑÑ…­•È¤)ì(%A•€©…ÑÑ…­•ÉA•ì((%¥˜€¡µ}½‰©•Ñ¥Ù”€ôô=	)Q%Y}-%11}!I}=9}==Pñðµ}½‰©•Ñ¥Ù”€ôô=	)Q%Y}-%11}!I}9e}59L¤($%É•ÑÕÉ¸ì((%¥˜€¡…ÑÑ…­•È´ù%ÍA• ¤¤ì($%…ÑÑ…­•ÉA•€ô€¡A•¨¥…ÑÑ…­•Èì(%ô•±Í”ì($%¥˜€ ……ÑÑ…­•È´ù%ÍY•¡¥±” ¤¤($$%É•ÑÕÉ¸ì(($%…ÑÑ…­•ÉA•€ô€ ¡Y•¡¥±”¨¥…ÑÑ…­•È¤´ùÁÉ¥Ù•Èì($%¥˜€ ……ÑÑ…­•ÉA•¤($$%É•ÑÕÉ¸ì(%ô((%¥˜€¡…ÑÑ…­•ÉA•´ùµ}¹A•‘QåÁ”€ôôAQeA}=@¤($%É•ÑÕÉ¸ì((%™½È€¡¥¹Ð¤€ô€Àì¤€ðµ}¹Õµ9•…ÉA•‘Ìì¤¬¬¤%ì($%A•€©¹•…ÉA•€ôµ}¹•…ÉA•‘Ím¥tì($%¥˜€¡¹•…ÉA•€˜˜¹•…ÉA•€„ôÑ¡¥Ì¤ì($$%A•€©±•…‘•È€ô¹•…ÉA•´ùµ}±•…‘•Èì($$%¥˜€¡±•…‘•È€˜˜±•…‘•È€ôôÑ¡¥Ì€˜˜¹•…ÉA•´ùµ}Á•‘MÑ…ÑÌ´ùµ}™•…È€ð¹•…ÉA•´ùµ}Á•‘MÑ…ÑÌ´ùµ}Ñ•µÁ•È¤($$%ì($$$%¹•…ÉA•´ùM•Ñ=‰©•Ñ¥Ù”¡=	)Q%Y}-%11}!I}=9}==P°…ÑÑ…­•ÉA•¤ì($$$%¹•…ÉA•´ùM•Ñ=‰©•Ñ¥Ù•Q¥µ•È ÌÀÀÀÀ¤ì($$%ô($%ô(%ô)ô()Ù½¥)A•èéA•‘¹¥µ½½É±½Í•I½±±¥¹¡¹¥µ	±•¹‘ÍÍ½¥…Ñ¥½¸¨…¹¥µÍÍ½Œ°Ù½¥¨…Éœ¤)ì(%A•¨Á•€ô€¡A•¨¥…Éœì((%ÕÑ½µ½‰¥±”¨Ù• €ô€¡ÕÑ½µ½‰¥±”¨¤¡Á•´ùµ}Á5åY•¡¥±”¤ì((%¥˜€¡…¹¥µÍÍ½Œ¤($%…¹¥µÍÍ½Œ´ù‰±•¹‘•±Ñ„€ô€´ÄÀÀÀ¸Á˜ì((%¥˜€¡Ù• ´ù‰1½ÝY•¡¥±”¤ì($%Ù• ´ùAÉ½•ÍÍ=Á•¹½½È¡I}==I}1°9%5}MQ}I}1=M}==I}I=11%9}1=}1!L°€Ä¸Á˜¤ì(%ô•±Í”ì($%Ù• ´ùAÉ½•ÍÍ=Á•¹½½È¡I}==I}1°9%5}MQ}I}1=M}==I}I=11%9}1!L°€Ä¸Á˜¤ì(%ô((%Ù• ´ùµ}¹•ÑÑ¥¹=ÕÑ±…Ì€˜ôùI}==I}1}1ì((%¥˜€¡Ù• ´ù…µ…”¹•Ñ½½ÉMÑ…ÑÕÌ¡==I}I=9Q}1P¤€ôô==I}MQQUM}M]%9%9¤($%Ù• ´ù…µ…”¹M•Ñ½½ÉMÑ…ÑÕÌ¡==I}I=9Q}1P°==I}MQQUM}=,¤ì)ô()Ù½¥)A•èéM•ÑM••­	½…ÑA½Í¥Ñ¥½¸¡Y•¡¥±”€©‰½…Ð¤)ì(%¥˜€¡µ}¹A•‘MÑ…Ñ”€ôôA}M-}%9}	=Pñð‰½…Ð´ùÁÉ¥Ù•È(¥˜‘•™¥¹•Y}A}A=IQLñð‘•™¥¹•%a}	UL($%ñð€…%ÍA•‘%¹½¹ÑÉ½° ¤(•¹‘¥˜($$¤($%É•ÑÕÉ¸ì((%M•ÑMÑ½É•‘MÑ…Ñ” ¤ì(%µ}…É%¹=‰©•Ñ¥Ù”€ô‰½…Ðì(%µ}…É%¹=‰©•Ñ¥Ù”´ùI•¥ÍÑ•ÉI•™•É•¹” ¡¹Ñ¥Ñä€¨¨¤€™µ}…É%¹=‰©•Ñ¥Ù”¤ì(%µ}Á5åY•¡¥±”€ô‰½…Ðì(%µ}Á5åY•¡¥±”´ùI•¥ÍÑ•ÉI•™•É•¹” ¡¹Ñ¥Ñä€¨¨¤€™µ}Á5åY•¡¥±”¤ì(%µ}‘¥ÍÑ…¹•Q½½Õ¹ÑM••­½¹”€ô€À¸Õ˜ì(%M•ÑA•‘MÑ…Ñ”¡A}M-}%9}	=P¤ì)ô()Ù½¥)A•èéM••­	½…ÑA½Í¥Ñ¥½¸¡Ù½¥¤)ì(%¥˜€¡µ}…É%¹=‰©•Ñ¥Ù”€˜˜€…µ}…É%¹=‰©•Ñ¥Ù”´ùÁÉ¥Ù•È¤ì($%Y•¡¥±•5½‘•±%¹™¼€©‰½…Ñ5½‘•°€ôµ}…É%¹=‰©•Ñ¥Ù”´ù•Ñ5½‘•±%¹™¼ ¤ì(($%Y•Ñ½È•¹Ñ•É=™™Í•Ðì($%•¹Ñ•É=™™Í•Ð€ô‰½…Ñ5½‘•°´ù•ÑÉ½¹ÑM•…ÑA½Í¸ ¤ì($%•¹Ñ•É=™™Í•Ð¹à€ô€À¸Á˜ì($%5…ÑÉ¥à‰½…Ñ5…Ð¡µ}…É%¹=‰©•Ñ¥Ù”´ù•Ñ5…ÑÉ¥à ¤¤ì($%Y•Ñ½È‰½…Ñ¹Ñ•ÉA½Ì€ô5Õ±Ñ¥Á±äÍàÌ¡‰½…Ñ5…Ð°•¹Ñ•É=™™Í•Ð¤ì($%‰½…Ñ¹Ñ•ÉA½Ì€¬ôµ}…É%¹=‰©•Ñ¥Ù”´ù•ÑA½Í¥Ñ¥½¸ ¤ì($%M•Ñ5½Ù•MÑ…Ñ”¡A5=Y}]1,¤ì($%µ}Ù•M••­A½Ì€ô‰½…Ñ¹Ñ•ÉA½Ìì($%¥˜€¡M••¬ ¤¤ì($$$¼¼]”…ÉÉ¥Ù•Ñ¼Ñ¡”‰½…Ð($$%µ}Ù•¡½½È€ô€Àì($$%M•Ñ¹Ñ•É…È¡µ}…É%¹=‰©•Ñ¥Ù”°€À¤ì($%ô(%ô•±Í”($%I•ÍÑ½É•AÉ•Ù¥½ÕÍMÑ…Ñ” ¤ì)ô()‰½½°)A•èé%ÍI½½µQ½	•…É)…­•¡Ù½¥¤)ì(%¥˜€ …µ}Á5åY•¡¥±”¤($%É•ÑÕÉ¸™…±Í”ì((%Y•Ñ½È½™™Í•Ðì(%¥˜€¡µ}Á5åY•¡¥±”´ù‰1½ÝY•¡¥±”ñðµ}¹A•‘QåÁ”€ôôAQeA}=@¤ì($%½™™Í•Ð€ôÙ•A•‘É…•‘=ÕÑ…É¹¥µ=™™Í•Ðì(%ô•±Í”ì($%½™™Í•Ð€ôÙ•A•‘EÕ¥­É…•‘=ÕÑ…É¹¥µ=™™Í•Ðì(%ô((%½™™Í•Ð¹è€ô€À¸Á˜ì(%¥˜€¡µ}Á5åY•¡¥±”´ù%ÍI½½µ½ÉA•‘Q½1•…Ù•…È¡I}==I}1°€™½™™Í•Ð¤¤ì($%É•ÑÕÉ¸ÑÉÕ”ì(%ô((%É•ÑÕÉ¸™…±Í”ì)ô()Ù½¥)A•èéI•µ½Ù•%¹…É¹¥µÌ¡Ù½¥¤)ì(%¥˜€ …%ÍA±…å•È ¤¤($%É•ÑÕÉ¸ì((%¹¥µ	±•¹‘ÍÍ½¥…Ñ¥½¸€©…¹¥µÍÍ½Œì((%¥˜€¡µ}Á5åY•¡¥±”€˜˜µ}Á5åY•¡¥±”´ù‰1½ÝY•¡¥±”¤ì($%…¹¥µÍÍ½Œ€ôIÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}I}I%Y}1Q}1<¤ì($%¥˜€¡…¹¥µÍÍ½Œ¤($$%…¹¥µÍÍ½Œ´ù‰±•¹‘•±Ñ„€ô€´ÄÀÀÀ¸Á˜ì($%…¹¥µÍÍ½Œ€ôIÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}I}I%Y}I%!Q}1<¤ì($%¥˜€¡…¹¥µÍÍ½Œ¤($$%…¹¥µÍÍ½Œ´ù‰±•¹‘•±Ñ„€ô€´ÄÀÀÀ¸Á˜ì($%…¹¥µÍÍ½Œ€ôIÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}I}I%Y	e}1P¤ì($%¥˜€¡…¹¥µÍÍ½Œ¤($$%…¹¥µÍÍ½Œ´ù‰±•¹‘•±Ñ„€ô€´ÄÀÀÀ¸Á˜ì($%…¹¥µÍÍ½Œ€ôIÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}I}I%Y	e}I%!P¤ì($%¥˜€¡…¹¥µÍÍ½Œ¤($$%…¹¥µÍÍ½Œ´ù‰±•¹‘•±Ñ„€ô€´ÄÀÀÀ¸Á˜ì(%ô•±Í”ì($%…¹¥µÍÍ½Œ€ôIÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}I}I%Y}1P¤ì($%¥˜€¡…¹¥µÍÍ½Œ¤($$%…¹¥µÍÍ½Œ´ù‰±•¹‘•±Ñ„€ô€´ÄÀÀÀ¸Á˜ì($%…¹¥µÍÍ½Œ€ôIÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}I}I%Y}I%!P¤ì($%¥˜€¡…¹¥µÍÍ½Œ¤($$%…¹¥µÍÍ½Œ´ù‰±•¹‘•±Ñ„€ô€´ÄÀÀÀ¸Á˜ì($%…¹¥µÍÍ½Œ€ôIÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}I}I%Y	e}1P¤ì($%¥˜€¡…¹¥µÍÍ½Œ¤($$%…¹¥µÍÍ½Œ´ù‰±•¹‘•±Ñ„€ô€´ÄÀÀÀ¸Á˜ì($%…¹¥µÍÍ½Œ€ôIÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}I}I%Y	e}I%!P¤ì($%¥˜€¡…¹¥µÍÍ½Œ¤($$%…¹¥µÍÍ½Œ´ù‰±•¹‘•±Ñ„€ô€´ÄÀÀÀ¸Á˜ì(%ô((¥™‘•˜Y}A}A=IQL(%…¹¥µÍÍ½Œ€ôIÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}	=Q}I%Y¤ì(%¥˜€¡…¹¥µÍÍ½Œ¤($%…¹¥µÍÍ½Œ´ù‰±•¹‘•±Ñ„€ô€´ÄÀÀÀ¸Á˜ì(•¹‘¥˜((%…¹¥µÍÍ½Œ€ôIÁ¹¥µ	±•¹‘±ÕµÁ•ÑÍÍ½¥…Ñ¥½¸¡•Ñ±ÕµÀ ¤°9%5}MQ}I}1==-	!%9¤ì(%¥˜€¡…¹¥µÍÍ½Œ¤($%…¹¥µÍÍ½Œ´ù‰±•¹‘•±Ñ„€ô€´ÄÀÀÀ¸Á˜ì)ô()‰½½°)A•èéA½Í¥Ñ¥½¹A•‘=ÕÑ=™½±±¥Í¥½¸¡Ù½¥¤)ì(%Y•¡¥±”€©Ù• ì(%Y•Ñ½ÈÁ½Í9•…ÉY• ì(%Y•Ñ½ÈÁ½ÍM½µ•Ý¡•É•±½Í”ì(%‰½½°ÁÕÑ9•…ÉY• €ô™…±Í”ì(%‰½½°ÁÕÑM½µ•Ý¡•É•±½Í”€ô™…±Í”ì(%¥¹ÐÍµ…±±•ÍÑ¥ÍÑ9•…ÉY• €ô€äääì(%¥¹ÐÍµ…±±•ÍÑ¥ÍÑM½µ•Ý¡•É•±½Í”€ô€äääì((%¥˜€ …µ}Á5åY•¡¥±”¤($%É•ÑÕÉ¸™…±Í”ì((%Y•Ñ½ÈÙ•¡A½Ì€ôµ}Á5åY•¡¥±”´ù•ÑA½Í¥Ñ¥½¸ ¤ì(%Y•Ñ½ÈÁ½Ñ•¹Ñ¥…±A½Ìì(%Á½Ñ•¹Ñ¥…±A½Ì¹ä€ô•ÑA½Í¥Ñ¥½¸ ¤¹ä€´€Ì¸Õ˜ì(%Á½Ñ•¹Ñ¥…±A½Ì¹è€ô•ÑA½Í¥Ñ¥½¸ ¤¹èì((%™½È€¡¥¹ÐåQÉä€ô€ÀìåQÉä€ð€ÄÔìåQÉä¬¬¤ì($%Á½Ñ•¹Ñ¥…±A½Ì¹à€ô•ÑA½Í¥Ñ¥½¸ ¤¹à€´€Ì¸Õ˜ì(($%™½È€¡¥¹ÐáQÉä€ô€ÀìáQÉä€ð€ÄÔìáQÉä¬¬¤ì($$%A•‘A±…•µ•¹Ðèé¥¹‘i½½É½ÉA• ™Á½Ñ•¹Ñ¥…±A½Ì¤ì($$%Y•Ñ½È‘¥ÍÑY•Œ€ôÁ½Ñ•¹Ñ¥…±A½Ì€´Ù•¡A½Ìì($$%™±½…Ð‘¥ÍÐ€ô‘¥ÍÑY•Œ¹5…¹¥ÑÕ‘” ¤ì(($$$¼¼5…­•Ì±½Í”‘¥ÍÑ…¹•Ì‰¥•È™½ÈÍ½µ”É•…Í½¸¸($$%™±½…ÐµÕ±Ð€ô€ À¸Ù˜€¬‘¥ÍÐ¤€¼‘¥ÍÐì($$%Y•Ñ½È…‘©ÕÍÑ•‘A½Ñ•¹Ñ¥…±A½Ì€ô‘¥ÍÑY•Œ€¨µÕ±Ð€¬Ù•¡A½Ìì($$%¥˜€¡]½É±èé•Ñ%Í1¥¹•=™M¥¡Ñ±•…È¡Ù•¡A½Ì°…‘©ÕÍÑ•‘A½Ñ•¹Ñ¥…±A½Ì°ÑÉÕ”°™…±Í”°™…±Í”°ÑÉÕ”°™…±Í”°™…±Í”°™…±Í”¤($$$$˜˜€…]½É±èéQ•ÍÑMÁ¡•É•…¥¹ÍÑ]½É±¡Á½Ñ•¹Ñ¥…±A½Ì°€À¸Ù˜°Ñ¡¥Ì°ÑÉÕ”°™…±Í”°™…±Í”°ÑÉÕ”°™…±Í”°™…±Í”¤¤ì(($$$%™±½…ÐÁ½Ñ•¹Ñ¥…±¡…¹•MÅÈ€ô€¡Á½Ñ•¹Ñ¥…±A½Ì€´•ÑA½Í¥Ñ¥½¸ ¤¤¹5…¹¥ÑÕ‘•MÅÈ ¤ì($$$%Ù• €ô€¡Y•¡¥±”¨¥]½É±èéQ•ÍÑMÁ¡•É•…¥¹ÍÑ]½É±¡Á½Ñ•¹Ñ¥…±A½Ì°€À¸Ù˜°Ñ¡¥Ì°™…±Í”°ÑÉÕ”°™…±Í”°™…±Í”°™…±Í”°™…±Í”¤ì($$$%¥˜€¡Ù• ¤ì($$$$%¥˜€¡Á½Ñ•¹Ñ¥…±¡…¹•MÅÈ€ðÍµ…±±•ÍÑ¥ÍÑ9•…ÉY• ¤ì($$$$$%Á½Í9•…ÉY• €ôÁ½Ñ•¹Ñ¥…±A½Ìì($$$$$%ÁÕÑ9•…ÉY• €ôÑÉÕ”ì($$$$$%Íµ…±±•ÍÑ¥ÍÑ9•…ÉY• €ôÁ½Ñ•¹Ñ¥…±¡…¹•MÅÈì($$$$%ô($$$%ô•±Í”¥˜€¡Á½Ñ•¹Ñ¥…±¡…¹•MÅÈ€ðÍµ…±±•ÍÑ¥ÍÑM½µ•Ý¡•É•±½Í”¤ì($$$$%Íµ…±±•ÍÑ¥ÍÑM½µ•Ý¡•É•±½Í”€ôÁ½Ñ•¹Ñ¥…±¡…¹•MÅÈì($$$$%Á½ÍM½µ•Ý¡•É•±½Í”€ôÁ½Ñ•¹Ñ¥…±A½Ìì($$$$%ÁÕÑM½µ•Ý¡•É•±½Í”€ôÑÉÕ”ì($$$%ô($$%ô($$%Á½Ñ•¹Ñ¥…±A½Ì¹à€¬ô€À¸Õ˜ì($%ô($%Á½Ñ•¹Ñ¥…±A½Ì¹ä€¬ô€À¸Õ˜ì(%ô((%¥˜€ …ÁÕÑM½µ•Ý¡•É•±½Í”€˜˜€…ÁÕÑ9•…ÉY• ¤($%É•ÑÕÉ¸™…±Í”ì(($¼¼]”É•™É…¥¸™É½´ÕÍ¥¹œÁ½Í9•…ÉY• °ÁÉ½‰…‰±ä‰•…ÕÍ”½˜¥Ðµ…ä‰”Ñ½À½˜Ñ¡”Ù•¡¥±”¸(%¥˜€¡ÁÕÑM½µ•Ý¡•É•±½Í”¤ì($%M•ÑA½Í¥Ñ¥½¸¡Á½ÍM½µ•Ý¡•É•±½Í”¤ì(%ô•±Í”ì($%Y•Ñ½ÈÙ•¡M¥é”€ôÙ• ´ù•Ñ5½‘•±%¹™¼ ¤´ù•Ñ½±5½‘•° ¤´ù‰½Õ¹‘¥¹	½à¹µ…àì($%Á½Í9•…ÉY• ¹è€¬ôÙ•¡M¥é”¹èì($%M•ÑA½Í¥Ñ¥½¸¡Á½Í9•…ÉY• ¤ì(%ô(%É•ÑÕÉ¸ÑÉÕ”ì)ô()‰½½°)A•èé]…ÉÁA•‘Q½9•…É1•…‘•É=™™MÉ••¸¡Ù½¥¤)ì(%‰½½°Ñ•±•Á½ÉÑ•€ô™…±Í”ì(%¥˜€¡•Ñ%Í=¹MÉ••¸ ¤ñðµ}±•…Ù•…ÉQ¥µ•È€øQ¥µ•Èèé•ÑQ¥µ•%¹5¥±±¥Í•½¹‘Ì ¤¤($%É•ÑÕÉ¸™…±Í”ì((%Y•Ñ½ÈÝ…ÉÁQ½A½Ì€ôµ}±•…‘•È´ù•ÑA½Í¥Ñ¥½¸ ¤ì(%Y•Ñ½È‘¥ÍÑY•Œ€ôÝ…ÉÁQ½A½Ì€´•ÑA½Í¥Ñ¥½¸ ¤ì(%™±½…Ð¡…±™=™¥ÍÐ€ô‘¥ÍÑY•Œ¹5…¹¥ÑÕ‘” ¤€¨€À¸Õ˜ì(%Y•Ñ½È¡…±™9½Éµ…±¥é•‘¥ÍÐ€ô‘¥ÍÑY•Œ€¼¡…±™=™¥ÍÐì((%Y•Ñ½È…ÁÁÉ½ÁÉ¥…Ñ•A½Ì€ô•ÑA½Í¥Ñ¥½¸ ¤ì(%Y•Ñ½Èé½ÉÉ•Ñ•‘A½Ì€ô…ÁÁÉ½ÁÉ¥…Ñ•A½Ìì(%¥¹ÐÑÉå½Õ¹Ð€ô5¥¸ ÄÀ°¡…±™=™¥ÍÐ¤ì(%™½È€¡¥¹Ð¤€ô€Àì¤€ðÑÉå½Õ¹Ðì€¬­¤¤ì($%…ÁÁÉ½ÁÉ¥…Ñ•A½Ì€¬ô¡…±™9½Éµ…±¥é•‘¥ÍÐì($%A•‘A±…•µ•¹Ðèé¥¹‘i½½É½ÉA• ™é½ÉÉ•Ñ•‘A½Ì¤ì(($%¥˜€¡‰Ì¡é½ÉÉ•Ñ•‘A½Ì¹è€´Ý…ÉÁQ½A½Ì¹è¤€øô€Ì¸Á˜€˜˜‰Ì¡é½ÉÉ•Ñ•‘A½Ì¹è€´…ÁÁÉ½ÁÉ¥…Ñ•A½Ì¹è¤€øô€Ì¸Á˜¤($$%½¹Ñ¥¹Õ”ì(($%…ÁÁÉ½ÁÉ¥…Ñ•A½Ì¹è€ôé½ÉÉ•Ñ•‘A½Ì¹èì($%¥˜€ …Q¡•…µ•É„¹%ÍMÁ¡•É•Y¥Í¥‰±”¡…ÁÁÉ½ÁÉ¥…Ñ•A½Ì°€À¸Ù˜¤($$$˜˜]½É±èé•Ñ%Í1¥¹•=™M¥¡Ñ±•…È¡…ÁÁÉ½ÁÉ¥…Ñ•A½Ì°Ý…ÉÁQ½A½Ì°ÑÉÕ”°ÑÉÕ”°™…±Í”°ÑÉÕ”°™…±Í”°™…±Í”°™…±Í”¤($$$˜˜€…]½É±èéQ•ÍÑMÁ¡•É•…¥¹ÍÑ]½É±¡…ÁÁÉ½ÁÉ¥…Ñ•A½Ì°€À¸Ù˜°Ñ¡¥Ì°ÑÉÕ”°ÑÉÕ”°™…±Í”°ÑÉÕ”°™…±Í”°™…±Í”¤¤ì($$%Ñ•±•Á½ÉÑ•€ôÑÉÕ”ì($$%Q•±•Á½ÉÐ¡…ÁÁÉ½ÁÉ¥…Ñ•A½Ì¤ì($%ô(%ô(%µ}±•…Ù•…ÉQ¥µ•È€ôQ¥µ•Èèé•ÑQ¥µ•%¹5¥±±¥Í•½¹‘Ì ¤€¬€ÌÀÀÀì(%É•ÑÕÉ¸Ñ•±•Á½ÉÑ•ì)ô()‰½½°)A•èé]…ÉÁA•‘Q½9•…É¹Ñ¥Ñå=™™MÉ••¸¡¹Ñ¥Ñä€©Ý…ÉÁQ¼¤)ì(%‰½½°Ñ•±•Á½ÉÑ•€ô™…±Í”ì(%¥˜€¡•Ñ%Í=¹MÉ••¸ ¤ñðµ}±•…Ù•…ÉQ¥µ•È€øQ¥µ•Èèé•ÑQ¥µ•%¹5¥±±¥Í•½¹‘Ì ¤¤($%É•ÑÕÉ¸™…±Í”ì((%Y•Ñ½ÈÝ…ÉÁQ½A½Ì€ôÝ…ÉÁQ¼´ù•ÑA½Í¥Ñ¥½¸ ¤ì(%Y•Ñ½È‘¥ÍÑY•Œ€ôÝ…ÉÁQ½A½Ì€´•ÑA½Í¥Ñ¥½¸ ¤ì(%™±½…Ð¡…±™=™¥ÍÐ€ô‘¥ÍÑY•Œ¹5…¹¥ÑÕ‘” ¤€¨€À¸Õ˜ì(%Y•Ñ½È¡…±™9½Éµ…±¥é•‘¥ÍÐ€ô‘¥ÍÑY•Œ€¼¡…±™=™¥ÍÐì((%Y•Ñ½È…ÁÁÉ½ÁÉ¥…Ñ•A½Ì€ô•ÑA½Í¥Ñ¥½¸ ¤ì(%Y•Ñ½Èé½ÉÉ•Ñ•‘A½Ì€ô…ÁÁÉ½ÁÉ¥…Ñ•A½Ìì(%¥¹ÐÑÉå½Õ¹Ð€ô5¥¸ ÄÀ°¡…±™=™¥ÍÐ¤ì(%™½È€¡¥¹Ð¤€ô€Àì¤€ðÑÉå½Õ¹Ðì€¬­¤¤ì($%…ÁÁÉ½ÁÉ¥…Ñ•A½Ì€¬ô¡…±™9½Éµ…±¥é•‘¥ÍÐì($%A•‘A±…•µ•¹Ðèé¥¹‘i½½É½ÉA• ™é½ÉÉ•Ñ•‘A½Ì¤ì(($%¥˜€¡‰Ì¡é½ÉÉ•Ñ•‘A½Ì¹è€´Ý…ÉÁQ½A½Ì¹è¤€øô€Ì¸Á˜€˜˜‰Ì¡é½ÉÉ•Ñ•‘A½Ì¹è€´…ÁÁÉ½ÁÉ¥…Ñ•A½Ì¹è¤€øô€Ì¸Á˜¤($$%½¹Ñ¥¹Õ”ì(($%…ÁÁÉ½ÁÉ¥…Ñ•A½Ì¹è€ôé½ÉÉ•Ñ•‘A½Ì¹èì($%¥˜€ …Q¡•…µ•É„¹%ÍMÁ¡•É•Y¥Í¥‰±”¡…ÁÁÉ½ÁÉ¥…Ñ•A½Ì°€À¸Ù˜¤($$$˜˜]½É±èé•Ñ%Í1¥¹•=™M¥¡Ñ±•…È¡…ÁÁÉ½ÁÉ¥…Ñ•A½Ì°Ý…ÉÁQ½A½Ì°ÑÉÕ”°ÑÉÕ”°™…±Í”°ÑÉÕ”°™…±Í”°™…±Í”°™…±Í”¤($$$˜˜€…]½É±èéQ•ÍÑMÁ¡•É•…¥¹ÍÑ]½É±¡…ÁÁÉ½ÁÉ¥…Ñ•A½Ì°€À¸Ù˜°Ñ¡¥Ì°ÑÉÕ”°ÑÉÕ”°™…±Í”°ÑÉÕ”°™…±Í”°™…±Í”¤¤ì($$%Ñ•±•Á½ÉÑ•€ôÑÉÕ”ì($$%Q•±•Á½ÉÐ¡…ÁÁÉ½ÁÉ¥…Ñ•A½Ì¤ì($%ô(%ô(%µ}±•…Ù•…ÉQ¥µ•È€ôQ¥µ•Èèé•ÑQ¥µ•%¹5¥±±¥Í•½¹‘Ì ¤€¬€ÌÀÀÀì(%É•ÑÕÉ¸Ñ•±•Á½ÉÑ•ì)ô(

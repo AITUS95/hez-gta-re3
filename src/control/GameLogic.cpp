@@ -133,27 +133,17 @@ CGameLogic::Update()
 						pVehicle->RemovePassenger(pPlayerInfo.m_pPed);
 				}
 			}
-			CEventList::Initialise();
-#ifdef SCREEN_DROPLETS
-			ScreenDroplets::Initialise();
-#endif
 			CMessages::ClearMessages();
-			CCarCtrl::ClearInterestingVehicleList();
-			CWorld::ClearExcitingStuffFromArea(pPlayerInfo.GetPos(), 4000.0f, 1);
 			FindLocalDeathRestart(pPlayerInfo, &vecRestartPos, &fRestartFloat);
 			CRestart::OverrideHospitalLevel = LEVEL_GENERIC;
 			CRestart::OverridePoliceStationLevel = LEVEL_GENERIC;
-			PassTime(720);
-			RestorePlayerStuffDuringResurrection(pPlayerInfo.m_pPed, vecRestartPos, fRestartFloat);
+			RestorePlayerStuffDuringResurrection(pPlayerInfo.m_pPed, vecRestartPos, fRestartFloat, true);
 			coltSlot = pPlayerInfo.m_pPed->GiveWeapon(WEAPONTYPE_COLT45, 999);
 			pPlayerInfo.m_pPed->SetCurrentWeapon(coltSlot);
 			pPlayerInfo.m_pPed->m_nSelectedWepSlot = coltSlot;
-			SortOutStreamingAndMemory(pPlayerInfo.GetPos());
 			TheCamera.m_fCamShakeForce = 0.0f;
 			TheCamera.SetMotionBlur(0, 0, 0, 0, MOTION_BLUR_NONE);
 			CPad::GetPad(0)->StopShaking(0);
-			CReferences::RemoveReferencesToPlayer();
-			CCarCtrl::CountDownToCarsAtStart = 2;
 			CPad::GetPad(CWorld::PlayerInFocus)->DisablePlayerControls = PLAYERCONTROL_ENABLED;
 			if (CRestart::bFadeInAfterNextDeath) { 
 				TheCamera.SetFadeColour(200, 200, 200);
@@ -298,7 +288,7 @@ CGameLogic::Update()
 }
 
 void
-CGameLogic::RestorePlayerStuffDuringResurrection(CPlayerPed *pPlayerPed, CVector pos, float angle)
+CGameLogic::RestorePlayerStuffDuringResurrection(CPlayerPed *pPlayerPed, CVector pos, float angle, bool preserveWorld)
 {
 	pPlayerPed->m_fHealth = 100.0f;
 	pPlayerPed->m_fArmour = 0.0f;
@@ -318,7 +308,8 @@ CGameLogic::RestorePlayerStuffDuringResurrection(CPlayerPed *pPlayerPed, CVector
 	pPlayerPed->bRemoveFromWorld = false;
 	pPlayerPed->ClearWeaponTarget();
 	pPlayerPed->SetInitialState();
-	CCarCtrl::ClearInterestingVehicleList();
+	if (!preserveWorld)
+		CCarCtrl::ClearInterestingVehicleList();
 
 	pos.z += 1.0f;
 	pPlayerPed->Teleport(pos);
@@ -327,12 +318,16 @@ CGameLogic::RestorePlayerStuffDuringResurrection(CPlayerPed *pPlayerPed, CVector
 	pPlayerPed->m_fRotationCur = DEGTORAD(angle);
 	pPlayerPed->m_fRotationDest = pPlayerPed->m_fRotationCur;
 	pPlayerPed->SetHeading(pPlayerPed->m_fRotationCur);
-	CTheScripts::ClearSpaceForMissionEntity(pos, pPlayerPed);
-	CWorld::ClearExcitingStuffFromArea(pos, 4000.0, 1);
+	if (!preserveWorld) {
+		CTheScripts::ClearSpaceForMissionEntity(pos, pPlayerPed);
+		CWorld::ClearExcitingStuffFromArea(pos, 4000.0, 1);
+	}
 	pPlayerPed->RestoreHeadingRate();
 	TheCamera.SetCameraDirectlyInFrontForFollowPed_CamOnAString();
-	CReferences::RemoveReferencesToPlayer();
-	CGarages::PlayerArrestedOrDied();
+	if (!preserveWorld) {
+		CReferences::RemoveReferencesToPlayer();
+		CGarages::PlayerArrestedOrDied();
+	}
 	CStats::CheckPointReachedUnsuccessfully();
 	CWorld::Remove(pPlayerPed);
 	CWorld::Add(pPlayerPed);
