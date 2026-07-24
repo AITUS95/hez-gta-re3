@@ -24,6 +24,7 @@
 #include "Pad.h"
 #include "Particle.h"
 #include "PathFind.h"
+#include "Pickups.h"
 #include "PlayerPed.h"
 #include "Phones.h"
 #include "Population.h"
@@ -111,6 +112,56 @@ IncreasePortlandGangConflictDensity(void)
 		CTheZones::SetZonePedInfo(hepburn, 1, -1, 180, -1, 180, -1, -1, -1, -1, -1, -1, -1);
 		CTheZones::SetZonePedInfo(hepburn, 0, -1, 220, -1, 220, -1, -1, -1, -1, -1, -1, -1);
 	}
+}
+
+static void
+SetUpCorleoneVilla(void)
+{
+	// Salvatore's original mission garage occupies this exact map box.
+	// Reuse its SalvGarage door and give it independent two-car hideout
+	// storage instead of creating an overlapping synthetic garage.
+	for (uint32 i = 0; i < CGarages::NumGarages; i++) {
+		CGarage &garage = CGarages::aGarages[i];
+		if (Abs(garage.m_fX1 - 1428.75f) < 0.1f &&
+		    Abs(garage.m_fX2 - 1442.5f) < 0.1f &&
+		    Abs(garage.m_fY1 - -187.0f) < 0.1f &&
+		    Abs(garage.m_fY2 - -179.875f) < 0.1f) {
+			CGarages::ChangeGarageType(i, GARAGE_HIDEOUT_CORLEONE, 0);
+			break;
+		}
+	}
+
+	// Permanent black Stretch, centred between the two vanilla Sentinels.
+	int32 limo = CTheCarGenerators::CreateCarGenerator(
+		1406.28125f, -169.71875f, -100.0f, 210.0f,
+		MI_STRETCH, 0, 0, 1, 0, 0, 0, 10000);
+	CTheCarGenerators::CarGeneratorArray[limo].SwitchOn();
+
+	static const eWeaponType weapons[] = {
+		WEAPONTYPE_BASEBALLBAT,
+		WEAPONTYPE_COLT45,
+		WEAPONTYPE_UZI,
+		WEAPONTYPE_SHOTGUN,
+		WEAPONTYPE_AK47,
+		WEAPONTYPE_M16,
+		WEAPONTYPE_SNIPERRIFLE,
+		WEAPONTYPE_ROCKETLAUNCHER,
+		WEAPONTYPE_FLAMETHROWER,
+		WEAPONTYPE_MOLOTOV,
+		WEAPONTYPE_GRENADE
+	};
+	for (uint32 i = 0; i < ARRAY_SIZE(weapons); i++) {
+		CVector pos(1411.0f + (i % 6) * 2.2f, -193.0f - (i / 6) * 3.0f, 55.0f);
+		pos.z = CWorld::FindGroundZForCoord(pos.x, pos.y) + PICKUP_PLACEMENT_OFFSET;
+		CPickups::GenerateNewOne_WeaponType(pos, weapons[i], PICKUP_ON_STREET, 500);
+	}
+
+	CVector healthPos(1425.0f, -196.0f, 55.0f);
+	healthPos.z = CWorld::FindGroundZForCoord(healthPos.x, healthPos.y) + PICKUP_PLACEMENT_OFFSET;
+	CPickups::GenerateNewOne(healthPos, MI_PICKUP_HEALTH, PICKUP_ON_STREET, 0);
+	CVector armourPos(1427.2f, -196.0f, 55.0f);
+	armourPos.z = CWorld::FindGroundZForCoord(armourPos.x, armourPos.y) + PICKUP_PLACEMENT_OFFSET;
+	CPickups::GenerateNewOne(armourPos, MI_PICKUP_BODYARMOUR, PICKUP_ON_STREET, 0);
 }
 
 int8 CRunningScript::ProcessCommands1000To1099(int32 command)
@@ -385,6 +436,7 @@ int8 CRunningScript::ProcessCommands1000To1099(int32 command)
 			ApplyCompletedStoryZoneState();
 			IncreasePortlandGangConflictDensity();
 			CTheCarGenerators::ApplyCompletedGameState();
+			SetUpCorleoneVilla();
 			CPlayerPed *player = FindPlayerPed();
 			if (player) {
 				// Leone mansion forecourt, facing the two parked Sentinels.

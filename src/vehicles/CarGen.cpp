@@ -120,7 +120,7 @@ void CCarGenerator::DoInternalProcessing()
 				pCar->m_nAlarmState = -1;
 			if (CGeneral::GetRandomNumberInRange(0, 100) < m_nDoorlock)
 				pCar->m_nDoorLock = CARLOCK_LOCKED;
-			if (m_nColor1 != -1 && m_nColor2) {
+			if (m_nColor1 != -1 && m_nColor2 != -1) {
 				pCar->m_currentColour1 = m_nColor1;
 				pCar->m_currentColour2 = m_nColor2;
 			}

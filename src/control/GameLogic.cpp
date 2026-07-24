@@ -20,9 +20,143 @@
 #include "Script.h"
 #include "Garages.h"
 #include "PathFind.h"
+#include "Population.h"
+#include "Pools.h"
+#include "Font.h"
 #include "screendroplets.h"
 
 uint8 CGameLogic::ActivePlayers;
+
+static int32 gVillaRecruitHandle = -1;
+static uint32 gVillaRecruitPromptTime;
+static bool gVillaRecruitAlternatePosition;
+
+static void
+EnsureCorleoneVillaGarage(void)
+{
+	for (uint32 i = 0; i < CGarages::NumGarages; i++) {
+		CGarage &garage = CGarages::aGarages[i];
+		if (Abs(garage.m_fX1 - 1428.75f) < 0.1f &&
+		    Abs(garage.m_fX2 - 1442.5f) < 0.1f &&
+		    Abs(garage.m_fY1 - -187.0f) < 0.1f &&
+		    Abs(garage.m_fY2 - -179.875f) < 0.1f) {
+			if (garage.m_eGarageType != GARAGE_HIDEOUT_CORLEONE)
+				CGarages::ChangeGarageType(i, GARAGE_HIDEOUT_CORLEONE, 0);
+			return;
+		}
+	}
+}
+
+static void
+GiveVillaGuardPlayerWeapon(CPed *guard, CPlayerPed *player)
+{
+	eWeaponType weapon = player->GetWeapon()->m_eWeaponType;
+	if (guard->GetWeapon()->m_eWeaponType == weapon)
+		return;
+
+	guard->ClearWeapons();
+	if (weapon != WEAPONTYPE_UNARMED)
+		guard->SetCurrentWeapon(guard->GiveWeapon(weapon, 25001));
+}
+
+static CPed *
+FindExistingVillaRecruit(void)
+{
+	const CVector recruitPos(1424.0f, -193.0f, 55.0f);
+	CPedPool *pool = CPools::GetPedPool();
+	for (int32 i = 0; i < pool->GetSize(); i++) {
+		CPed *ped = pool->GetSlot(i);
+		if (ped && ped->m_nPedType == PEDTYPE_GANG1 &&
+		    ped->CharCreatedBy == MISSION_CHAR && ped->m_leader == nil &&
+		    !ped->DyingOrDead() &&
+		    (ped->GetPosition() - recruitPos).MagnitudeSqr2D() < SQR(16.0f))
+			return ped;
+	}
+	return nil;
+}
+
+static CPed *
+SpawnVillaRecruit(void)
+{
+	CPed *ped = FindExistingVillaRecruit();
+	if (ped)
+		return ped;
+	if (!CStreaming::HasModelLoaded(MI_GANG01)) {
+		CStreaming::RequestModel(MI_GANG01, STREAMFLAGS_DONT_REMOVE | STREAMFLAGS_DEPENDENCY);
+		return nil;
+	}
+
+	CVector pos(gVillaRecruitAlternatePosition ? 1426.0f : 1424.0f, -193.0f, 55.0f);
+	gVillaRecruitAlternatePosition = !gVillaRecruitAlternatePosition;
+	pos.z = CWorld::FindGroundZForCoord(pos.x, pos.y);
+	ped = CPopulation::AddPed(PEDTYPE_GANG1, MI_GANG01, pos);
+	if (ped == nil)
+		return nil;
+
+	ped->CharCreatedBy = MISSION_CHAR;
+	ped->m_fRotationCur = ped->m_fRotationDest = DEGTORAD(140.0f);
+	ped->SetHeading(ped->m_fRotationCur);
+	ped->ClearWeapons();
+	ped->SetCurrentWeapon(ped->GiveWeapon(WEAPONTYPE_COLT45, 25001));
+	ped->SetObjective(OBJECTIVE_GUARD_SPOT, pos);
+	return ped;
+}
+
+static void
+UpdateCorleoneVilla(void)
+{
+	EnsureCorleoneVillaGarage();
+
+	CPlayerPed *player = FindPlayerPed();
+	if (player == nil || player->DyingOrDead())
+		return;
+
+	// Keep every recruited villa guard armed like the player, including
+	// after the player changes weapon.
+	CPedPool *pool = CPools::GetPedPool();
+	for (int32 i = 0; i < pool->GetSize(); i++) {
+		CPed *ped = pool->GetSlot(i);
+		if (ped && ped->m_nPedType == PEDTYPE_GANG1 &&
+		    ped->CharCreatedBy == MISSION_CHAR && ped->m_leader == player &&
+		    !ped->DyingOrDead())
+			GiveVillaGuardPlayerWeapon(ped, player);
+	}
+
+	if ((player->GetPosition() - CVector(1424.0f, -193.0f, 55.0f)).MagnitudeSqr2D() > SQR(90.0f))
+		return;
+
+	CPed *recruit = gVillaRecruitHandle >= 0 ?
+		CPools::GetPedPool()->GetAt(gVillaRecruitHandle) : nil;
+	if (recruit == nil || recruit->DyingOrDead() || recruit->m_leader != nil) {
+		recruit = SpawnVillaRecruit();
+		gVillaRecruitHandle = recruit ? CPools::GetPedPool()->GetIndex(recruit) : -1;
+	}
+	if (recruit == nil || player->bInVehicle ||
+	    (recruit->GetPosition() - player->GetPosition()).MagnitudeSqr() > SQR(3.5f))
+		return;
+
+	if (CTimer::GetTimeInMilliseconds() > gVillaRecruitPromptTime) {
+		static wchar message[96];
+		AsciiToUnicode("Premi INVIO o il clacson per assoldare il Leone.", message);
+		CMessages::AddMessageJumpQ(message, 1200, 0);
+		gVillaRecruitPromptTime = CTimer::GetTimeInMilliseconds() + 1000;
+	}
+
+	CPad *pad = CPad::GetPad(0);
+	if (!pad->GetEnterJustDown() && !pad->HornJustDown())
+		return;
+
+	recruit->SetLeader(player);
+	recruit->SetObjective(OBJECTIVE_GOTO_CHAR_ON_FOOT, player);
+	recruit->SetMoveState(PEDMOVE_RUN);
+	GiveVillaGuardPlayerWeapon(recruit, player);
+
+	// The available slot is replenished immediately, as requested.
+	gVillaRecruitHandle = -1;
+	CPed *replacement = SpawnVillaRecruit();
+	if (replacement)
+		gVillaRecruitHandle = CPools::GetPedPool()->GetIndex(replacement);
+}
 
 static void
 FindLocalDeathRestart(CPlayerInfo &playerInfo, CVector *restartPos, float *restartHeading)
@@ -42,6 +176,9 @@ void
 CGameLogic::InitAtStartOfGame()
 {
 	ActivePlayers = 1;
+	gVillaRecruitHandle = -1;
+	gVillaRecruitPromptTime = 0;
+	gVillaRecruitAlternatePosition = false;
 }
 
 void
@@ -88,6 +225,8 @@ CGameLogic::Update()
 	if (CCutsceneMgr::IsCutsceneProcessing()) return;
 
 	CPlayerInfo &pPlayerInfo = CWorld::Players[CWorld::PlayerInFocus];
+	if (pPlayerInfo.m_WBState == WBSTATE_PLAYING)
+		UpdateCorleoneVilla();
 	switch (pPlayerInfo.m_WBState) {
 	case WBSTATE_PLAYING:
 		if (pPlayerInfo.m_pPed->m_nPedState == PED_DEAD) {

@@ -91,6 +91,7 @@
 #define LIMIT_CARS_IN_INDUSTRIAL (1)
 #define LIMIT_CARS_IN_COMMERCIAL (2)
 #define LIMIT_CARS_IN_SUBURBAN (3)
+#define LIMIT_CARS_IN_CORLEONE (NUM_CORLEONE_GARAGE_STORED_CARS)
 #define HIDEOUT_DOOR_SPEED_COEFFICIENT (1.7f)
 #define TIME_BETWEEN_HIDEOUT_MESSAGES (18000)
 
@@ -125,6 +126,7 @@ int32 CGarages::PoliceCarsCollected;
 CStoredCar CGarages::aCarsInSafeHouse1[NUM_GARAGE_STORED_CARS];
 CStoredCar CGarages::aCarsInSafeHouse2[NUM_GARAGE_STORED_CARS];
 CStoredCar CGarages::aCarsInSafeHouse3[NUM_GARAGE_STORED_CARS];
+CStoredCar CGarages::aCarsInCorleoneGarage[NUM_CORLEONE_GARAGE_STORED_CARS];
 int32 hGarages = AEHANDLE_NONE;
 CGarage CGarages::aGarages[NUM_GARAGES];
 bool CGarages::bCamShouldBeOutisde;
@@ -152,6 +154,8 @@ void CGarages::Init(void)
 		aCarsInSafeHouse2[i].Init();
 	for (int i = 0; i < NUM_GARAGE_STORED_CARS; i++)
 		aCarsInSafeHouse3[i].Init();
+	for (int i = 0; i < NUM_CORLEONE_GARAGE_STORED_CARS; i++)
+		aCarsInCorleoneGarage[i].Init();
 	hGarages = DMAudio.CreateEntity(AUDIOTYPE_GARAGE, (void*)1);
 	if (hGarages >= 0)
 		DMAudio.SetEntityStatus(hGarages, TRUE);
@@ -252,6 +256,7 @@ int16 CGarages::AddOne(CVector p1, CVector p2, uint8 type, int32 targetId)
 	case GARAGE_HIDEOUT_ONE:
 	case GARAGE_HIDEOUT_TWO:
 	case GARAGE_HIDEOUT_THREE:
+	case GARAGE_HIDEOUT_CORLEONE:
 	case GARAGE_FOR_SCRIPT_TO_OPEN_AND_CLOSE:
 	case GARAGE_KEEPS_OPENING_FOR_SPECIFIC_CAR:
 	case GARAGE_MISSION_KEEPCAR_REMAINCLOSED:
@@ -1033,6 +1038,7 @@ void CGarage::Update()
 	case GARAGE_HIDEOUT_ONE:
 	case GARAGE_HIDEOUT_TWO:
 	case GARAGE_HIDEOUT_THREE:
+	case GARAGE_HIDEOUT_CORLEONE:
 		switch (m_eGarageState) {
 		case GS_OPENED:
 		{
@@ -1065,6 +1071,7 @@ void CGarage::Update()
 				case GARAGE_HIDEOUT_ONE:   StoreAndRemoveCarsForThisHideout(CGarages::aCarsInSafeHouse1, MAX_STORED_CARS_IN_INDUSTRIAL); break;
 				case GARAGE_HIDEOUT_TWO:   StoreAndRemoveCarsForThisHideout(CGarages::aCarsInSafeHouse2, MAX_STORED_CARS_IN_COMMERCIAL); break;
 				case GARAGE_HIDEOUT_THREE: StoreAndRemoveCarsForThisHideout(CGarages::aCarsInSafeHouse3, MAX_STORED_CARS_IN_SUBURBAN);   break;
+				case GARAGE_HIDEOUT_CORLEONE: StoreAndRemoveCarsForThisHideout(CGarages::aCarsInCorleoneGarage, NUM_CORLEONE_GARAGE_STORED_CARS); break;
 				default: break;
 				}
 			}
@@ -1094,6 +1101,7 @@ void CGarage::Update()
 					case GARAGE_HIDEOUT_ONE:   bCreatedAllCars = RestoreCarsForThisHideout(CGarages::aCarsInSafeHouse1); break;
 					case GARAGE_HIDEOUT_TWO:   bCreatedAllCars = RestoreCarsForThisHideout(CGarages::aCarsInSafeHouse2); break;
 					case GARAGE_HIDEOUT_THREE: bCreatedAllCars = RestoreCarsForThisHideout(CGarages::aCarsInSafeHouse3); break;
+					case GARAGE_HIDEOUT_CORLEONE: bCreatedAllCars = RestoreCarsForThisHideout(CGarages::aCarsInCorleoneGarage); break;
 					default: break;
 					}
 					if (bCreatedAllCars)
@@ -2111,6 +2119,7 @@ void CGarage::PlayerArrestedOrDied()
 	case GARAGE_HIDEOUT_ONE:
 	case GARAGE_HIDEOUT_TWO:
 	case GARAGE_HIDEOUT_THREE:
+	case GARAGE_HIDEOUT_CORLEONE:
 	case GARAGE_FOR_SCRIPT_TO_OPEN_AND_CLOSE:
 	case GARAGE_KEEPS_OPENING_FOR_SPECIFIC_CAR:
 	case GARAGE_MISSION_KEEPCAR_REMAINCLOSED:
@@ -2174,10 +2183,13 @@ void CGarages::CloseHideOutGaragesBeforeSave()
 	for (int i = 0; i < NUM_GARAGES; i++) {
 		if (aGarages[i].m_eGarageType != GARAGE_HIDEOUT_ONE &&
 			aGarages[i].m_eGarageType != GARAGE_HIDEOUT_TWO &&
-			aGarages[i].m_eGarageType != GARAGE_HIDEOUT_THREE)
+			aGarages[i].m_eGarageType != GARAGE_HIDEOUT_THREE &&
+			aGarages[i].m_eGarageType != GARAGE_HIDEOUT_CORLEONE)
 			continue;
 		if (aGarages[i].m_eGarageState != GS_FULLYCLOSED &&
-			(aGarages[i].m_eGarageType != GARAGE_HIDEOUT_ONE || !aGarages[i].IsAnyCarBlockingDoor())) {
+			((aGarages[i].m_eGarageType != GARAGE_HIDEOUT_ONE &&
+			  aGarages[i].m_eGarageType != GARAGE_HIDEOUT_CORLEONE) ||
+			 !aGarages[i].IsAnyCarBlockingDoor())) {
 			aGarages[i].m_eGarageState = GS_FULLYCLOSED;
 			switch (aGarages[i].m_eGarageType) {
 			case GARAGE_HIDEOUT_ONE:
@@ -2190,6 +2202,10 @@ void CGarages::CloseHideOutGaragesBeforeSave()
 				break;
 			case GARAGE_HIDEOUT_THREE:
 				aGarages[i].StoreAndRemoveCarsForThisHideout(aCarsInSafeHouse3, NUM_GARAGE_STORED_CARS);
+				aGarages[i].RemoveCarsBlockingDoorNotInside();
+				break;
+			case GARAGE_HIDEOUT_CORLEONE:
+				aGarages[i].StoreAndRemoveCarsForThisHideout(aCarsInCorleoneGarage, NUM_CORLEONE_GARAGE_STORED_CARS);
 				aGarages[i].RemoveCarsBlockingDoorNotInside();
 				break;
 			default:
@@ -2218,6 +2234,11 @@ int32 CGarages::CountCarsInHideoutGarage(uint8 type)
 		default: break;
 		}
 	}
+	if (type == GARAGE_HIDEOUT_CORLEONE) {
+		total = 0;
+		for (int i = 0; i < NUM_CORLEONE_GARAGE_STORED_CARS; i++)
+			total += aCarsInCorleoneGarage[i].HasCar();
+	}
 	return total;
 }
 
@@ -2230,6 +2251,8 @@ int32 CGarages::FindMaxNumStoredCarsForGarage(uint8 type)
 		return LIMIT_CARS_IN_COMMERCIAL;
 	case GARAGE_HIDEOUT_THREE:
 		return LIMIT_CARS_IN_SUBURBAN;
+	case GARAGE_HIDEOUT_CORLEONE:
+		return LIMIT_CARS_IN_CORLEONE;
 	default: break;
 	}
 	return 0;
@@ -2242,6 +2265,7 @@ bool CGarages::IsPointWithinHideOutGarage(Const CVector& point)
 		case GARAGE_HIDEOUT_ONE:
 		case GARAGE_HIDEOUT_TWO:
 		case GARAGE_HIDEOUT_THREE:
+		case GARAGE_HIDEOUT_CORLEONE:
 			if (point.x > aGarages[i].m_fX1 && point.x < aGarages[i].m_fX2 &&
 				point.y > aGarages[i].m_fY1 && point.y < aGarages[i].m_fY2 &&
 				point.z > aGarages[i].m_fZ1 && point.z < aGarages[i].m_fZ2)
@@ -2302,7 +2326,7 @@ void CGarages::Save(uint8 * buf, uint32 * size)
 {
 #ifdef FIX_GARAGE_SIZE
 	INITSAVEBUF
-	*size = (6 * sizeof(uint32) + TOTAL_COLLECTCARS_GARAGES * sizeof(*CarTypesCollected) + sizeof(uint32) + 3 * NUM_GARAGE_STORED_CARS * sizeof(CStoredCar) + NUM_GARAGES * sizeof(CGarage));
+	*size = (6 * sizeof(uint32) + TOTAL_COLLECTCARS_GARAGES * sizeof(*CarTypesCollected) + sizeof(uint32) + 3 * NUM_GARAGE_STORED_CARS * sizeof(CStoredCar) + NUM_GARAGES * sizeof(CGarage) + NUM_CORLEONE_GARAGE_STORED_CARS * sizeof(CStoredCar));
 #else
 	* size = 5484;
 #endif
@@ -2365,6 +2389,8 @@ void CGarages::Save(uint8 * buf, uint32 * size)
 		WriteSaveBuf(buf, aGarages[i]);
 #endif
 	}
+	for (int i = 0; i < NUM_CORLEONE_GARAGE_STORED_CARS; i++)
+		WriteSaveBuf(buf, aCarsInCorleoneGarage[i]);
 #ifdef FIX_GARAGE_SIZE
 	VALIDATESAVEBUF(*size);
 #endif
@@ -2389,7 +2415,7 @@ void CGarages::Load(uint8* buf, uint32 size)
 {
 #ifdef FIX_GARAGE_SIZE
 	INITSAVEBUF
-	assert(size == (6 * sizeof(uint32) + TOTAL_COLLECTCARS_GARAGES * sizeof(*CarTypesCollected) + sizeof(uint32) + 3 * NUM_GARAGE_STORED_CARS * sizeof(CStoredCar) + NUM_GARAGES * sizeof(CGarage)));
+	assert(size == (6 * sizeof(uint32) + TOTAL_COLLECTCARS_GARAGES * sizeof(*CarTypesCollected) + sizeof(uint32) + 3 * NUM_GARAGE_STORED_CARS * sizeof(CStoredCar) + NUM_GARAGES * sizeof(CGarage) + NUM_CORLEONE_GARAGE_STORED_CARS * sizeof(CStoredCar)));
 #else
 	assert(size == 5484);
 #endif
@@ -2462,6 +2488,8 @@ void CGarages::Load(uint8* buf, uint32 size)
 		else
 			aGarages[i].UpdateDoorsHeight();
 	}
+	for (int i = 0; i < NUM_CORLEONE_GARAGE_STORED_CARS; i++)
+		ReadSaveBuf(&aCarsInCorleoneGarage[i], buf);
 #ifdef FIX_GARAGE_SIZE
 	VALIDATESAVEBUF(size);
 #endif

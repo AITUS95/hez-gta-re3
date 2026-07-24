@@ -171,9 +171,15 @@ CPed::SetObjective(eObjective newObj, void *entity)
 	if (DyingOrDead())
 		return;
 
-	// No AI or mission script may turn a Leone into an enemy or follower of
-	// the player. Leone only receive a temporary combat objective against
-	// the player's attacker in MakeNearbyLeoneDefendPlayer().
+	// Leone never receive hostile objectives against the player. The only
+	// player-directed movement orders allowed are for villa recruits,
+	// identified as mission-created Leone bodyguards.
+	bool villaBodyguardOrder =
+		CharCreatedBy == MISSION_CHAR &&
+		(newObj == OBJECTIVE_GOTO_CHAR_ON_FOOT ||
+		 newObj == OBJECTIVE_FOLLOW_CHAR_IN_FORMATION ||
+		 newObj == OBJECTIVE_GUARD_ATTACK ||
+		 newObj == OBJECTIVE_SET_LEADER);
 	if (m_nPedType == PEDTYPE_GANG1 &&
 	    (newObj == OBJECTIVE_KILL_CHAR_ON_FOOT ||
 	     newObj == OBJECTIVE_KILL_CHAR_ANY_MEANS ||
@@ -184,7 +190,8 @@ CPed::SetObjective(eObjective newObj, void *entity)
 	     newObj == OBJECTIVE_FOLLOW_CHAR_IN_FORMATION ||
 	     newObj == OBJECTIVE_GUARD_ATTACK ||
 	     newObj == OBJECTIVE_SET_LEADER) &&
-	    entity && ((CEntity*)entity)->IsPed() && ((CPed*)entity)->IsPlayer())
+	    entity && ((CEntity*)entity)->IsPed() && ((CPed*)entity)->IsPlayer() &&
+	    !villaBodyguardOrder)
 		return;
 
 	if (m_prevObjective == newObj) {
@@ -562,6 +569,14 @@ CPed::UpdateFromLeader(void)
 		leaderDist = m_leader->GetPosition() - GetPosition();
 
 	if (leaderDist.Magnitude() > 30.0f) {
+		if (m_nPedType == PEDTYPE_GANG1 && CharCreatedBy == MISSION_CHAR &&
+		    m_leader->IsPlayer()) {
+			if (!WarpPedToNearLeaderOffScreen()) {
+				SetObjective(OBJECTIVE_GOTO_CHAR_ON_FOOT, m_leader);
+				SetMoveState(PEDMOVE_RUN);
+			}
+			return;
+		}
 		if (IsPedInControl()) {
 			SetObjective(OBJECTIVE_NONE);
 			SetIdle();
@@ -2176,7 +2191,7 @@ MakeNearbyLeoneDefendPlayer(CEntity *target)
 		if ((leone->GetPosition() - player->GetPosition()).MagnitudeSqr() > SQR(40.0f))
 			continue;
 
-		if (leone->m_leader == player)
+		if (leone->m_leader == player && leone->CharCreatedBy != MISSION_CHAR)
 			leone->ClearLeader();
 		leone->SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, enemy);
 		leone->SetObjectiveTimer(30000);
