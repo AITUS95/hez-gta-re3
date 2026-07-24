@@ -2258,6 +2258,9 @@ CPed::ReactToAttack(CEntity *attacker)
 	}
 
 	if (IsPlayer() && attacker->IsPed()) {
+		// Being attacked is the defensive exception to the lock-on rule:
+		// recruited and street Leone nearby immediately protect the player.
+		MakeNearbyLeoneDefendPlayer(attacker);
 		InformMyGangOfAttack(attacker);
 		SetLookFlag(attacker, true);
 		SetLookTimer(700);
