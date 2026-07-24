@@ -151,7 +151,7 @@ void
 CPed::SetPointGunAt(CEntity *to)
 {
 	if (m_nPedType == PEDTYPE_GANG1 && to && to->IsPed() &&
-	    ((CPed*)to)->IsPlayer()) {
+	    (((CPed*)to)->IsPlayer() || ((CPed*)to)->m_nPedType == PEDTYPE_GANG1)) {
 		ClearPointGunAt();
 		return;
 	}
@@ -253,7 +253,8 @@ CPed::SetAttack(CEntity *victim)
 	if (victim && victim->IsPed())
 		victimPed = (CPed*)victim;
 
-	if (m_nPedType == PEDTYPE_GANG1 && victimPed && victimPed->IsPlayer()) {
+	if (m_nPedType == PEDTYPE_GANG1 && victimPed &&
+	    (victimPed->IsPlayer() || victimPed->m_nPedType == PEDTYPE_GANG1)) {
 		bIsAttacking = false;
 		ClearPointGunAt();
 		return;
@@ -2076,7 +2077,8 @@ CPed::InflictDamage(CEntity *damagedBy, eWeaponType method, float damage, ePedPi
 	if (damagedBy && damagedBy->IsPed()) {
 		CPed *attacker = (CPed*)damagedBy;
 		if ((this == player && attacker->m_nPedType == PEDTYPE_GANG1) ||
-		    (m_nPedType == PEDTYPE_GANG1 && attacker == player))
+		    (m_nPedType == PEDTYPE_GANG1 && attacker == player) ||
+		    (m_nPedType == PEDTYPE_GANG1 && attacker->m_nPedType == PEDTYPE_GANG1))
 			return false;
 	}
 

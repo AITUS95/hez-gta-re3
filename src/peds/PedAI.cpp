@@ -180,6 +180,15 @@ CPed::SetObjective(eObjective newObj, void *entity)
 		 newObj == OBJECTIVE_FOLLOW_CHAR_IN_FORMATION ||
 		 newObj == OBJECTIVE_GUARD_ATTACK ||
 		 newObj == OBJECTIVE_SET_LEADER);
+	bool hostileObjective =
+		newObj == OBJECTIVE_KILL_CHAR_ON_FOOT ||
+		newObj == OBJECTIVE_KILL_CHAR_ANY_MEANS ||
+		newObj == OBJECTIVE_MUG_CHAR ||
+		newObj == OBJECTIVE_GUARD_ATTACK;
+	if (m_nPedType == PEDTYPE_GANG1 && hostileObjective &&
+	    entity && ((CEntity*)entity)->IsPed() &&
+	    ((CPed*)entity)->m_nPedType == PEDTYPE_GANG1)
+		return;
 	if (m_nPedType == PEDTYPE_GANG1 &&
 	    (newObj == OBJECTIVE_KILL_CHAR_ON_FOOT ||
 	     newObj == OBJECTIVE_KILL_CHAR_ANY_MEANS ||
