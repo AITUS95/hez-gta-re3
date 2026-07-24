@@ -241,6 +241,17 @@ UpdatePedConversation(CPlayerPed *player)
 	if (!pad->GetCharJustDown('T') && !pad->GetCharJustDown('t'))
 		return;
 
+	// A recruited bodyguard normally keeps OBJECTIVE_GOTO_CHAR_ON_FOOT.
+	// ProcessObjective would immediately call SetIdle at close range and
+	// cancel PED_CHAT for both participants. Suspend only that follow order;
+	// m_leader remains set, so UpdateFromLeader restores following as soon
+	// as the native conversation ends.
+	if (closest->m_nPedType == PEDTYPE_GANG1 &&
+	    closest->CharCreatedBy == MISSION_CHAR && closest->m_leader == player) {
+		closest->ClearObjective();
+		closest->SetObjectiveTimer(0);
+	}
+
 	player->SetChat(closest, 6000);
 	closest->SetChat(player, 6000);
 }
