@@ -23,14 +23,23 @@
 #include "Population.h"
 #include "Pools.h"
 #include "Font.h"
+#include "General.h"
 #include "screendroplets.h"
 
 uint8 CGameLogic::ActivePlayers;
 
-static int32 gVillaRecruitHandle = -1;
+enum { NUM_VILLA_RECRUIT_SLOTS = 2 };
+
+static int32 gVillaRecruitHandles[NUM_VILLA_RECRUIT_SLOTS] = { -1, -1 };
 static uint32 gVillaRecruitPromptTime;
-static bool gVillaRecruitAlternatePosition;
-static const CVector VILLA_RECRUIT_POS(1438.0f, -173.5f, 55.0f);
+static const CVector VILLA_RECRUIT_POSITIONS[NUM_VILLA_RECRUIT_SLOTS] = {
+	CVector(1438.0f, -173.5f, 55.0f),
+	CVector(1435.8f, -173.5f, 55.0f)
+};
+static const int32 VILLA_RECRUIT_MODELS[NUM_VILLA_RECRUIT_SLOTS] = {
+	MI_GANG01,
+	MI_GANG02
+};
 
 static void
 EnsureCorleoneVillaGarage(void)
@@ -61,36 +70,36 @@ GiveVillaGuardPlayerWeapon(CPed *guard, CPlayerPed *player)
 }
 
 static CPed *
-FindExistingVillaRecruit(void)
+FindExistingVillaRecruit(int32 slot)
 {
 	CPedPool *pool = CPools::GetPedPool();
 	for (int32 i = 0; i < pool->GetSize(); i++) {
 		CPed *ped = pool->GetSlot(i);
 		if (ped && ped->m_nPedType == PEDTYPE_GANG1 &&
+		    ped->GetModelIndex() == VILLA_RECRUIT_MODELS[slot] &&
 		    ped->CharCreatedBy == MISSION_CHAR && ped->m_leader == nil &&
 		    !ped->DyingOrDead() &&
-		    (ped->GetPosition() - VILLA_RECRUIT_POS).MagnitudeSqr2D() < SQR(16.0f))
+		    (ped->GetPosition() - VILLA_RECRUIT_POSITIONS[slot]).MagnitudeSqr2D() < SQR(3.0f))
 			return ped;
 	}
 	return nil;
 }
 
 static CPed *
-SpawnVillaRecruit(void)
+SpawnVillaRecruit(int32 slot)
 {
-	CPed *ped = FindExistingVillaRecruit();
+	CPed *ped = FindExistingVillaRecruit(slot);
 	if (ped)
 		return ped;
-	if (!CStreaming::HasModelLoaded(MI_GANG01)) {
-		CStreaming::RequestModel(MI_GANG01, STREAMFLAGS_DONT_REMOVE | STREAMFLAGS_DEPENDENCY);
+	int32 model = VILLA_RECRUIT_MODELS[slot];
+	if (!CStreaming::HasModelLoaded(model)) {
+		CStreaming::RequestModel(model, STREAMFLAGS_DONT_REMOVE | STREAMFLAGS_DEPENDENCY);
 		return nil;
 	}
 
-	CVector pos(VILLA_RECRUIT_POS.x + (gVillaRecruitAlternatePosition ? 1.5f : 0.0f),
-		VILLA_RECRUIT_POS.y, VILLA_RECRUIT_POS.z);
-	gVillaRecruitAlternatePosition = !gVillaRecruitAlternatePosition;
+	CVector pos = VILLA_RECRUIT_POSITIONS[slot];
 	pos.z = CWorld::FindGroundZForCoord(pos.x, pos.y);
-	ped = CPopulation::AddPed(PEDTYPE_GANG1, MI_GANG01, pos);
+	ped = CPopulation::AddPed(PEDTYPE_GANG1, model, pos);
 	if (ped == nil)
 		return nil;
 
@@ -104,6 +113,18 @@ SpawnVillaRecruit(void)
 }
 
 static void
+TurnVillaRecruitToPlayer(CPed *recruit, CPlayerPed *player)
+{
+	CVector2D sourcePos = recruit->GetPosition();
+	CVector2D targetPos = player->GetPosition();
+	float angle = CGeneral::GetATanOfXY(sourcePos.x - targetPos.x, sourcePos.y - targetPos.y) + HALFPI;
+	if (angle > TWOPI)
+		angle -= TWOPI;
+	recruit->m_fRotationCur = recruit->m_fRotationDest = angle;
+	recruit->SetHeading(angle);
+}
+
+static void
 UpdateCorleoneVilla(void)
 {
 	EnsureCorleoneVillaGarage();
@@ -112,17 +133,31 @@ UpdateCorleoneVilla(void)
 	if (player == nil || player->DyingOrDead())
 		return;
 
-	if ((player->GetPosition() - VILLA_RECRUIT_POS).MagnitudeSqr2D() > SQR(90.0f))
+	if ((player->GetPosition() - VILLA_RECRUIT_POSITIONS[0]).MagnitudeSqr2D() > SQR(90.0f))
 		return;
 
-	CPed *recruit = gVillaRecruitHandle >= 0 ?
-		CPools::GetPedPool()->GetAt(gVillaRecruitHandle) : nil;
-	if (recruit == nil || recruit->DyingOrDead() || recruit->m_leader != nil) {
-		recruit = SpawnVillaRecruit();
-		gVillaRecruitHandle = recruit ? CPools::GetPedPool()->GetIndex(recruit) : -1;
+	CPed *recruit = nil;
+	int32 recruitSlot = -1;
+	float nearestDistance = SQR(3.5f);
+	for (int32 slot = 0; slot < NUM_VILLA_RECRUIT_SLOTS; slot++) {
+		CPed *candidate = gVillaRecruitHandles[slot] >= 0 ?
+			CPools::GetPedPool()->GetAt(gVillaRecruitHandles[slot]) : nil;
+		if (candidate == nil || candidate->DyingOrDead() || candidate->m_leader != nil) {
+			candidate = SpawnVillaRecruit(slot);
+			gVillaRecruitHandles[slot] = candidate ? CPools::GetPedPool()->GetIndex(candidate) : -1;
+		}
+		if (candidate == nil)
+			continue;
+
+		TurnVillaRecruitToPlayer(candidate, player);
+		float distance = (candidate->GetPosition() - player->GetPosition()).MagnitudeSqr();
+		if (distance < nearestDistance) {
+			nearestDistance = distance;
+			recruit = candidate;
+			recruitSlot = slot;
+		}
 	}
-	if (recruit == nil || player->bInVehicle ||
-	    (recruit->GetPosition() - player->GetPosition()).MagnitudeSqr() > SQR(3.5f))
+	if (recruit == nil || player->bInVehicle)
 		return;
 
 	if (CTimer::GetTimeInMilliseconds() > gVillaRecruitPromptTime) {
@@ -144,10 +179,10 @@ UpdateCorleoneVilla(void)
 	GiveVillaGuardPlayerWeapon(recruit, player);
 
 	// The available slot is replenished immediately, as requested.
-	gVillaRecruitHandle = -1;
-	CPed *replacement = SpawnVillaRecruit();
+	gVillaRecruitHandles[recruitSlot] = -1;
+	CPed *replacement = SpawnVillaRecruit(recruitSlot);
 	if (replacement)
-		gVillaRecruitHandle = CPools::GetPedPool()->GetIndex(replacement);
+		gVillaRecruitHandles[recruitSlot] = CPools::GetPedPool()->GetIndex(replacement);
 }
 
 static void
@@ -168,9 +203,9 @@ void
 CGameLogic::InitAtStartOfGame()
 {
 	ActivePlayers = 1;
-	gVillaRecruitHandle = -1;
+	for (int32 i = 0; i < NUM_VILLA_RECRUIT_SLOTS; i++)
+		gVillaRecruitHandles[i] = -1;
 	gVillaRecruitPromptTime = 0;
-	gVillaRecruitAlternatePosition = false;
 }
 
 void
