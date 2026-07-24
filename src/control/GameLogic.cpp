@@ -240,6 +240,8 @@ UpdateRecruitedBodyguards(CPlayerPed *player)
 			if (!IsRivalGangPed(rival) || rival->DyingOrDead() ||
 			    !rival->IsPedInControl() || rival->InVehicle())
 				continue;
+			if ((rival->GetPosition() - player->GetPosition()).MagnitudeSqr2D() > SQR(80.0f))
+				continue;
 			float distance = (rival->GetPosition() - guard->GetPosition()).MagnitudeSqr2D();
 			if (distance < closestDistance && guard->OurPedCanSeeThisOne(rival)) {
 				closestDistance = distance;
@@ -257,6 +259,8 @@ UpdateRecruitedBodyguards(CPlayerPed *player)
 			CPed *driver = vehicle->pDriver;
 			if (driver->IsPlayer() || driver->m_nPedType == PEDTYPE_GANG1 ||
 			    (!IsRivalGangPed(driver) && !IsRivalGangVehicle(vehicle)))
+				continue;
+			if ((vehicle->GetPosition() - player->GetPosition()).MagnitudeSqr2D() > SQR(80.0f))
 				continue;
 
 			float distance = (vehicle->GetPosition() - guard->GetPosition()).MagnitudeSqr2D();
