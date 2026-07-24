@@ -30,6 +30,7 @@ uint8 CGameLogic::ActivePlayers;
 static int32 gVillaRecruitHandle = -1;
 static uint32 gVillaRecruitPromptTime;
 static bool gVillaRecruitAlternatePosition;
+static const CVector VILLA_RECRUIT_POS(1438.0f, -173.5f, 55.0f);
 
 static void
 EnsureCorleoneVillaGarage(void)
@@ -62,14 +63,13 @@ GiveVillaGuardPlayerWeapon(CPed *guard, CPlayerPed *player)
 static CPed *
 FindExistingVillaRecruit(void)
 {
-	const CVector recruitPos(1424.0f, -193.0f, 55.0f);
 	CPedPool *pool = CPools::GetPedPool();
 	for (int32 i = 0; i < pool->GetSize(); i++) {
 		CPed *ped = pool->GetSlot(i);
 		if (ped && ped->m_nPedType == PEDTYPE_GANG1 &&
 		    ped->CharCreatedBy == MISSION_CHAR && ped->m_leader == nil &&
 		    !ped->DyingOrDead() &&
-		    (ped->GetPosition() - recruitPos).MagnitudeSqr2D() < SQR(16.0f))
+		    (ped->GetPosition() - VILLA_RECRUIT_POS).MagnitudeSqr2D() < SQR(16.0f))
 			return ped;
 	}
 	return nil;
@@ -86,7 +86,8 @@ SpawnVillaRecruit(void)
 		return nil;
 	}
 
-	CVector pos(gVillaRecruitAlternatePosition ? 1426.0f : 1424.0f, -193.0f, 55.0f);
+	CVector pos(VILLA_RECRUIT_POS.x + (gVillaRecruitAlternatePosition ? 1.5f : 0.0f),
+		VILLA_RECRUIT_POS.y, VILLA_RECRUIT_POS.z);
 	gVillaRecruitAlternatePosition = !gVillaRecruitAlternatePosition;
 	pos.z = CWorld::FindGroundZForCoord(pos.x, pos.y);
 	ped = CPopulation::AddPed(PEDTYPE_GANG1, MI_GANG01, pos);
@@ -122,7 +123,7 @@ UpdateCorleoneVilla(void)
 			GiveVillaGuardPlayerWeapon(ped, player);
 	}
 
-	if ((player->GetPosition() - CVector(1424.0f, -193.0f, 55.0f)).MagnitudeSqr2D() > SQR(90.0f))
+	if ((player->GetPosition() - VILLA_RECRUIT_POS).MagnitudeSqr2D() > SQR(90.0f))
 		return;
 
 	CPed *recruit = gVillaRecruitHandle >= 0 ?

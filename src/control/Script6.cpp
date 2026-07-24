@@ -131,9 +131,11 @@ SetUpCorleoneVilla(void)
 		}
 	}
 
-	// Permanent black Stretch, centred between the two vanilla Sentinels.
+	// Permanent black Stretch, visually centred between the two vanilla
+	// Sentinels but moved into the open forecourt so its long collision box
+	// does not make the generator reject the spawn as blocked.
 	int32 limo = CTheCarGenerators::CreateCarGenerator(
-		1406.28125f, -169.71875f, -100.0f, 210.0f,
+		1415.0f, -169.75f, -100.0f, 210.0f,
 		MI_STRETCH, 0, 0, 1, 0, 0, 0, 10000);
 	CTheCarGenerators::CarGeneratorArray[limo].SwitchOn();
 
@@ -151,15 +153,17 @@ SetUpCorleoneVilla(void)
 		WEAPONTYPE_GRENADE
 	};
 	for (uint32 i = 0; i < ARRAY_SIZE(weapons); i++) {
-		CVector pos(1411.0f + (i % 6) * 2.2f, -193.0f - (i / 6) * 3.0f, 55.0f);
+		// Compact armoury beside the mansion, clear of the driveway, gate
+		// and usable garage entrance.
+		CVector pos(1432.0f + (i % 6) * 1.55f, -171.0f - (i / 6) * 2.2f, 55.0f);
 		pos.z = CWorld::FindGroundZForCoord(pos.x, pos.y) + PICKUP_PLACEMENT_OFFSET;
 		CPickups::GenerateNewOne_WeaponType(pos, weapons[i], PICKUP_ON_STREET, 500);
 	}
 
-	CVector healthPos(1425.0f, -196.0f, 55.0f);
+	CVector healthPos(1432.0f, -175.4f, 55.0f);
 	healthPos.z = CWorld::FindGroundZForCoord(healthPos.x, healthPos.y) + PICKUP_PLACEMENT_OFFSET;
 	CPickups::GenerateNewOne(healthPos, MI_PICKUP_HEALTH, PICKUP_ON_STREET, 0);
-	CVector armourPos(1427.2f, -196.0f, 55.0f);
+	CVector armourPos(1434.2f, -175.4f, 55.0f);
 	armourPos.z = CWorld::FindGroundZForCoord(armourPos.x, armourPos.y) + PICKUP_PLACEMENT_OFFSET;
 	CPickups::GenerateNewOne(armourPos, MI_PICKUP_BODYARMOUR, PICKUP_ON_STREET, 0);
 }

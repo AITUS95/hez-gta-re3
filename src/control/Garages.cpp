@@ -91,7 +91,7 @@
 #define LIMIT_CARS_IN_INDUSTRIAL (1)
 #define LIMIT_CARS_IN_COMMERCIAL (2)
 #define LIMIT_CARS_IN_SUBURBAN (3)
-#define LIMIT_CARS_IN_CORLEONE (NUM_CORLEONE_GARAGE_STORED_CARS)
+#define LIMIT_CARS_IN_CORLEONE (MAX_CORLEONE_GARAGE_STORED_CARS)
 #define HIDEOUT_DOOR_SPEED_COEFFICIENT (1.7f)
 #define TIME_BETWEEN_HIDEOUT_MESSAGES (18000)
 
@@ -1071,7 +1071,7 @@ void CGarage::Update()
 				case GARAGE_HIDEOUT_ONE:   StoreAndRemoveCarsForThisHideout(CGarages::aCarsInSafeHouse1, MAX_STORED_CARS_IN_INDUSTRIAL); break;
 				case GARAGE_HIDEOUT_TWO:   StoreAndRemoveCarsForThisHideout(CGarages::aCarsInSafeHouse2, MAX_STORED_CARS_IN_COMMERCIAL); break;
 				case GARAGE_HIDEOUT_THREE: StoreAndRemoveCarsForThisHideout(CGarages::aCarsInSafeHouse3, MAX_STORED_CARS_IN_SUBURBAN);   break;
-				case GARAGE_HIDEOUT_CORLEONE: StoreAndRemoveCarsForThisHideout(CGarages::aCarsInCorleoneGarage, NUM_CORLEONE_GARAGE_STORED_CARS); break;
+				case GARAGE_HIDEOUT_CORLEONE: StoreAndRemoveCarsForThisHideout(CGarages::aCarsInCorleoneGarage, MAX_CORLEONE_GARAGE_STORED_CARS); break;
 				default: break;
 				}
 			}
@@ -2205,7 +2205,7 @@ void CGarages::CloseHideOutGaragesBeforeSave()
 				aGarages[i].RemoveCarsBlockingDoorNotInside();
 				break;
 			case GARAGE_HIDEOUT_CORLEONE:
-				aGarages[i].StoreAndRemoveCarsForThisHideout(aCarsInCorleoneGarage, NUM_CORLEONE_GARAGE_STORED_CARS);
+				aGarages[i].StoreAndRemoveCarsForThisHideout(aCarsInCorleoneGarage, MAX_CORLEONE_GARAGE_STORED_CARS);
 				aGarages[i].RemoveCarsBlockingDoorNotInside();
 				break;
 			default:
