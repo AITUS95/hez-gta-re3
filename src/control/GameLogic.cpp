@@ -112,17 +112,6 @@ UpdateCorleoneVilla(void)
 	if (player == nil || player->DyingOrDead())
 		return;
 
-	// Keep every recruited villa guard armed like the player, including
-	// after the player changes weapon.
-	CPedPool *pool = CPools::GetPedPool();
-	for (int32 i = 0; i < pool->GetSize(); i++) {
-		CPed *ped = pool->GetSlot(i);
-		if (ped && ped->m_nPedType == PEDTYPE_GANG1 &&
-		    ped->CharCreatedBy == MISSION_CHAR && ped->m_leader == player &&
-		    !ped->DyingOrDead())
-			GiveVillaGuardPlayerWeapon(ped, player);
-	}
-
 	if ((player->GetPosition() - VILLA_RECRUIT_POS).MagnitudeSqr2D() > SQR(90.0f))
 		return;
 
@@ -150,6 +139,8 @@ UpdateCorleoneVilla(void)
 	recruit->SetLeader(player);
 	recruit->SetObjective(OBJECTIVE_GOTO_CHAR_ON_FOOT, player);
 	recruit->SetMoveState(PEDMOVE_RUN);
+	// Copy the weapon only once, at recruitment time. Each bodyguard keeps
+	// that weapon even if the player later switches to another one.
 	GiveVillaGuardPlayerWeapon(recruit, player);
 
 	// The available slot is replenished immediately, as requested.

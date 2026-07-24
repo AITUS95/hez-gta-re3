@@ -155,15 +155,15 @@ SetUpCorleoneVilla(void)
 	for (uint32 i = 0; i < ARRAY_SIZE(weapons); i++) {
 		// Compact armoury beside the mansion, clear of the driveway, gate
 		// and usable garage entrance.
-		CVector pos(1432.0f + (i % 6) * 1.55f, -171.0f - (i / 6) * 2.2f, 55.0f);
+		CVector pos(1432.0f + (i % 6) * 1.55f, -166.5f - (i / 6) * 2.2f, 55.0f);
 		pos.z = CWorld::FindGroundZForCoord(pos.x, pos.y) + PICKUP_PLACEMENT_OFFSET;
 		CPickups::GenerateNewOne_WeaponType(pos, weapons[i], PICKUP_ON_STREET, 500);
 	}
 
-	CVector healthPos(1432.0f, -175.4f, 55.0f);
+	CVector healthPos(1432.0f, -170.9f, 55.0f);
 	healthPos.z = CWorld::FindGroundZForCoord(healthPos.x, healthPos.y) + PICKUP_PLACEMENT_OFFSET;
 	CPickups::GenerateNewOne(healthPos, MI_PICKUP_HEALTH, PICKUP_ON_STREET, 0);
-	CVector armourPos(1434.2f, -175.4f, 55.0f);
+	CVector armourPos(1434.2f, -170.9f, 55.0f);
 	armourPos.z = CWorld::FindGroundZForCoord(armourPos.x, armourPos.y) + PICKUP_PLACEMENT_OFFSET;
 	CPickups::GenerateNewOne(armourPos, MI_PICKUP_BODYARMOUR, PICKUP_ON_STREET, 0);
 }
