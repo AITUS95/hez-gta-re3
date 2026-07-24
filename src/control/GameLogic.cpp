@@ -19,9 +19,24 @@
 #include "Fire.h"
 #include "Script.h"
 #include "Garages.h"
+#include "PathFind.h"
 #include "screendroplets.h"
 
 uint8 CGameLogic::ActivePlayers;
+
+static void
+FindLocalDeathRestart(CPlayerInfo &playerInfo, CVector *restartPos, float *restartHeading)
+{
+	const CVector deathPos = playerInfo.GetPos();
+	int32 node = ThePaths.FindNodeClosestToCoors(deathPos, PATH_PED, 100.0f, true, true);
+	if (node >= 0) {
+		*restartPos = ThePaths.m_pathNodes[node].GetPosition();
+		*restartHeading = RADTODEG(playerInfo.m_pPed->m_fRotationCur);
+	} else {
+		// Water and isolated geometry may have no safe pedestrian node nearby.
+		CRestart::FindClosestHospitalRestartPoint(deathPos, restartPos, restartHeading);
+	}
+}
 
 void
 CGameLogic::InitAtStartOfGame()
@@ -68,6 +83,7 @@ CGameLogic::Update()
 {
 	CVector vecRestartPos;
 	float fRestartFloat;
+	uint32 coltSlot;
 
 	if (CCutsceneMgr::IsCutsceneProcessing()) return;
 
@@ -124,11 +140,14 @@ CGameLogic::Update()
 			CMessages::ClearMessages();
 			CCarCtrl::ClearInterestingVehicleList();
 			CWorld::ClearExcitingStuffFromArea(pPlayerInfo.GetPos(), 4000.0f, 1);
-			CRestart::FindClosestHospitalRestartPoint(pPlayerInfo.GetPos(), &vecRestartPos, &fRestartFloat);
+			FindLocalDeathRestart(pPlayerInfo, &vecRestartPos, &fRestartFloat);
 			CRestart::OverrideHospitalLevel = LEVEL_GENERIC;
 			CRestart::OverridePoliceStationLevel = LEVEL_GENERIC;
 			PassTime(720);
 			RestorePlayerStuffDuringResurrection(pPlayerInfo.m_pPed, vecRestartPos, fRestartFloat);
+			coltSlot = pPlayerInfo.m_pPed->GiveWeapon(WEAPONTYPE_COLT45, 999);
+			pPlayerInfo.m_pPed->SetCurrentWeapon(coltSlot);
+			pPlayerInfo.m_pPed->m_nSelectedWepSlot = coltSlot;
 			SortOutStreamingAndMemory(pPlayerInfo.GetPos());
 			TheCamera.m_fCamShakeForce = 0.0f;
 			TheCamera.SetMotionBlur(0, 0, 0, 0, MOTION_BLUR_NONE);

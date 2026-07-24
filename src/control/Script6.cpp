@@ -100,9 +100,9 @@ IncreasePortlandGangConflictDensity(void)
 {
 	int16 redLight = CTheZones::FindZoneByLabelAndReturnIndex("REDLIGH");
 	if (redLight >= 0) {
-		// Red Light District: Leone and Triads only.
-		CTheZones::SetZonePedInfo(redLight, 1, -1, 180, 180, -1, -1, -1, -1, -1, -1, -1, -1);
-		CTheZones::SetZonePedInfo(redLight, 0, -1, 220, 220, -1, -1, -1, -1, -1, -1, -1, -1);
+		// Red Light District: Leone are the only gang spawned by this zone.
+		CTheZones::SetZonePedInfo(redLight, 1, -1, 180, 0, 0, 0, 0, 0, 0, 0, 0, -1);
+		CTheZones::SetZonePedInfo(redLight, 0, -1, 220, 0, 0, 0, 0, 0, 0, 0, 0, -1);
 	}
 
 	int16 hepburn = CTheZones::FindZoneByLabelAndReturnIndex("TOWERS");

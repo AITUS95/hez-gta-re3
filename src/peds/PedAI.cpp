@@ -2372,7 +2372,8 @@ CPed::PedAnimAlignCB(CAnimBlendAssociation *animAssoc, void *arg)
 			ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_COACH_OPEN_LHS);
 		} else {
 
-			if (ped->m_objective == OBJECTIVE_ENTER_CAR_AS_DRIVER && veh->pDriver) {
+			// Give the Corleone player the same quick driver pull-out used by Leone AI.
+			if ((ped->IsPlayer() || ped->m_objective == OBJECTIVE_ENTER_CAR_AS_DRIVER) && veh->pDriver) {
 
 				if (!veh->bLowVehicle
 					&& veh->pDriver->CharCreatedBy != MISSION_CHAR
