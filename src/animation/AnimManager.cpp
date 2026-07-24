@@ -199,9 +199,6 @@ AnimAssocDesc aStdAnimDescs[] = {
 	{ ANIM_STD_PHONE_OUT, ASSOC_FADEOUTWHENDONE | ASSOC_PARTIAL },
 	{ ANIM_STD_PHONE_TALK, ASSOC_REPEAT | ASSOC_DELETEFADEDOUT | ASSOC_PARTIAL },
 };
-AnimAssocDesc aPlayerChatAnimDescs[] = {
-	{ ANIM_STD_CHAT, ASSOC_REPEAT },
-};
 #ifdef PC_PLAYER_CONTROLS
 AnimAssocDesc aStdAnimDescsSide[] = {
 	{ ANIM_STD_WALK, ASSOC_REPEAT | ASSOC_MOVEMENT | ASSOC_HAS_TRANSLATION | ASSOC_WALK | ASSOC_HAS_X_TRANSLATION },
@@ -427,9 +424,6 @@ char const *aPlayerBBBatAnimations[] = {
 	"IDLE_STANCE",
 	"walk_start",
 };
-char const *aPlayerChatAnimations[] = {
-	"idle_chat",
-};
 char const *aShuffleAnimations[] = {
 	"WALK_shuffle",
 	"RUN_civi",
@@ -584,7 +578,6 @@ const AnimAssocDefinition CAnimManager::ms_aAnimAssocDefinitions[NUM_ANIM_ASSOC_
 	{ "rocketleft", "ped", MI_COP, awc(aRocketStrafeLeftAnimations), aStdAnimDescsSide },
 	{ "rocketright", "ped", MI_COP, awc(aRocketStrafeRightAnimations), aStdAnimDescsSide },
 #endif
-	{ "playerchat", "ped", MI_COP, awc(aPlayerChatAnimations), aPlayerChatAnimDescs },
 };
 #undef awc
 

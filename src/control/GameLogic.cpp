@@ -26,6 +26,7 @@
 #include "General.h"
 #include "AnimManager.h"
 #include "AnimBlendAssociation.h"
+#include "RpAnimBlend.h"
 #include "soundlist.h"
 #include "screendroplets.h"
 
@@ -218,6 +219,36 @@ UpdateRecruitedBodyguards(CPlayerPed *player)
 }
 
 static void
+ApplyPlayerConversationAnimation(CPlayerPed *player)
+{
+	CAnimBlendAssociation *chat = CAnimManager::BlendAnimation(
+		player->GetClump(), ASSOCGRP_STD, ANIM_STD_CHAT, 8.0f);
+
+	// The stock player standing association masks idle_chat when it is
+	// partial. Change only this live copy to a full-body association; the
+	// shared animation definition and all ambient peds remain untouched.
+	chat->flags &= ~ASSOC_PARTIAL;
+	chat->blendAmount = 1.0f;
+	chat->blendDelta = 0.0f;
+
+	static const AnimationId moveAnims[] = {
+		ANIM_STD_WALK,
+		ANIM_STD_RUN,
+		ANIM_STD_RUNFAST,
+		ANIM_STD_IDLE,
+		ANIM_STD_STARTWALK
+	};
+	for (int32 i = 0; i < ARRAY_SIZE(moveAnims); i++) {
+		CAnimBlendAssociation *move =
+			RpAnimBlendClumpGetAssociation(player->GetClump(), moveAnims[i]);
+		if (move && move != chat) {
+			move->blendAmount = 0.0f;
+			move->blendDelta = 0.0f;
+		}
+	}
+}
+
+static void
 UpdatePlayerConversationAnimation(CPlayerPed *player)
 {
 	if (gPlayerConversationAnimEndTime == 0)
@@ -225,16 +256,12 @@ UpdatePlayerConversationAnimation(CPlayerPed *player)
 	if (CTimer::GetTimeInMilliseconds() >= gPlayerConversationAnimEndTime ||
 	    player->m_nPedState != PED_CHAT) {
 		gPlayerConversationAnimEndTime = 0;
+		CAnimManager::BlendAnimation(
+			player->GetClump(), player->m_animGroup, ANIM_STD_IDLE, 8.0f);
 		return;
 	}
 
-	// Use the same idle_chat hierarchy as ambient peds, but through the
-	// full-body player group so the upper-body gesture is not masked by the
-	// player's standing association.
-	CAnimBlendAssociation *chat = CAnimManager::BlendAnimation(
-		player->GetClump(), ASSOCGRP_PLAYERCHAT, ANIM_STD_CHAT, 8.0f);
-	chat->blendAmount = 1.0f;
-	chat->blendDelta = 0.0f;
+	ApplyPlayerConversationAnimation(player);
 	player->bIsTalking = true;
 }
 
@@ -275,10 +302,7 @@ UpdatePedConversation(CPlayerPed *player)
 	// gesture such as scratching the head.
 	if (closest->m_nPedType == PEDTYPE_GANG1 &&
 	    closest->CharCreatedBy == MISSION_CHAR && closest->m_leader == player) {
-		CAnimBlendAssociation *playerChat = CAnimManager::BlendAnimation(
-			player->GetClump(), ASSOCGRP_PLAYERCHAT, ANIM_STD_CHAT, 8.0f);
-		playerChat->blendAmount = 1.0f;
-		playerChat->blendDelta = 0.0f;
+		ApplyPlayerConversationAnimation(player);
 		CAnimManager::BlendAnimation(closest->GetClump(), ASSOCGRP_STD, ANIM_STD_CHAT, 8.0f);
 		gPlayerConversationAnimEndTime = CTimer::GetTimeInMilliseconds() + 6000;
 		player->bIsTalking = true;
