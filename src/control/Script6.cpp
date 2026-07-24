@@ -80,9 +80,16 @@ static void
 ApplyCompletedStoryZoneState(void)
 {
 	// Preserve the zone tables initialized by the original main.scm and
-	// apply only the two permanent population changes made by story
-	// missions.  This keeps every other district's vanilla gang, police and
-	// vehicle distribution intact.
+	// apply the permanent population changes made by story missions plus
+	// the Corleone presence requested for the Red Light District.  All
+	// unrelated gang, police and vehicle values remain untouched.
+	int16 redLight = CTheZones::FindZoneByLabelAndReturnIndex("REDLIGH");
+	if (redLight >= 0) {
+		// Moderate Leone presence by day, slightly stronger at night.
+		CTheZones::SetZonePedInfo(redLight, 1, -1, 180, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+		CTheZones::SetZonePedInfo(redLight, 0, -1, 220, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+	}
+
 	int16 fishFactory = CTheZones::FindZoneByLabelAndReturnIndex("FISHFAC");
 	if (fishFactory >= 0) {
 		CTheZones::SetZonePedInfo(fishFactory, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
