@@ -571,6 +571,13 @@ CPed::UpdateFromLeader(void)
 	if (!m_leader)
 		return;
 
+	// A recruited Leone must be allowed to finish a player-triggered native
+	// conversation instead of immediately resuming the follow objective.
+	if (m_nPedType == PEDTYPE_GANG1 && CharCreatedBy == MISSION_CHAR &&
+	    m_leader->IsPlayer() && m_nPedState == PED_CHAT &&
+	    m_leader->m_nPedState == PED_CHAT)
+		return;
+
 	CVector leaderDist;
 	if (m_leader->InVehicle())
 		leaderDist = m_leader->m_pMyVehicle->GetPosition() - GetPosition();

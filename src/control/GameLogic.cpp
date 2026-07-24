@@ -33,10 +33,10 @@ enum { NUM_VILLA_RECRUIT_SLOTS = 2 };
 static int32 gVillaRecruitHandles[NUM_VILLA_RECRUIT_SLOTS] = { -1, -1 };
 static uint32 gVillaRecruitPromptTime;
 static uint32 gVillaBodyguardScanTime;
-static uint32 gPedInteractionPromptTime;
+static bool gBodyguardInteractionPromptShown;
 static const CVector VILLA_RECRUIT_POSITIONS[NUM_VILLA_RECRUIT_SLOTS] = {
 	CVector(1438.0f, -173.5f, 55.0f),
-	CVector(1435.8f, -173.5f, 55.0f)
+	CVector(1440.2f, -175.5f, 55.0f)
 };
 static const int32 VILLA_RECRUIT_MODELS[NUM_VILLA_RECRUIT_SLOTS] = {
 	MI_GANG01,
@@ -136,30 +136,38 @@ static void
 UpdateRecruitedBodyguards(CPlayerPed *player)
 {
 	CPedPool *pool = CPools::GetPedPool();
+	CPed *closest = nil;
+	float closestDistance = SQR(6.0f);
+	for (int32 i = 0; i < pool->GetSize(); i++) {
+		CPed *guard = pool->GetSlot(i);
+		if (guard == nil || guard->m_nPedType != PEDTYPE_GANG1 ||
+		    guard->CharCreatedBy != MISSION_CHAR || guard->m_leader != player ||
+		    guard->DyingOrDead() || guard->InVehicle())
+			continue;
+		float distance = (guard->GetPosition() - player->GetPosition()).MagnitudeSqr();
+		if (distance < closestDistance) {
+			closestDistance = distance;
+			closest = guard;
+		}
+	}
+
+	if (closest && !gBodyguardInteractionPromptShown) {
+		static wchar interaction[96];
+		AsciiToUnicode("Premi T per parlare. Premi X vicino a uno scagnozzo per congedarlo.", interaction);
+		CMessages::AddMessageJumpQ(interaction, 3500, 0);
+		gBodyguardInteractionPromptShown = true;
+	} else if (closest == nil) {
+		gBodyguardInteractionPromptShown = false;
+	}
 
 	// X dismisses the closest recruited Leone without killing him.
-	if (CPad::GetPad(0)->GetCharJustDown('X') || CPad::GetPad(0)->GetCharJustDown('x')) {
-		CPed *closest = nil;
-		float closestDistance = SQR(6.0f);
-		for (int32 i = 0; i < pool->GetSize(); i++) {
-			CPed *guard = pool->GetSlot(i);
-			if (guard == nil || guard->m_nPedType != PEDTYPE_GANG1 ||
-			    guard->CharCreatedBy != MISSION_CHAR || guard->m_leader != player ||
-			    guard->DyingOrDead() || guard->InVehicle())
-				continue;
-			float distance = (guard->GetPosition() - player->GetPosition()).MagnitudeSqr();
-			if (distance < closestDistance) {
-				closestDistance = distance;
-				closest = guard;
-			}
-		}
-		if (closest) {
-			closest->ClearLeader();
-			closest->bRemoveFromWorld = true;
-			static wchar dismissed[48];
-			AsciiToUnicode("Scagnozzo congedato.", dismissed);
-			CMessages::AddMessageJumpQ(dismissed, 1500, 0);
-		}
+	if (closest && (CPad::GetPad(0)->GetCharJustDown('X') ||
+	                CPad::GetPad(0)->GetCharJustDown('x'))) {
+		closest->ClearLeader();
+		closest->bRemoveFromWorld = true;
+		static wchar dismissed[48];
+		AsciiToUnicode("Scagnozzo congedato.", dismissed);
+		CMessages::AddMessageJumpQ(dismissed, 1500, 0);
 	}
 
 	if (CTimer::GetTimeInMilliseconds() < gVillaBodyguardScanTime)
@@ -170,7 +178,8 @@ UpdateRecruitedBodyguards(CPlayerPed *player)
 		CPed *guard = pool->GetSlot(i);
 		if (guard == nil || guard->m_nPedType != PEDTYPE_GANG1 ||
 		    guard->CharCreatedBy != MISSION_CHAR || guard->m_leader != player ||
-		    guard->DyingOrDead() || !guard->IsPedInControl() || guard->InVehicle())
+		    guard->DyingOrDead() || !guard->IsPedInControl() || guard->InVehicle() ||
+		    guard->m_nPedState == PED_CHAT)
 			continue;
 
 		if ((guard->m_objective == OBJECTIVE_KILL_CHAR_ON_FOOT ||
@@ -228,19 +237,50 @@ UpdatePedConversation(CPlayerPed *player)
 	if (closest == nil)
 		return;
 
-	if (CTimer::GetTimeInMilliseconds() > gPedInteractionPromptTime) {
-		static wchar message[96];
-		AsciiToUnicode("Premi T per parlare. Premi X vicino a uno scagnozzo per congedarlo.", message);
-		CMessages::AddMessageJumpQ(message, 1200, 0);
-		gPedInteractionPromptTime = CTimer::GetTimeInMilliseconds() + 1000;
-	}
-
 	CPad *pad = CPad::GetPad(0);
 	if (!pad->GetCharJustDown('T') && !pad->GetCharJustDown('t'))
 		return;
 
 	player->SetChat(closest, 4000);
 	closest->SetChat(player, 4000);
+}
+
+static void
+UpdatePlayerLeoneCustomization(CPlayerPed *player)
+{
+	CPad *pad = CPad::GetPad(0);
+	if (!player->bInVehicle && player->IsPedInControl() &&
+	    (pad->GetCharJustDown('K') || pad->GetCharJustDown('k'))) {
+		int32 targetModel = player->GetModelIndex() == MI_GANG02 ? MI_GANG01 : MI_GANG02;
+		if (!CStreaming::HasModelLoaded(targetModel)) {
+			CStreaming::RequestModel(targetModel, STREAMFLAGS_DONT_REMOVE | STREAMFLAGS_DEPENDENCY);
+			CStreaming::LoadAllRequestedModels(false);
+		}
+		if (CStreaming::HasModelLoaded(targetModel)) {
+			uint32 currentWeapon = player->m_currentWeapon;
+			player->DeleteRwObject();
+			player->m_modelIndex = -1;
+			player->SetModelIndex(targetModel);
+			player->SetPedStats(PEDSTAT_PLAYER);
+			player->m_headingRate = player->m_pedStats->m_headingChangeRate;
+			player->SetCurrentWeapon(currentWeapon);
+			player->ProcessAnimGroups();
+
+			static wchar skinMessage[48];
+			AsciiToUnicode(targetModel == MI_GANG02 ?
+				"Skin Leone alternativa." : "Skin Leone originale.", skinMessage);
+			CMessages::AddMessageJumpQ(skinMessage, 1500, 0);
+		}
+	}
+
+	if (!player->bInVehicle && player->IsPedInControl() &&
+	    (pad->GetCharJustDown('L') || pad->GetCharJustDown('l'))) {
+		player->ToggleLeoneMovementStyle();
+		static wchar movementMessage[48];
+		AsciiToUnicode(CPlayerPed::bUseAlternateLeoneMovement ?
+			"Movimento Leone alternativo." : "Movimento Leone originale.", movementMessage);
+		CMessages::AddMessageJumpQ(movementMessage, 1500, 0);
+	}
 }
 
 static void
@@ -254,6 +294,7 @@ UpdateCorleoneVilla(void)
 
 	UpdateRecruitedBodyguards(player);
 	UpdatePedConversation(player);
+	UpdatePlayerLeoneCustomization(player);
 
 	if ((player->GetPosition() - VILLA_RECRUIT_POSITIONS[0]).MagnitudeSqr2D() > SQR(90.0f))
 		return;
@@ -329,7 +370,8 @@ CGameLogic::InitAtStartOfGame()
 		gVillaRecruitHandles[i] = -1;
 	gVillaRecruitPromptTime = 0;
 	gVillaBodyguardScanTime = 0;
-	gPedInteractionPromptTime = 0;
+	gBodyguardInteractionPromptShown = false;
+	CPlayerPed::bUseAlternateLeoneMovement = false;
 }
 
 void

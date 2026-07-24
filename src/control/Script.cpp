@@ -1369,6 +1369,10 @@ int8 CRunningScript::ProcessCommands0To99(int32 command)
 			CStreaming::RequestModel(MI_GANG01, STREAMFLAGS_DONT_REMOVE | STREAMFLAGS_DEPENDENCY);
 			CStreaming::LoadAllRequestedModels(false);
 		}
+		if (!CStreaming::HasModelLoaded(MI_GANG02)) {
+			CStreaming::RequestModel(MI_GANG02, STREAMFLAGS_DONT_REMOVE | STREAMFLAGS_DEPENDENCY);
+			CStreaming::LoadAllRequestedModels(false);
+		}
 		CPlayerPed::SetupPlayerPed(index);
 		CPlayerPed *player = CWorld::Players[index].m_pPed;
 		player->DeleteRwObject();

@@ -43,6 +43,7 @@ public:
 #ifdef VC_PED_PORTS
 	static bool bDontAllowWeaponChange;
 #endif
+	static bool bUseAlternateLeoneMovement;
 
 	CPlayerPed();
 	~CPlayerPed();
@@ -78,6 +79,7 @@ public:
 	bool FindNextWeaponLockOnTarget(CEntity*, bool);
 	bool FindWeaponLockOnTarget(void);
 	void ProcessAnimGroups(void);
+	void ToggleLeoneMovementStyle(void);
 	void ProcessPlayerWeapon(CPad*);
 	void PlayerControlZelda(CPad*);
 
