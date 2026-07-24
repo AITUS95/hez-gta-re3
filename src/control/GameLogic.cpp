@@ -165,6 +165,147 @@ SendLeoneToAttackTarget(CPed *leone, CPed *target)
 	leone->SetMoveState(PEDMOVE_RUN);
 }
 
+static bool
+IsRecruitedBodyguard(CPed *ped, CPlayerPed *player)
+{
+	return ped && ped->m_nPedType == PEDTYPE_GANG1 &&
+		ped->CharCreatedBy == MISSION_CHAR && ped->m_leader == player &&
+		!ped->DyingOrDead() && !ped->InVehicle();
+}
+
+static bool
+IsBodyguardCombatObjective(CPed *ped)
+{
+	return ped && (ped->m_objective == OBJECTIVE_KILL_CHAR_ON_FOOT ||
+		ped->m_objective == OBJECTIVE_KILL_CHAR_ANY_MEANS);
+}
+
+static bool
+IsValidBodyguardTarget(CPed *target, CPlayerPed *player)
+{
+	return target && !target->DyingOrDead() && target != player &&
+		target->m_nPedType != PEDTYPE_GANG1 &&
+		(target->GetPosition() - player->GetPosition()).MagnitudeSqr2D() <= SQR(90.0f);
+}
+
+static bool
+IsPriorityGangTarget(CPed *target)
+{
+	return IsRivalGangPed(target) ||
+		(target && target->InVehicle() && IsRivalGangVehicle(target->m_pMyVehicle));
+}
+
+static bool
+CanAnyBodyguardSee(CEntity *target, CPlayerPed *player)
+{
+	CPedPool *pool = CPools::GetPedPool();
+	for (int32 i = 0; i < pool->GetSize(); i++) {
+		CPed *guard = pool->GetSlot(i);
+		if (!IsRecruitedBodyguard(guard, player) || !guard->IsPedInControl() ||
+		    guard->m_nPedState == PED_CHAT)
+			continue;
+		if ((target->GetPosition() - guard->GetPosition()).MagnitudeSqr2D() <= SQR(40.0f) &&
+		    guard->OurPedCanSeeThisOne(target))
+			return true;
+	}
+	return false;
+}
+
+static CPed *
+FindSquadGangTarget(CPlayerPed *player)
+{
+	CPedPool *pedPool = CPools::GetPedPool();
+	CPed *bestTarget = nil;
+	float bestDistance = SQR(90.0f);
+
+	// Finish a rival already engaged by one recruit before selecting another.
+	for (int32 i = 0; i < pedPool->GetSize(); i++) {
+		CPed *guard = pedPool->GetSlot(i);
+		if (!IsRecruitedBodyguard(guard, player) || !IsBodyguardCombatObjective(guard))
+			continue;
+		CPed *target = guard->m_pedInObjective;
+		if (!IsValidBodyguardTarget(target, player) || !IsPriorityGangTarget(target))
+			continue;
+		float distance = (target->GetPosition() - player->GetPosition()).MagnitudeSqr2D();
+		if (distance < bestDistance) {
+			bestDistance = distance;
+			bestTarget = target;
+		}
+	}
+	if (bestTarget)
+		return bestTarget;
+
+	for (int32 i = 0; i < pedPool->GetSize(); i++) {
+		CPed *rival = pedPool->GetSlot(i);
+		if (!IsRivalGangPed(rival) || rival->DyingOrDead() ||
+		    !rival->IsPedInControl() || rival->InVehicle())
+			continue;
+		float distance = (rival->GetPosition() - player->GetPosition()).MagnitudeSqr2D();
+		if (distance < bestDistance && CanAnyBodyguardSee(rival, player)) {
+			bestDistance = distance;
+			bestTarget = rival;
+		}
+	}
+
+	CVehiclePool *vehiclePool = CPools::GetVehiclePool();
+	for (int32 i = 0; i < vehiclePool->GetSize(); i++) {
+		CVehicle *vehicle = vehiclePool->GetSlot(i);
+		if (vehicle == nil || vehicle->GetStatus() == STATUS_WRECKED ||
+		    vehicle->pDriver == nil || vehicle->pDriver->DyingOrDead())
+			continue;
+		CPed *driver = vehicle->pDriver;
+		if (driver->IsPlayer() || driver->m_nPedType == PEDTYPE_GANG1 ||
+		    (!IsRivalGangPed(driver) && !IsRivalGangVehicle(vehicle)))
+			continue;
+		float distance = (vehicle->GetPosition() - player->GetPosition()).MagnitudeSqr2D();
+		if (distance < bestDistance && CanAnyBodyguardSee(vehicle, player)) {
+			bestDistance = distance;
+			bestTarget = driver;
+		}
+	}
+	return bestTarget;
+}
+
+static CPed *
+FindSquadCombatTarget(CPlayerPed *player)
+{
+	CPedPool *pool = CPools::GetPedPool();
+	CPed *bestTarget = nil;
+	float bestDistance = SQR(90.0f);
+
+	for (int32 i = 0; i < pool->GetSize(); i++) {
+		CPed *guard = pool->GetSlot(i);
+		if (!IsRecruitedBodyguard(guard, player) || !IsBodyguardCombatObjective(guard))
+			continue;
+		CPed *target = guard->m_pedInObjective;
+		if (!IsValidBodyguardTarget(target, player))
+			continue;
+		float distance = (target->GetPosition() - player->GetPosition()).MagnitudeSqr2D();
+		if (distance < bestDistance) {
+			bestDistance = distance;
+			bestTarget = target;
+		}
+	}
+	if (bestTarget)
+		return bestTarget;
+
+	// If an aggressor targets one recruit before he can retaliate, the whole
+	// squad immediately treats that aggressor as its shared target.
+	for (int32 i = 0; i < pool->GetSize(); i++) {
+		CPed *attacker = pool->GetSlot(i);
+		if (!IsValidBodyguardTarget(attacker, player) ||
+		    !IsBodyguardCombatObjective(attacker) ||
+		    !IsRecruitedBodyguard(attacker->m_pedInObjective, player))
+			continue;
+		float distance = (attacker->GetPosition() - player->GetPosition()).MagnitudeSqr2D();
+		if (distance < bestDistance) {
+			bestDistance = distance;
+			bestTarget = attacker;
+		}
+	}
+	return bestTarget;
+}
+
 static void
 UpdateRecruitedBodyguards(CPlayerPed *player)
 {
@@ -207,71 +348,28 @@ UpdateRecruitedBodyguards(CPlayerPed *player)
 		return;
 	gVillaBodyguardScanTime = CTimer::GetTimeInMilliseconds() + 500;
 
+	// One shared target makes recruits cover one another. Rival gangs always
+	// outrank generic attackers and the normal follow-player order.
+	CPed *squadTarget = FindSquadGangTarget(player);
+	if (squadTarget == nil)
+		squadTarget = FindSquadCombatTarget(player);
+
 	for (int32 i = 0; i < pool->GetSize(); i++) {
 		CPed *guard = pool->GetSlot(i);
-		if (guard == nil || guard->m_nPedType != PEDTYPE_GANG1 ||
-		    guard->CharCreatedBy != MISSION_CHAR || guard->m_leader != player ||
-		    guard->DyingOrDead() || !guard->IsPedInControl() || guard->InVehicle() ||
+		if (!IsRecruitedBodyguard(guard, player) || !guard->IsPedInControl() ||
 		    guard->m_nPedState == PED_CHAT)
 			continue;
 
-		if (guard->m_objective == OBJECTIVE_KILL_CHAR_ON_FOOT ||
-		    guard->m_objective == OBJECTIVE_KILL_CHAR_ANY_MEANS) {
-			CPed *target = guard->m_pedInObjective;
-			bool invalidTarget = target == nil || target->DyingOrDead() ||
-				target == player || target->m_nPedType == PEDTYPE_GANG1 ||
-				(target->GetPosition() - player->GetPosition()).MagnitudeSqr2D() > SQR(90.0f);
-			if (invalidTarget) {
-				guard->ClearObjective();
-				guard->SetObjective(OBJECTIVE_GOTO_CHAR_ON_FOOT, player);
-			} else {
-				// Refresh the order while the enemy is alive. UpdateFromLeader
-				// resumes following only after the fight has really ended.
-				guard->SetObjectiveTimer(30000);
-				guard->SetMoveState(PEDMOVE_RUN);
-				continue;
-			}
+		if (squadTarget) {
+			SendLeoneToAttackTarget(guard, squadTarget);
+			continue;
 		}
 
-		CPed *closestRival = nil;
-		float closestDistance = SQR(40.0f);
-		for (int32 j = 0; j < pool->GetSize(); j++) {
-			CPed *rival = pool->GetSlot(j);
-			if (!IsRivalGangPed(rival) || rival->DyingOrDead() ||
-			    !rival->IsPedInControl() || rival->InVehicle())
-				continue;
-			if ((rival->GetPosition() - player->GetPosition()).MagnitudeSqr2D() > SQR(80.0f))
-				continue;
-			float distance = (rival->GetPosition() - guard->GetPosition()).MagnitudeSqr2D();
-			if (distance < closestDistance && guard->OurPedCanSeeThisOne(rival)) {
-				closestDistance = distance;
-				closestRival = rival;
-			}
-		}
-
-		CVehiclePool *vehiclePool = CPools::GetVehiclePool();
-		for (int32 j = 0; j < vehiclePool->GetSize(); j++) {
-			CVehicle *vehicle = vehiclePool->GetSlot(j);
-			if (vehicle == nil || vehicle->GetStatus() == STATUS_WRECKED ||
-			    vehicle->pDriver == nil || vehicle->pDriver->DyingOrDead())
-				continue;
-
-			CPed *driver = vehicle->pDriver;
-			if (driver->IsPlayer() || driver->m_nPedType == PEDTYPE_GANG1 ||
-			    (!IsRivalGangPed(driver) && !IsRivalGangVehicle(vehicle)))
-				continue;
-			if ((vehicle->GetPosition() - player->GetPosition()).MagnitudeSqr2D() > SQR(80.0f))
-				continue;
-
-			float distance = (vehicle->GetPosition() - guard->GetPosition()).MagnitudeSqr2D();
-			if (distance < closestDistance && guard->OurPedCanSeeThisOne(vehicle)) {
-				closestDistance = distance;
-				closestRival = driver;
-			}
-		}
-		if (closestRival) {
-			SendLeoneToAttackTarget(guard, closestRival);
-		}
+		if (IsBodyguardCombatObjective(guard))
+			guard->ClearObjective();
+		if (guard->m_objective != OBJECTIVE_GOTO_CHAR_ON_FOOT ||
+		    guard->m_pedInObjective != player)
+			guard->SetObjective(OBJECTIVE_GOTO_CHAR_ON_FOOT, player);
 	}
 }
 

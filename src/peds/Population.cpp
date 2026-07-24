@@ -30,6 +30,11 @@
 #define PED_REMOVE_DIST			(MIN_CREATION_DIST + CREATION_RANGE + 1.0f)
 #define PED_REMOVE_DIST_SPECIAL	(MIN_CREATION_DIST + CREATION_RANGE + 15.0f) // for peds with bCullExtraFarAway flag
 
+enum {
+	CORLEONE_MIN_PED_POPULATION = 75,
+	CORLEONE_PED_POOL_RESERVE = 20
+};
+
 // Transition areas between zones
 const RegenerationPoint aSafeZones[] = {
 	LEVEL_INDUSTRIAL, LEVEL_COMMERCIAL, 400.0f, 814.0f, -954.0f, -903.0f, 30.0f, 100.0f,
@@ -595,6 +600,9 @@ CPopulation::AddToPopulation(float minDist, float maxDist, float minDistOffScree
 	}
 	// Yeah, float
 	float maxPossiblePedsForArea = (zoneInfo.pedDensity + zoneInfo.carDensity) * playerInfo->m_fRoadDensity * PedDensityMultiplier * CIniFile::PedNumberMultiplier;
+	MaxNumberOfPedsInUse = Min(Max(MaxNumberOfPedsInUse, CORLEONE_MIN_PED_POPULATION),
+		NUMPEDS - CORLEONE_PED_POOL_RESERVE);
+	maxPossiblePedsForArea = Max(maxPossiblePedsForArea, (float)CORLEONE_MIN_PED_POPULATION);
 	maxPossiblePedsForArea = Min(maxPossiblePedsForArea, MaxNumberOfPedsInUse);
 
 	if (ms_nTotalPeds < maxPossiblePedsForArea || addCop) {
