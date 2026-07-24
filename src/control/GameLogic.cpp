@@ -38,7 +38,7 @@ static uint32 gVillaBodyguardScanTime;
 static bool gBodyguardInteractionPromptShown;
 static const CVector VILLA_RECRUIT_POSITIONS[NUM_VILLA_RECRUIT_SLOTS] = {
 	CVector(1438.0f, -173.5f, 55.0f),
-	CVector(1440.0f, -174.3f, 55.0f)
+	CVector(1436.0f, -173.5f, 55.0f)
 };
 static const int32 VILLA_RECRUIT_MODELS[NUM_VILLA_RECRUIT_SLOTS] = {
 	MI_GANG01,
@@ -246,17 +246,16 @@ UpdatePedConversation(CPlayerPed *player)
 	player->SetChat(closest, 6000);
 	closest->SetChat(player, 6000);
 
-	// Followers normally retain movement associations while chatting. Give
-	// both participants the native chat animation and explicitly add a
-	// one-shot player gesture so the exchange is visible on both sides.
+	// Start the real repeating conversation animation for both participants.
+	// Keep bIsTalking clear here so CPed::Chat can drive the native exchange
+	// and alternate its speech phases instead of replacing it with an idle
+	// gesture such as scratching the head.
 	if (closest->m_nPedType == PEDTYPE_GANG1 &&
 	    closest->CharCreatedBy == MISSION_CHAR && closest->m_leader == player) {
-		CAnimManager::BlendAnimation(player->GetClump(), ASSOCGRP_STD, ANIM_STD_CHAT, 4.0f);
-		CAnimManager::BlendAnimation(player->GetClump(), ASSOCGRP_STD,
-			ANIM_STD_XPRESS_SCRATCH, 8.0f);
-		CAnimManager::BlendAnimation(closest->GetClump(), ASSOCGRP_STD, ANIM_STD_CHAT, 4.0f);
-		player->bIsTalking = true;
-		closest->bIsTalking = true;
+		CAnimManager::BlendAnimation(player->GetClump(), ASSOCGRP_STD, ANIM_STD_CHAT, 8.0f);
+		CAnimManager::BlendAnimation(closest->GetClump(), ASSOCGRP_STD, ANIM_STD_CHAT, 8.0f);
+		player->bIsTalking = false;
+		closest->bIsTalking = false;
 		player->Say(SOUND_PED_CHAT);
 		closest->Say(SOUND_PED_CHAT);
 	}
