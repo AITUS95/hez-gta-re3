@@ -25,6 +25,7 @@
 #include "Font.h"
 #include "General.h"
 #include "AnimManager.h"
+#include "AnimBlendAssociation.h"
 #include "soundlist.h"
 #include "screendroplets.h"
 
@@ -35,10 +36,11 @@ enum { NUM_VILLA_RECRUIT_SLOTS = 2 };
 static int32 gVillaRecruitHandles[NUM_VILLA_RECRUIT_SLOTS] = { -1, -1 };
 static uint32 gVillaRecruitPromptTime;
 static uint32 gVillaBodyguardScanTime;
+static uint32 gPlayerConversationAnimEndTime;
 static bool gBodyguardInteractionPromptShown;
 static const CVector VILLA_RECRUIT_POSITIONS[NUM_VILLA_RECRUIT_SLOTS] = {
 	CVector(1438.0f, -173.5f, 55.0f),
-	CVector(1436.0f, -173.5f, 55.0f)
+	CVector(1440.0f, -173.5f, 55.0f)
 };
 static const int32 VILLA_RECRUIT_MODELS[NUM_VILLA_RECRUIT_SLOTS] = {
 	MI_GANG01,
@@ -216,6 +218,27 @@ UpdateRecruitedBodyguards(CPlayerPed *player)
 }
 
 static void
+UpdatePlayerConversationAnimation(CPlayerPed *player)
+{
+	if (gPlayerConversationAnimEndTime == 0)
+		return;
+	if (CTimer::GetTimeInMilliseconds() >= gPlayerConversationAnimEndTime ||
+	    player->m_nPedState != PED_CHAT) {
+		gPlayerConversationAnimEndTime = 0;
+		return;
+	}
+
+	// Player control can fade a partial idle association much sooner than an
+	// ambient ped does. Keep the actual chat animation fully blended for the
+	// duration of this recruited-bodyguard conversation.
+	CAnimBlendAssociation *chat = CAnimManager::BlendAnimation(
+		player->GetClump(), ASSOCGRP_STD, ANIM_STD_CHAT, 8.0f);
+	chat->blendAmount = 1.0f;
+	chat->blendDelta = 0.0f;
+	player->bIsTalking = true;
+}
+
+static void
 UpdatePedConversation(CPlayerPed *player)
 {
 	if (player->bInVehicle || !player->IsPedInControl() ||
@@ -252,9 +275,13 @@ UpdatePedConversation(CPlayerPed *player)
 	// gesture such as scratching the head.
 	if (closest->m_nPedType == PEDTYPE_GANG1 &&
 	    closest->CharCreatedBy == MISSION_CHAR && closest->m_leader == player) {
-		CAnimManager::BlendAnimation(player->GetClump(), ASSOCGRP_STD, ANIM_STD_CHAT, 8.0f);
+		CAnimBlendAssociation *playerChat = CAnimManager::BlendAnimation(
+			player->GetClump(), ASSOCGRP_STD, ANIM_STD_CHAT, 8.0f);
+		playerChat->blendAmount = 1.0f;
+		playerChat->blendDelta = 0.0f;
 		CAnimManager::BlendAnimation(closest->GetClump(), ASSOCGRP_STD, ANIM_STD_CHAT, 8.0f);
-		player->bIsTalking = false;
+		gPlayerConversationAnimEndTime = CTimer::GetTimeInMilliseconds() + 6000;
+		player->bIsTalking = true;
 		closest->bIsTalking = false;
 		player->Say(SOUND_PED_CHAT);
 		closest->Say(SOUND_PED_CHAT);
@@ -309,6 +336,7 @@ UpdateCorleoneVilla(void)
 		return;
 
 	UpdateRecruitedBodyguards(player);
+	UpdatePlayerConversationAnimation(player);
 	UpdatePedConversation(player);
 	UpdatePlayerLeoneCustomization(player);
 
@@ -386,6 +414,7 @@ CGameLogic::InitAtStartOfGame()
 		gVillaRecruitHandles[i] = -1;
 	gVillaRecruitPromptTime = 0;
 	gVillaBodyguardScanTime = 0;
+	gPlayerConversationAnimEndTime = 0;
 	gBodyguardInteractionPromptShown = false;
 	CPlayerPed::bUseAlternateLeoneMovement = false;
 }
