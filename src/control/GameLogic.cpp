@@ -195,22 +195,6 @@ IsPriorityGangTarget(CPed *target)
 		(target && target->InVehicle() && IsRivalGangVehicle(target->m_pMyVehicle));
 }
 
-static bool
-CanAnyBodyguardSee(CEntity *target, CPlayerPed *player)
-{
-	CPedPool *pool = CPools::GetPedPool();
-	for (int32 i = 0; i < pool->GetSize(); i++) {
-		CPed *guard = pool->GetSlot(i);
-		if (!IsRecruitedBodyguard(guard, player) || !guard->IsPedInControl() ||
-		    guard->m_nPedState == PED_CHAT)
-			continue;
-		if ((target->GetPosition() - guard->GetPosition()).MagnitudeSqr2D() <= SQR(40.0f) &&
-		    guard->OurPedCanSeeThisOne(target))
-			return true;
-	}
-	return false;
-}
-
 static CPed *
 FindSquadGangTarget(CPlayerPed *player)
 {
@@ -218,7 +202,8 @@ FindSquadGangTarget(CPlayerPed *player)
 	CPed *bestTarget = nil;
 	float bestDistance = SQR(90.0f);
 
-	// Finish a rival already engaged by one recruit before selecting another.
+	// Share only a rival already engaged by one recruit. Merely seeing a rival
+	// must not start a fight without a player lock-on attack.
 	for (int32 i = 0; i < pedPool->GetSize(); i++) {
 		CPed *guard = pedPool->GetSlot(i);
 		if (!IsRecruitedBodyguard(guard, player) || !IsBodyguardCombatObjective(guard))
@@ -230,37 +215,6 @@ FindSquadGangTarget(CPlayerPed *player)
 		if (distance < bestDistance) {
 			bestDistance = distance;
 			bestTarget = target;
-		}
-	}
-	if (bestTarget)
-		return bestTarget;
-
-	for (int32 i = 0; i < pedPool->GetSize(); i++) {
-		CPed *rival = pedPool->GetSlot(i);
-		if (!IsRivalGangPed(rival) || rival->DyingOrDead() ||
-		    !rival->IsPedInControl() || rival->InVehicle())
-			continue;
-		float distance = (rival->GetPosition() - player->GetPosition()).MagnitudeSqr2D();
-		if (distance < bestDistance && CanAnyBodyguardSee(rival, player)) {
-			bestDistance = distance;
-			bestTarget = rival;
-		}
-	}
-
-	CVehiclePool *vehiclePool = CPools::GetVehiclePool();
-	for (int32 i = 0; i < vehiclePool->GetSize(); i++) {
-		CVehicle *vehicle = vehiclePool->GetSlot(i);
-		if (vehicle == nil || vehicle->GetStatus() == STATUS_WRECKED ||
-		    vehicle->pDriver == nil || vehicle->pDriver->DyingOrDead())
-			continue;
-		CPed *driver = vehicle->pDriver;
-		if (driver->IsPlayer() || driver->m_nPedType == PEDTYPE_GANG1 ||
-		    (!IsRivalGangPed(driver) && !IsRivalGangVehicle(vehicle)))
-			continue;
-		float distance = (vehicle->GetPosition() - player->GetPosition()).MagnitudeSqr2D();
-		if (distance < bestDistance && CanAnyBodyguardSee(vehicle, player)) {
-			bestDistance = distance;
-			bestTarget = driver;
 		}
 	}
 	return bestTarget;
@@ -348,8 +302,8 @@ UpdateRecruitedBodyguards(CPlayerPed *player)
 		return;
 	gVillaBodyguardScanTime = CTimer::GetTimeInMilliseconds() + 500;
 
-	// One shared target makes recruits cover one another. Rival gangs always
-	// outrank generic attackers and the normal follow-player order.
+	// One shared, already-engaged target makes recruits cover one another.
+	// Without a combat target they return to the normal follow-player order.
 	CPed *squadTarget = FindSquadGangTarget(player);
 	if (squadTarget == nil)
 		squadTarget = FindSquadCombatTarget(player);
@@ -377,7 +331,8 @@ void
 CGameLogic::NotifyPlayerShotVehicle(CVehicle *vehicle)
 {
 	CPlayerPed *player = FindPlayerPed();
-	if (player == nil || vehicle == nil || vehicle->pDriver == nil)
+	if (player == nil || vehicle == nil || vehicle->pDriver == nil ||
+	    player->m_pPointGunAt != vehicle)
 		return;
 
 	CPed *driver = vehicle->pDriver;

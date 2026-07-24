@@ -2215,14 +2215,31 @@ MakeNearbyLeoneDefendPlayer(CEntity *target)
 	}
 }
 
+static bool
+IsPlayerLockedOnTarget(CPlayerPed *player, CPed *target)
+{
+	if (player == nil || target == nil || player->m_pPointGunAt == nil)
+		return false;
+
+	if (player->m_pPointGunAt == target)
+		return true;
+
+	if (player->m_pPointGunAt->IsVehicle())
+		return ((CVehicle*)player->m_pPointGunAt)->pDriver == target;
+
+	return false;
+}
+
 void
 CPed::ReactToAttack(CEntity *attacker)
 {
 	if (attacker && attacker->IsPed()) {
 		CPed *attackerPed = (CPed*)attacker;
 
-		// When the player attacks a non-Leone ped, nearby Leone join the fight.
-		if (attackerPed->IsPlayer() && m_nPedType != PEDTYPE_GANG1)
+		// Leone join only when the player actually hits the ped (or the driver
+		// of a vehicle) currently selected by weapon lock-on.
+		if (attackerPed->IsPlayer() && m_nPedType != PEDTYPE_GANG1 &&
+		    IsPlayerLockedOnTarget((CPlayerPed*)attackerPed, this))
 			MakeNearbyLeoneDefendPlayer(this);
 
 		// Leone never retaliate, flee from, or target the player.
@@ -2241,7 +2258,6 @@ CPed::ReactToAttack(CEntity *attacker)
 	}
 
 	if (IsPlayer() && attacker->IsPed()) {
-		MakeNearbyLeoneDefendPlayer(attacker);
 		InformMyGangOfAttack(attacker);
 		SetLookFlag(attacker, true);
 		SetLookTimer(700);
@@ -4875,7 +4891,9 @@ CPed::RegisterThreatWithGangPeds(CEntity *attacker)
 				if (nearVeh->VehicleCreatedBy != MISSION_VEHICLE) {
 					CPed *nearVehDriver = nearVeh->pDriver;
 
-					if (nearVehDriver && nearVehDriver != this && nearVehDriver->m_nPedType == m_nPedType) {
+					if (nearVehDriver && nearVehDriver != this &&
+					    nearVehDriver->m_nPedType == m_nPedType &&
+					    m_nPedType != PEDTYPE_GANG1) {
 
 						if (nearVeh->IsVehicleNormal() && nearVeh->IsCar()) {
 							nearVeh->AutoPilot.m_nCruiseSpeed = GAME_SPEED_TO_CARAI_SPEED * nearVeh->pHandling->Transmission.fMaxCruiseVelocity * 0.8f;
