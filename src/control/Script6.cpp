@@ -97,24 +97,6 @@ ApplyCompletedStoryZoneState(void)
 }
 
 static void
-IncreasePortlandGangConflictDensity(void)
-{
-	int16 redLight = CTheZones::FindZoneByLabelAndReturnIndex("REDLIGH");
-	if (redLight >= 0) {
-		// Red Light District: Leone are the only gang spawned by this zone.
-		CTheZones::SetZonePedInfo(redLight, 1, -1, 180, 0, 0, 0, 0, 0, 0, 0, 0, -1);
-		CTheZones::SetZonePedInfo(redLight, 0, -1, 220, 0, 0, 0, 0, 0, 0, 0, 0, -1);
-	}
-
-	int16 hepburn = CTheZones::FindZoneByLabelAndReturnIndex("TOWERS");
-	if (hepburn >= 0) {
-		// Hepburn Heights: Leone and Diablos only.
-		CTheZones::SetZonePedInfo(hepburn, 1, -1, 180, -1, 180, -1, -1, -1, -1, -1, -1, -1);
-		CTheZones::SetZonePedInfo(hepburn, 0, -1, 220, -1, 220, -1, -1, -1, -1, -1, -1, -1);
-	}
-}
-
-static void
 SetUpCorleoneVilla(void)
 {
 	// Salvatore's original mission garage occupies this exact map box.
@@ -438,7 +420,6 @@ int8 CRunningScript::ProcessCommands1000To1099(int32 command)
 		if (ScriptParams[0] == 0 && !m_bIsMissionScript) {
 			UnlockCorleoneWorld();
 			ApplyCompletedStoryZoneState();
-			IncreasePortlandGangConflictDensity();
 			CTheCarGenerators::ApplyCompletedGameState();
 			SetUpCorleoneVilla();
 			CPlayerPed *player = FindPlayerPed();
