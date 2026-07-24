@@ -24,10 +24,6 @@
 #include "Pools.h"
 #include "Font.h"
 #include "General.h"
-#include "AnimManager.h"
-#include "AnimBlendAssociation.h"
-#include "RpAnimBlend.h"
-#include "soundlist.h"
 #include "screendroplets.h"
 
 uint8 CGameLogic::ActivePlayers;
@@ -37,7 +33,6 @@ enum { NUM_VILLA_RECRUIT_SLOTS = 2 };
 static int32 gVillaRecruitHandles[NUM_VILLA_RECRUIT_SLOTS] = { -1, -1 };
 static uint32 gVillaRecruitPromptTime;
 static uint32 gVillaBodyguardScanTime;
-static uint32 gPlayerConversationAnimEndTime;
 static bool gBodyguardInteractionPromptShown;
 static const CVector VILLA_RECRUIT_POSITIONS[NUM_VILLA_RECRUIT_SLOTS] = {
 	CVector(1438.0f, -173.5f, 55.0f),
@@ -219,53 +214,6 @@ UpdateRecruitedBodyguards(CPlayerPed *player)
 }
 
 static void
-ApplyPlayerConversationAnimation(CPlayerPed *player)
-{
-	CAnimBlendAssociation *chat = CAnimManager::BlendAnimation(
-		player->GetClump(), ASSOCGRP_STD, ANIM_STD_CHAT, 8.0f);
-
-	// The stock player standing association masks idle_chat when it is
-	// partial. Change only this live copy to a full-body association; the
-	// shared animation definition and all ambient peds remain untouched.
-	chat->flags &= ~ASSOC_PARTIAL;
-	chat->blendAmount = 1.0f;
-	chat->blendDelta = 0.0f;
-
-	static const AnimationId moveAnims[] = {
-		ANIM_STD_WALK,
-		ANIM_STD_RUN,
-		ANIM_STD_RUNFAST,
-		ANIM_STD_IDLE,
-		ANIM_STD_STARTWALK
-	};
-	for (int32 i = 0; i < ARRAY_SIZE(moveAnims); i++) {
-		CAnimBlendAssociation *move =
-			RpAnimBlendClumpGetAssociation(player->GetClump(), moveAnims[i]);
-		if (move && move != chat) {
-			move->blendAmount = 0.0f;
-			move->blendDelta = 0.0f;
-		}
-	}
-}
-
-static void
-UpdatePlayerConversationAnimation(CPlayerPed *player)
-{
-	if (gPlayerConversationAnimEndTime == 0)
-		return;
-	if (CTimer::GetTimeInMilliseconds() >= gPlayerConversationAnimEndTime ||
-	    player->m_nPedState != PED_CHAT) {
-		gPlayerConversationAnimEndTime = 0;
-		CAnimManager::BlendAnimation(
-			player->GetClump(), player->m_animGroup, ANIM_STD_IDLE, 8.0f);
-		return;
-	}
-
-	ApplyPlayerConversationAnimation(player);
-	player->bIsTalking = true;
-}
-
-static void
 UpdatePedConversation(CPlayerPed *player)
 {
 	if (player->bInVehicle || !player->IsPedInControl() ||
@@ -295,21 +243,6 @@ UpdatePedConversation(CPlayerPed *player)
 
 	player->SetChat(closest, 6000);
 	closest->SetChat(player, 6000);
-
-	// Start the real repeating conversation animation for both participants.
-	// Keep bIsTalking clear here so CPed::Chat can drive the native exchange
-	// and alternate its speech phases instead of replacing it with an idle
-	// gesture such as scratching the head.
-	if (closest->m_nPedType == PEDTYPE_GANG1 &&
-	    closest->CharCreatedBy == MISSION_CHAR && closest->m_leader == player) {
-		ApplyPlayerConversationAnimation(player);
-		CAnimManager::BlendAnimation(closest->GetClump(), ASSOCGRP_STD, ANIM_STD_CHAT, 8.0f);
-		gPlayerConversationAnimEndTime = CTimer::GetTimeInMilliseconds() + 6000;
-		player->bIsTalking = true;
-		closest->bIsTalking = false;
-		player->Say(SOUND_PED_CHAT);
-		closest->Say(SOUND_PED_CHAT);
-	}
 }
 
 static void
@@ -360,7 +293,6 @@ UpdateCorleoneVilla(void)
 		return;
 
 	UpdateRecruitedBodyguards(player);
-	UpdatePlayerConversationAnimation(player);
 	UpdatePedConversation(player);
 	UpdatePlayerLeoneCustomization(player);
 
@@ -438,7 +370,6 @@ CGameLogic::InitAtStartOfGame()
 		gVillaRecruitHandles[i] = -1;
 	gVillaRecruitPromptTime = 0;
 	gVillaBodyguardScanTime = 0;
-	gPlayerConversationAnimEndTime = 0;
 	gBodyguardInteractionPromptShown = false;
 	CPlayerPed::bUseAlternateLeoneMovement = false;
 }
