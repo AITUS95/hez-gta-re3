@@ -40,7 +40,7 @@ static uint32 gPlayerConversationAnimEndTime;
 static bool gBodyguardInteractionPromptShown;
 static const CVector VILLA_RECRUIT_POSITIONS[NUM_VILLA_RECRUIT_SLOTS] = {
 	CVector(1438.0f, -173.5f, 55.0f),
-	CVector(1440.0f, -173.5f, 55.0f)
+	CVector(1438.2f, -174.8f, 55.0f)
 };
 static const int32 VILLA_RECRUIT_MODELS[NUM_VILLA_RECRUIT_SLOTS] = {
 	MI_GANG01,
@@ -228,11 +228,11 @@ UpdatePlayerConversationAnimation(CPlayerPed *player)
 		return;
 	}
 
-	// Player control can fade a partial idle association much sooner than an
-	// ambient ped does. Keep the actual chat animation fully blended for the
-	// duration of this recruited-bodyguard conversation.
+	// Use the same idle_chat hierarchy as ambient peds, but through the
+	// full-body player group so the upper-body gesture is not masked by the
+	// player's standing association.
 	CAnimBlendAssociation *chat = CAnimManager::BlendAnimation(
-		player->GetClump(), ASSOCGRP_STD, ANIM_STD_CHAT, 8.0f);
+		player->GetClump(), ASSOCGRP_PLAYERCHAT, ANIM_STD_CHAT, 8.0f);
 	chat->blendAmount = 1.0f;
 	chat->blendDelta = 0.0f;
 	player->bIsTalking = true;
@@ -276,7 +276,7 @@ UpdatePedConversation(CPlayerPed *player)
 	if (closest->m_nPedType == PEDTYPE_GANG1 &&
 	    closest->CharCreatedBy == MISSION_CHAR && closest->m_leader == player) {
 		CAnimBlendAssociation *playerChat = CAnimManager::BlendAnimation(
-			player->GetClump(), ASSOCGRP_STD, ANIM_STD_CHAT, 8.0f);
+			player->GetClump(), ASSOCGRP_PLAYERCHAT, ANIM_STD_CHAT, 8.0f);
 		playerChat->blendAmount = 1.0f;
 		playerChat->blendDelta = 0.0f;
 		CAnimManager::BlendAnimation(closest->GetClump(), ASSOCGRP_STD, ANIM_STD_CHAT, 8.0f);
