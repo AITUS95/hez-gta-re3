@@ -35,6 +35,52 @@ GetPlayerLockOnRange(eWeaponType weaponType)
 	return CWeaponInfo::GetWeaponInfo(weaponType)->m_fRange;
 }
 
+static bool
+IsRivalGangPedForTargeting(const CPed *ped)
+{
+	return ped && ped->m_nPedType >= PEDTYPE_GANG2 && ped->m_nPedType <= PEDTYPE_GANG9;
+}
+
+static bool
+IsRivalGangVehicleForTargeting(const CVehicle *vehicle)
+{
+	if (vehicle == nil)
+		return false;
+
+	switch (vehicle->GetModelIndex()) {
+	case MI_BELLYUP:
+	case MI_YARDIE:
+	case MI_YAKUZA:
+	case MI_DIABLOS:
+	case MI_COLUMB:
+	case MI_HOODS:
+	case MI_PANLANT:
+		return true;
+	default:
+		break;
+	}
+
+	if (IsRivalGangPedForTargeting(vehicle->pDriver))
+		return true;
+	for (int32 i = 0; i < ARRAY_SIZE(vehicle->pPassengers); i++) {
+		if (IsRivalGangPedForTargeting(vehicle->pPassengers[i]))
+			return true;
+	}
+	return false;
+}
+
+static bool
+IsRivalGangTarget(CEntity *entity)
+{
+	if (entity == nil)
+		return false;
+	if (entity->IsPed())
+		return IsRivalGangPedForTargeting((CPed*)entity);
+	if (entity->IsVehicle())
+		return IsRivalGangVehicleForTargeting((CVehicle*)entity);
+	return false;
+}
+
 #ifdef VC_PED_PORTS
 bool CPlayerPed::bDontAllowWeaponChange;
 #endif
@@ -844,6 +890,8 @@ CPlayerPed::EvaluateNeighbouringTarget(CEntity *candidate, CEntity **targetPtr, 
 			} else {
 				closeness = angleBetweenUs > 0.0f ? -100000.0f : -Abs(angleBetweenUs);
 			}
+			if (IsRivalGangTarget(candidate))
+				closeness += 10000.0f;
 
 			if (closeness > *lastCloseness) {
 				*targetPtr = candidate;
@@ -867,6 +915,8 @@ CPlayerPed::EvaluateTarget(CEntity *candidate, CEntity **targetPtr, float *lastC
 			if (priority) {
 				closeness += 5.0f;
 			}
+			if (IsRivalGangTarget(candidate))
+				closeness += 10000.0f;
 
 			if (closeness > *lastCloseness) {
 				*targetPtr = candidate;
