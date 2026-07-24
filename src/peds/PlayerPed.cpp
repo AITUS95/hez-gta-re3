@@ -18,10 +18,22 @@
 #include "Pools.h"
 #include "Darkel.h"
 #include "CarCtrl.h"
+#include "GameLogic.h"
 #include "SaveBuf.h"
 #include "Vehicle.h"
 
 #define PAD_MOVE_TO_GAME_WORLD_MOVE 60.0f
+
+static float
+GetPlayerLockOnRange(eWeaponType weaponType)
+{
+	// The unarmed slot doubles as the Leone command mode. Use the standard
+	// handgun lock-on range so pedestrians and occupied cars can be selected
+	// without requiring the player to stand within punching distance.
+	if (weaponType == WEAPONTYPE_UNARMED)
+		return CWeaponInfo::GetWeaponInfo(WEAPONTYPE_COLT45)->m_fRange;
+	return CWeaponInfo::GetWeaponInfo(weaponType)->m_fRange;
+}
 
 #ifdef VC_PED_PORTS
 bool CPlayerPed::bDontAllowWeaponChange;
@@ -533,7 +545,7 @@ CPlayerPed::DoesTargetHaveToBeBroken(CVector target, CWeapon *weaponUsed)
 {
 	CVector distVec = target - GetPosition();
 
-	if (distVec.Magnitude() > CWeaponInfo::GetWeaponInfo(weaponUsed->m_eWeaponType)->m_fRange)
+	if (distVec.Magnitude() > GetPlayerLockOnRange(weaponUsed->m_eWeaponType))
 		return true;
 
 	if (weaponUsed->m_eWeaponType != WEAPONTYPE_SHOTGUN && weaponUsed->m_eWeaponType != WEAPONTYPE_AK47)
@@ -868,7 +880,7 @@ bool
 CPlayerPed::FindNextWeaponLockOnTarget(CEntity *previousTarget, bool lookToLeft)
 {
 	CEntity *nextTarget = nil;
-	float weaponRange = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType)->m_fRange;
+	float weaponRange = GetPlayerLockOnRange(GetWeapon()->m_eWeaponType);
 	// nextTarget = nil; // duplicate
 	float lastCloseness = -10000.0f;
 	// CGeneral::GetATanOfXY(GetForward().x, GetForward().y); // unused
@@ -898,14 +910,14 @@ CPlayerPed::FindNextWeaponLockOnTarget(CEntity *previousTarget, bool lookToLeft)
 			if (obj)
 				EvaluateNeighbouringTarget(obj, &nextTarget, &lastCloseness, weaponRange, referenceBeta, lookToLeft);
 		}
-		for (int i = CPools::GetVehiclePool()->GetSize() - 1; i >= 0; i--) {
-			CVehicle *vehicle = CPools::GetVehiclePool()->GetSlot(i);
-			if (vehicle && vehicle != previousTarget && vehicle != FindPlayerVehicle() &&
-			    vehicle->IsCar() && vehicle->bIsVisible &&
-			    vehicle->GetStatus() != STATUS_WRECKED && OurPedCanSeeThisOne(vehicle))
-				EvaluateNeighbouringTarget(vehicle, &nextTarget, &lastCloseness,
-					weaponRange, referenceBeta, lookToLeft);
-		}
+	}
+	for (int i = CPools::GetVehiclePool()->GetSize() - 1; i >= 0; i--) {
+		CVehicle *vehicle = CPools::GetVehiclePool()->GetSlot(i);
+		if (vehicle && vehicle != previousTarget && vehicle != FindPlayerVehicle() &&
+		    vehicle->IsCar() && vehicle->bIsVisible &&
+		    vehicle->GetStatus() != STATUS_WRECKED && OurPedCanSeeThisOne(vehicle))
+			EvaluateNeighbouringTarget(vehicle, &nextTarget, &lastCloseness,
+				weaponRange, referenceBeta, lookToLeft);
 	}
 	if (!nextTarget)
 		return false;
@@ -914,7 +926,10 @@ CPlayerPed::FindNextWeaponLockOnTarget(CEntity *previousTarget, bool lookToLeft)
 #ifdef VC_PED_PORTS
 	bDontAllowWeaponChange = true;
 #endif
-	SetPointGunAt(nextTarget);
+	if (GetWeapon()->m_eWeaponType == WEAPONTYPE_UNARMED)
+		SetLookFlag(nextTarget, true);
+	else
+		SetPointGunAt(nextTarget);
 	return true;
 }
 
@@ -922,7 +937,7 @@ bool
 CPlayerPed::FindWeaponLockOnTarget(void)
 {
 	CEntity *nextTarget = nil;
-	float weaponRange = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType)->m_fRange;
+	float weaponRange = GetPlayerLockOnRange(GetWeapon()->m_eWeaponType);
 
 	if (m_pPointGunAt) {
 		CVector distVec = m_pPointGunAt->GetPosition() - GetPosition();
@@ -956,14 +971,14 @@ CPlayerPed::FindWeaponLockOnTarget(void)
 			if (obj)
 				EvaluateTarget(obj, &nextTarget, &lastCloseness, weaponRange, referenceBeta, false);
 		}
-		for (int i = CPools::GetVehiclePool()->GetSize() - 1; i >= 0; i--) {
-			CVehicle *vehicle = CPools::GetVehiclePool()->GetSlot(i);
-			if (vehicle && vehicle != FindPlayerVehicle() &&
-			    vehicle->IsCar() && vehicle->bIsVisible &&
-			    vehicle->GetStatus() != STATUS_WRECKED && OurPedCanSeeThisOne(vehicle))
-				EvaluateTarget(vehicle, &nextTarget, &lastCloseness,
-					weaponRange, referenceBeta, false);
-		}
+	}
+	for (int i = CPools::GetVehiclePool()->GetSize() - 1; i >= 0; i--) {
+		CVehicle *vehicle = CPools::GetVehiclePool()->GetSlot(i);
+		if (vehicle && vehicle != FindPlayerVehicle() &&
+		    vehicle->IsCar() && vehicle->bIsVisible &&
+		    vehicle->GetStatus() != STATUS_WRECKED && OurPedCanSeeThisOne(vehicle))
+			EvaluateTarget(vehicle, &nextTarget, &lastCloseness,
+				weaponRange, referenceBeta, false);
 	}
 	if (!nextTarget)
 		return false;
@@ -972,7 +987,10 @@ CPlayerPed::FindWeaponLockOnTarget(void)
 #ifdef VC_PED_PORTS
 	bDontAllowWeaponChange = true;
 #endif
-	SetPointGunAt(nextTarget);
+	if (GetWeapon()->m_eWeaponType == WEAPONTYPE_UNARMED)
+		SetLookFlag(nextTarget, true);
+	else
+		SetPointGunAt(nextTarget);
 	return true;
 }
 
@@ -1111,12 +1129,17 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
 	if (padUsed->GetWeapon() && m_nMoveState != PEDMOVE_SPRINT) {
 		if (m_nSelectedWepSlot == m_currentWeapon) {
 			if (m_pPointGunAt) {
+				if (m_currentWeapon == WEAPONTYPE_UNARMED) {
+					if (padUsed->WeaponJustDown())
+						CGameLogic::NotifyPlayerOrderedAttack(m_pPointGunAt);
+				} else {
 #ifdef FREE_CAM
-				if (CCamera::bFreeCam && weaponInfo->m_eWeaponFire == WEAPON_FIRE_MELEE && m_fMoveSpeed < 1.0f)
-					StartFightAttack(padUsed->GetWeapon());
-				else
+					if (CCamera::bFreeCam && weaponInfo->m_eWeaponFire == WEAPON_FIRE_MELEE && m_fMoveSpeed < 1.0f)
+						StartFightAttack(padUsed->GetWeapon());
+					else
 #endif
-					SetAttack(m_pPointGunAt);
+						SetAttack(m_pPointGunAt);
+				}
 			} else if (m_currentWeapon != WEAPONTYPE_UNARMED) {
 				if (m_nPedState == PED_ATTACK) {
 					if (padUsed->WeaponJustDown()) {

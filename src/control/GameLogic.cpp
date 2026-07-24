@@ -328,16 +328,21 @@ UpdateRecruitedBodyguards(CPlayerPed *player)
 }
 
 void
-CGameLogic::NotifyPlayerShotVehicle(CVehicle *vehicle)
+CGameLogic::NotifyPlayerOrderedAttack(CEntity *target)
 {
 	CPlayerPed *player = FindPlayerPed();
-	if (player == nil || vehicle == nil || vehicle->pDriver == nil ||
-	    player->m_pPointGunAt != vehicle)
+	if (player == nil || target == nil)
 		return;
 
-	CPed *driver = vehicle->pDriver;
-	if (driver->DyingOrDead() || driver->IsPlayer() ||
-	    driver->m_nPedType == PEDTYPE_GANG1)
+	CPed *enemy = nil;
+	if (target->IsPed()) {
+		enemy = (CPed*)target;
+	} else if (target->IsVehicle()) {
+		enemy = ((CVehicle*)target)->pDriver;
+	}
+
+	if (enemy == nil || enemy->DyingOrDead() || enemy->IsPlayer() ||
+	    enemy->m_nPedType == PEDTYPE_GANG1)
 		return;
 
 	CPedPool *pool = CPools::GetPedPool();
@@ -355,16 +360,26 @@ CGameLogic::NotifyPlayerShotVehicle(CVehicle *vehicle)
 		if (!recruited && !streetLeone)
 			continue;
 
-		float distance = (leone->GetPosition() - vehicle->GetPosition()).MagnitudeSqr2D();
+		float distance = (leone->GetPosition() - target->GetPosition()).MagnitudeSqr2D();
 		if (recruited) {
 			if (distance > SQR(70.0f))
 				continue;
-		} else if (distance > SQR(40.0f) || !leone->OurPedCanSeeThisOne(vehicle)) {
+		} else if (distance > SQR(40.0f) || !leone->OurPedCanSeeThisOne(target)) {
 			continue;
 		}
 
-		SendLeoneToAttackTarget(leone, driver);
+		SendLeoneToAttackTarget(leone, enemy);
 	}
+}
+
+void
+CGameLogic::NotifyPlayerShotVehicle(CVehicle *vehicle)
+{
+	CPlayerPed *player = FindPlayerPed();
+	if (player == nil || vehicle == nil || player->m_pPointGunAt != vehicle)
+		return;
+
+	NotifyPlayerOrderedAttack(vehicle);
 }
 
 static void
