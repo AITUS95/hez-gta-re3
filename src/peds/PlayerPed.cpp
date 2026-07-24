@@ -957,23 +957,14 @@ CPlayerPed::FindWeaponLockOnTarget(void)
 
 bool CPlayerPed::bUseAlternateLeoneMovement;
 
-static AssocGroupId
-GetLeoneMovementGroup(CPlayerPed *player, bool alternate)
-{
-	CPedModelInfo *modelInfo = (CPedModelInfo*)CModelInfo::GetModelInfo(player->GetModelIndex());
-	AssocGroupId nativeGroup = (AssocGroupId)modelInfo->m_animGroup;
-	if (!alternate)
-		return nativeGroup;
-	return nativeGroup == ASSOCGRP_GANG1 ? ASSOCGRP_GANG2 : ASSOCGRP_GANG1;
-}
-
 void
 CPlayerPed::ToggleLeoneMovementStyle(void)
 {
 	if (GetModelIndex() != MI_GANG01 && GetModelIndex() != MI_GANG02)
 		return;
 	bUseAlternateLeoneMovement = !bUseAlternateLeoneMovement;
-	AssocGroupId groupToSet = GetLeoneMovementGroup(this, bUseAlternateLeoneMovement);
+	AssocGroupId groupToSet = bUseAlternateLeoneMovement ?
+		ASSOCGRP_PLAYERLEONE2 : ASSOCGRP_PLAYERLEONE1;
 	if (m_animGroup != groupToSet) {
 		m_animGroup = groupToSet;
 		ReApplyMoveAnims();
@@ -989,7 +980,8 @@ CPlayerPed::ProcessAnimGroups(void)
 	// when a weapon is equipped. Keep the movement group declared by the
 	// Leone model instead, including while the starting Colt is selected.
 	if (GetModelIndex() == MI_GANG01 || GetModelIndex() == MI_GANG02) {
-		groupToSet = GetLeoneMovementGroup(this, bUseAlternateLeoneMovement);
+		groupToSet = bUseAlternateLeoneMovement ?
+			ASSOCGRP_PLAYERLEONE2 : ASSOCGRP_PLAYERLEONE1;
 		if (m_animGroup != groupToSet) {
 			m_animGroup = groupToSet;
 			ReApplyMoveAnims();

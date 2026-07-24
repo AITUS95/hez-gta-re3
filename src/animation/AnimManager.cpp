@@ -448,6 +448,20 @@ char const *aGang2Animations[] = {
 	"sprint_civi",
 	"idle_stance",
 };
+char const *aPlayerLeone1Animations[] = {
+	"walk_gang1",
+	"run_gang1",
+	"sprint_civi",
+	"idle_stance",
+	"walk_start",
+};
+char const *aPlayerLeone2Animations[] = {
+	"walk_gang2",
+	"run_gang1",
+	"sprint_civi",
+	"idle_stance",
+	"walk_start",
+};
 char const *aFatAnimations[] = {
 	"walk_fat",
 	"run_civi",
@@ -576,6 +590,8 @@ const AnimAssocDefinition CAnimManager::ms_aAnimAssocDefinitions[NUM_ANIM_ASSOC_
 	{ "rocketleft", "ped", MI_COP, awc(aRocketStrafeLeftAnimations), aStdAnimDescsSide },
 	{ "rocketright", "ped", MI_COP, awc(aRocketStrafeRightAnimations), aStdAnimDescsSide },
 #endif
+	{ "playerleone1", "ped", MI_COP, awc(aPlayerLeone1Animations), aStdAnimDescs },
+	{ "playerleone2", "ped", MI_COP, awc(aPlayerLeone2Animations), aStdAnimDescs },
 };
 #undef awc
 
