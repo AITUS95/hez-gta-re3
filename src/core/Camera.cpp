@@ -1284,8 +1284,9 @@ CCamera::CamControl(void)
 					if(PedZoomIndicator == CAM_ZOOM_1)
 						deadPedDist = 2.25f;
 					if(FindPlayerPed()->m_pPointGunAt){
-						// BUG: this need not be a ped!
-						if(((CPed*)FindPlayerPed()->m_pPointGunAt)->DyingOrDead()){
+						// Lock-on can also target vehicles and targettable objects.
+						if(FindPlayerPed()->m_pPointGunAt->IsPed() &&
+						   ((CPed*)FindPlayerPed()->m_pPointGunAt)->DyingOrDead()){
 							targetDead = true;
 							pedDist = deadPedDist;
 						}else

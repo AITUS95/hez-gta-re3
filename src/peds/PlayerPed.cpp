@@ -19,6 +19,7 @@
 #include "Darkel.h"
 #include "CarCtrl.h"
 #include "SaveBuf.h"
+#include "Vehicle.h"
 
 #define PAD_MOVE_TO_GAME_WORLD_MOVE 60.0f
 
@@ -896,6 +897,14 @@ CPlayerPed::FindNextWeaponLockOnTarget(CEntity *previousTarget, bool lookToLeft)
 		if (obj)
 			EvaluateNeighbouringTarget(obj, &nextTarget, &lastCloseness, weaponRange, referenceBeta, lookToLeft);
 	}
+	for (int i = CPools::GetVehiclePool()->GetSize() - 1; i >= 0; i--) {
+		CVehicle *vehicle = CPools::GetVehiclePool()->GetSlot(i);
+		if (vehicle && vehicle != previousTarget && vehicle != FindPlayerVehicle() &&
+		    vehicle->IsCar() && vehicle->bIsVisible &&
+		    vehicle->GetStatus() != STATUS_WRECKED && OurPedCanSeeThisOne(vehicle))
+			EvaluateNeighbouringTarget(vehicle, &nextTarget, &lastCloseness,
+				weaponRange, referenceBeta, lookToLeft);
+	}
 	if (!nextTarget)
 		return false;
 
@@ -943,6 +952,14 @@ CPlayerPed::FindWeaponLockOnTarget(void)
 		CObject *obj = CPools::GetObjectPool()->GetAt(m_nTargettableObjects[i]);
 		if (obj)
 			EvaluateTarget(obj, &nextTarget, &lastCloseness, weaponRange, referenceBeta, false);
+	}
+	for (int i = CPools::GetVehiclePool()->GetSize() - 1; i >= 0; i--) {
+		CVehicle *vehicle = CPools::GetVehiclePool()->GetSlot(i);
+		if (vehicle && vehicle != FindPlayerVehicle() &&
+		    vehicle->IsCar() && vehicle->bIsVisible &&
+		    vehicle->GetStatus() != STATUS_WRECKED && OurPedCanSeeThisOne(vehicle))
+			EvaluateTarget(vehicle, &nextTarget, &lastCloseness,
+				weaponRange, referenceBeta, false);
 	}
 	if (!nextTarget)
 		return false;

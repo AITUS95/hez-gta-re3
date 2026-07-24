@@ -22,6 +22,7 @@
 #include "PathFind.h"
 #include "Population.h"
 #include "Pools.h"
+#include "Vehicle.h"
 #include "Font.h"
 #include "General.h"
 #include "screendroplets.h"
@@ -132,6 +133,38 @@ IsRivalGangPed(CPed *ped)
 	return ped && ped->m_nPedType >= PEDTYPE_GANG2 && ped->m_nPedType <= PEDTYPE_GANG9;
 }
 
+static bool
+IsRivalGangVehicle(CVehicle *vehicle)
+{
+	if (vehicle == nil)
+		return false;
+
+	switch (vehicle->GetModelIndex()) {
+	case MI_BELLYUP:
+	case MI_YARDIE:
+	case MI_YAKUZA:
+	case MI_DIABLOS:
+	case MI_COLUMB:
+	case MI_HOODS:
+	case MI_PANLANT:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static void
+SendLeoneToAttackTarget(CPed *leone, CPed *target)
+{
+	if (leone == nil || target == nil || target->DyingOrDead() ||
+	    target->IsPlayer() || target->m_nPedType == PEDTYPE_GANG1)
+		return;
+
+	leone->SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, target);
+	leone->SetObjectiveTimer(30000);
+	leone->SetMoveState(PEDMOVE_RUN);
+}
+
 static void
 UpdateRecruitedBodyguards(CPlayerPed *player)
 {
@@ -182,18 +215,26 @@ UpdateRecruitedBodyguards(CPlayerPed *player)
 		    guard->m_nPedState == PED_CHAT)
 			continue;
 
-		if ((guard->m_objective == OBJECTIVE_KILL_CHAR_ON_FOOT ||
-		     guard->m_objective == OBJECTIVE_KILL_CHAR_ANY_MEANS) &&
-		    guard->m_pedInObjective && !guard->m_pedInObjective->DyingOrDead()) {
-			if (guard->m_pedInObjective->m_nPedType == PEDTYPE_GANG1) {
+		if (guard->m_objective == OBJECTIVE_KILL_CHAR_ON_FOOT ||
+		    guard->m_objective == OBJECTIVE_KILL_CHAR_ANY_MEANS) {
+			CPed *target = guard->m_pedInObjective;
+			bool invalidTarget = target == nil || target->DyingOrDead() ||
+				target == player || target->m_nPedType == PEDTYPE_GANG1 ||
+				(target->GetPosition() - player->GetPosition()).MagnitudeSqr2D() > SQR(90.0f);
+			if (invalidTarget) {
 				guard->ClearObjective();
 				guard->SetObjective(OBJECTIVE_GOTO_CHAR_ON_FOOT, player);
+			} else {
+				// Refresh the order while the enemy is alive. UpdateFromLeader
+				// resumes following only after the fight has really ended.
+				guard->SetObjectiveTimer(30000);
+				guard->SetMoveState(PEDMOVE_RUN);
+				continue;
 			}
-			continue;
 		}
 
 		CPed *closestRival = nil;
-		float closestDistance = SQR(30.0f);
+		float closestDistance = SQR(40.0f);
 		for (int32 j = 0; j < pool->GetSize(); j++) {
 			CPed *rival = pool->GetSlot(j);
 			if (!IsRivalGangPed(rival) || rival->DyingOrDead() ||
@@ -205,11 +246,67 @@ UpdateRecruitedBodyguards(CPlayerPed *player)
 				closestRival = rival;
 			}
 		}
-		if (closestRival) {
-			guard->SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, closestRival);
-			guard->SetObjectiveTimer(20000);
-			guard->SetMoveState(PEDMOVE_RUN);
+
+		CVehiclePool *vehiclePool = CPools::GetVehiclePool();
+		for (int32 j = 0; j < vehiclePool->GetSize(); j++) {
+			CVehicle *vehicle = vehiclePool->GetSlot(j);
+			if (vehicle == nil || vehicle->GetStatus() == STATUS_WRECKED ||
+			    vehicle->pDriver == nil || vehicle->pDriver->DyingOrDead())
+				continue;
+
+			CPed *driver = vehicle->pDriver;
+			if (driver->IsPlayer() || driver->m_nPedType == PEDTYPE_GANG1 ||
+			    (!IsRivalGangPed(driver) && !IsRivalGangVehicle(vehicle)))
+				continue;
+
+			float distance = (vehicle->GetPosition() - guard->GetPosition()).MagnitudeSqr2D();
+			if (distance < closestDistance && guard->OurPedCanSeeThisOne(vehicle)) {
+				closestDistance = distance;
+				closestRival = driver;
+			}
 		}
+		if (closestRival) {
+			SendLeoneToAttackTarget(guard, closestRival);
+		}
+	}
+}
+
+void
+CGameLogic::NotifyPlayerShotVehicle(CVehicle *vehicle)
+{
+	CPlayerPed *player = FindPlayerPed();
+	if (player == nil || vehicle == nil || vehicle->pDriver == nil)
+		return;
+
+	CPed *driver = vehicle->pDriver;
+	if (driver->DyingOrDead() || driver->IsPlayer() ||
+	    driver->m_nPedType == PEDTYPE_GANG1)
+		return;
+
+	CPedPool *pool = CPools::GetPedPool();
+	for (int32 i = 0; i < pool->GetSize(); i++) {
+		CPed *leone = pool->GetSlot(i);
+		if (leone == nil || leone == player ||
+		    leone->m_nPedType != PEDTYPE_GANG1 ||
+		    leone->DyingOrDead() || leone->InVehicle() ||
+		    !leone->IsPedInControl() || leone->m_nPedState == PED_CHAT)
+			continue;
+
+		bool recruited = leone->CharCreatedBy == MISSION_CHAR &&
+			leone->m_leader == player;
+		bool streetLeone = leone->CharCreatedBy == RANDOM_CHAR;
+		if (!recruited && !streetLeone)
+			continue;
+
+		float distance = (leone->GetPosition() - vehicle->GetPosition()).MagnitudeSqr2D();
+		if (recruited) {
+			if (distance > SQR(70.0f))
+				continue;
+		} else if (distance > SQR(40.0f) || !leone->OurPedCanSeeThisOne(vehicle)) {
+			continue;
+		}
+
+		SendLeoneToAttackTarget(leone, driver);
 	}
 }
 

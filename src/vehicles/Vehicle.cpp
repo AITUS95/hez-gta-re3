@@ -19,6 +19,7 @@
 #include "Fire.h"
 #include "Darkel.h"
 #include "SaveBuf.h"
+#include "GameLogic.h"
 
 bool CVehicle::bWheelsOnlyCheat;
 bool CVehicle::bAllDodosCheat;
@@ -656,6 +657,9 @@ CVehicle::InflictDamage(CEntity* damagedBy, eWeaponType weaponType, float damage
 		break;
 	}
 	if (m_fHealth > 0.0f) {
+		if (damagedBy == FindPlayerPed())
+			CGameLogic::NotifyPlayerShotVehicle(this);
+
 		if (VehicleCreatedBy == RANDOM_VEHICLE && pDriver &&
 			(GetStatus() == STATUS_SIMPLE || GetStatus() == STATUS_PHYSICS) &&
 			AutoPilot.m_nCarMission == MISSION_CRUISE) {
