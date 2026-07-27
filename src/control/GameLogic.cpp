@@ -431,7 +431,18 @@ UpdatePlayerLeoneCustomization(CPlayerPed *player)
 	CPad *pad = CPad::GetPad(0);
 	if (!player->bInVehicle && player->IsPedInControl() &&
 	    (pad->GetCharJustDown('K') || pad->GetCharJustDown('k'))) {
-		int32 targetModel = player->GetModelIndex() == MI_GANG02 ? MI_GANG01 : MI_GANG02;
+		int32 targetModel;
+		switch (player->GetModelIndex()) {
+		case MI_GANG01:
+			targetModel = MI_GANG02;
+			break;
+		case MI_GANG02:
+			targetModel = MI_PLAYER;
+			break;
+		default:
+			targetModel = MI_GANG01;
+			break;
+		}
 		if (!CStreaming::HasModelLoaded(targetModel)) {
 			CStreaming::RequestModel(targetModel, STREAMFLAGS_DONT_REMOVE | STREAMFLAGS_DEPENDENCY);
 			CStreaming::LoadAllRequestedModels(false);
@@ -447,8 +458,9 @@ UpdatePlayerLeoneCustomization(CPlayerPed *player)
 			player->ProcessAnimGroups();
 
 			static wchar skinMessage[48];
-			AsciiToUnicode(targetModel == MI_GANG02 ?
-				"Skin Leone alternativa." : "Skin Leone originale.", skinMessage);
+			const char *message = targetModel == MI_GANG02 ? "Skin Leone alternativa." :
+				targetModel == MI_PLAYER ? "Skin Claude." : "Skin Leone originale.";
+			AsciiToUnicode(message, skinMessage);
 			CMessages::AddMessageJumpQ(skinMessage, 1500, 0);
 		}
 	}
@@ -457,8 +469,19 @@ UpdatePlayerLeoneCustomization(CPlayerPed *player)
 	    (pad->GetCharJustDown('L') || pad->GetCharJustDown('l'))) {
 		player->ToggleLeoneMovementStyle();
 		static wchar movementMessage[48];
-		AsciiToUnicode(CPlayerPed::bUseAlternateLeoneMovement ?
-			"Movimento Leone alternativo." : "Movimento Leone originale.", movementMessage);
+		const char *message;
+		switch (CPlayerPed::m_nCorleoneMovementStyle) {
+		case CORLEONE_MOVEMENT_LEONE_ALTERNATE:
+			message = "Movimento Leone alternativo.";
+			break;
+		case CORLEONE_MOVEMENT_CLAUDE:
+			message = "Movimento Claude.";
+			break;
+		default:
+			message = "Movimento Leone originale.";
+			break;
+		}
+		AsciiToUnicode(message, movementMessage);
 		CMessages::AddMessageJumpQ(movementMessage, 1500, 0);
 	}
 }
@@ -551,7 +574,7 @@ CGameLogic::InitAtStartOfGame()
 	gVillaRecruitPromptTime = 0;
 	gVillaBodyguardScanTime = 0;
 	gBodyguardInteractionPromptShown = false;
-	CPlayerPed::bUseAlternateLeoneMovement = false;
+	CPlayerPed::m_nCorleoneMovementStyle = CORLEONE_MOVEMENT_LEONE_ORIGINAL;
 }
 
 void
