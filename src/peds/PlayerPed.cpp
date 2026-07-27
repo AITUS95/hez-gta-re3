@@ -1044,14 +1044,16 @@ CPlayerPed::FindWeaponLockOnTarget(void)
 	return true;
 }
 
-bool CPlayerPed::bUseAlternateLeoneMovement;
+eCorleoneMovementStyle CPlayerPed::m_nCorleoneMovementStyle;
 
 static AssocGroupId
-GetLeoneMovementGroup(CPlayerPed *player, bool alternate)
+GetLeoneMovementGroup(CPlayerPed *player, eCorleoneMovementStyle style)
 {
-	AssocGroupId nativeGroup =
-		(AssocGroupId)((CPedModelInfo*)CModelInfo::GetModelInfo(player->GetModelIndex()))->m_animGroup;
-	if (!alternate)
+	AssocGroupId nativeGroup = ASSOCGRP_GANG1;
+	if (player->GetModelIndex() == MI_GANG01 || player->GetModelIndex() == MI_GANG02)
+		nativeGroup =
+			(AssocGroupId)((CPedModelInfo*)CModelInfo::GetModelInfo(player->GetModelIndex()))->m_animGroup;
+	if (style == CORLEONE_MOVEMENT_LEONE_ORIGINAL)
 		return nativeGroup;
 
 	// Both Leone pedestrian variants use one of the two native gang
@@ -1063,14 +1065,9 @@ GetLeoneMovementGroup(CPlayerPed *player, bool alternate)
 void
 CPlayerPed::ToggleLeoneMovementStyle(void)
 {
-	if (GetModelIndex() != MI_GANG01 && GetModelIndex() != MI_GANG02)
-		return;
-	bUseAlternateLeoneMovement = !bUseAlternateLeoneMovement;
-	AssocGroupId groupToSet = GetLeoneMovementGroup(this, bUseAlternateLeoneMovement);
-	if (m_animGroup != groupToSet) {
-		m_animGroup = groupToSet;
-		ReApplyMoveAnims();
-	}
+	m_nCorleoneMovementStyle =
+		(eCorleoneMovementStyle)((m_nCorleoneMovementStyle + 1) % CORLEONE_MOVEMENT_TOTAL);
+	ProcessAnimGroups();
 }
 
 void
@@ -1078,11 +1075,11 @@ CPlayerPed::ProcessAnimGroups(void)
 {
 	AssocGroupId groupToSet;
 
-	// The normal player code switches to Claude-specific movement groups
-	// when a weapon is equipped. Keep the movement group declared by the
-	// Leone model instead, including while the starting Colt is selected.
-	if (GetModelIndex() == MI_GANG01 || GetModelIndex() == MI_GANG02) {
-		groupToSet = GetLeoneMovementGroup(this, bUseAlternateLeoneMovement);
+	// Leone movement can be combined with any selected player skin. The
+	// Claude option deliberately continues into the original player logic
+	// below, which selects his native armed and directional movement groups.
+	if (m_nCorleoneMovementStyle != CORLEONE_MOVEMENT_CLAUDE) {
+		groupToSet = GetLeoneMovementGroup(this, m_nCorleoneMovementStyle);
 		if (m_animGroup != groupToSet) {
 			m_animGroup = groupToSet;
 			ReApplyMoveAnims();
