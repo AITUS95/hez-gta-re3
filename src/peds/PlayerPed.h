@@ -6,6 +6,14 @@ class CPad;
 class CCopPed;
 class CWanted;
 
+enum eCorleoneMovementStyle
+{
+	CORLEONE_MOVEMENT_LEONE_ORIGINAL,
+	CORLEONE_MOVEMENT_LEONE_ALTERNATE,
+	CORLEONE_MOVEMENT_CLAUDE,
+	CORLEONE_MOVEMENT_TOTAL
+};
+
 class CPlayerPed : public CPed
 {
 public:
@@ -43,7 +51,7 @@ public:
 #ifdef VC_PED_PORTS
 	static bool bDontAllowWeaponChange;
 #endif
-	static bool bUseAlternateLeoneMovement;
+	static eCorleoneMovementStyle m_nCorleoneMovementStyle;
 
 	CPlayerPed();
 	~CPlayerPed();
