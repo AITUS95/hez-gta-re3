@@ -161,7 +161,7 @@ SpawnCorleoneSentinel(CPlayerPed *player)
 }
 
 static bool
-SpawnArmedLeone(CPlayerPed *player, int32 model, float sideOffset)
+SpawnArmedLeoneBodyguard(CPlayerPed *player, int32 model, float sideOffset)
 {
 	if (!LoadCorleoneSpawnModel(model))
 		return false;
@@ -178,13 +178,16 @@ SpawnArmedLeone(CPlayerPed *player, int32 model, float sideOffset)
 	if (ped == nil)
 		return false;
 
+	ped->CharCreatedBy = MISSION_CHAR;
 	ped->m_fRotationCur = ped->m_fRotationDest = player->m_fRotationCur;
 	ped->SetHeading(ped->m_fRotationCur);
 	ped->ClearWeapons();
 	eWeaponType weapon = player->GetWeapon()->m_eWeaponType;
 	if (weapon != WEAPONTYPE_UNARMED)
 		ped->SetCurrentWeapon(ped->GiveWeapon(weapon, 25001));
-	ped->SetWanderPath(CGeneral::GetRandomNumberInRange(0, 8));
+	ped->SetLeader(player);
+	ped->SetObjective(OBJECTIVE_GOTO_CHAR_ON_FOOT, player);
+	ped->SetMoveState(PEDMOVE_RUN);
 	return true;
 }
 
@@ -208,12 +211,12 @@ UpdateCorleoneSpawnCommands(CPlayerPed *player)
 			"Mafia Sentinel generata." : "Spazio insufficiente per la Sentinel.");
 	}
 	if (pad->GetFJustDown(5)) {
-		ShowCorleoneSpawnMessage(SpawnArmedLeone(player, MI_GANG01, -1.3f) ?
-			"Leone variante 1 generato." : "Spazio insufficiente per il Leone.");
+		ShowCorleoneSpawnMessage(SpawnArmedLeoneBodyguard(player, MI_GANG01, -1.3f) ?
+			"Bodyguard Leone variante 1 generato." : "Spazio insufficiente per il Leone.");
 	}
 	if (pad->GetFJustDown(6)) {
-		ShowCorleoneSpawnMessage(SpawnArmedLeone(player, MI_GANG02, 1.3f) ?
-			"Leone variante 2 generato." : "Spazio insufficiente per il Leone.");
+		ShowCorleoneSpawnMessage(SpawnArmedLeoneBodyguard(player, MI_GANG02, 1.3f) ?
+			"Bodyguard Leone variante 2 generato." : "Spazio insufficiente per il Leone.");
 	}
 }
 
