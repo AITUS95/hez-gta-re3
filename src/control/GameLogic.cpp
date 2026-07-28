@@ -1,6 +1,7 @@
 #include "common.h"
 
 #include "GameLogic.h"
+#include "Automobile.h"
 #include "Clock.h"
 #include "Stats.h"
 #include "Pickups.h"
@@ -20,11 +21,13 @@
 #include "Script.h"
 #include "Garages.h"
 #include "PathFind.h"
+#include "PedPlacement.h"
 #include "Population.h"
 #include "Pools.h"
 #include "Vehicle.h"
 #include "Font.h"
 #include "General.h"
+#include "Zones.h"
 #include "screendroplets.h"
 
 uint8 CGameLogic::ActivePlayers;
@@ -70,6 +73,148 @@ GiveVillaGuardPlayerWeapon(CPed *guard, CPlayerPed *player)
 	guard->ClearWeapons();
 	if (weapon != WEAPONTYPE_UNARMED)
 		guard->SetCurrentWeapon(guard->GiveWeapon(weapon, 25001));
+}
+
+static void
+KeepPlayerAmmoInfinite(CPlayerPed *player)
+{
+	for (int32 slot = 0; slot < WEAPONTYPE_TOTAL_INVENTORY_WEAPONS; slot++) {
+		CWeapon &weapon = player->m_weapons[slot];
+		if (weapon.m_eWeaponType <= WEAPONTYPE_BASEBALLBAT ||
+		    weapon.m_eWeaponType >= WEAPONTYPE_LAST_WEAPONTYPE)
+			continue;
+
+		weapon.m_nAmmoTotal = 99999;
+		if (weapon.m_nAmmoInClip <= 0)
+			weapon.Reload();
+		if (weapon.m_eWeaponState == WEAPONSTATE_RELOADING ||
+		    weapon.m_eWeaponState == WEAPONSTATE_OUT_OF_AMMO)
+			weapon.m_eWeaponState = WEAPONSTATE_READY;
+	}
+}
+
+static bool
+LoadCorleoneSpawnModel(int32 model)
+{
+	if (!CStreaming::HasModelLoaded(model)) {
+		CStreaming::RequestModel(model, STREAMFLAGS_DONT_REMOVE | STREAMFLAGS_DEPENDENCY);
+		CStreaming::LoadAllRequestedModels(false);
+	}
+	return CStreaming::HasModelLoaded(model);
+}
+
+static bool
+SpawnCorleoneSentinel(CPlayerPed *player)
+{
+	if (!LoadCorleoneSpawnModel(MI_MAFIA))
+		return false;
+
+	CVector playerPos = player->GetPosition();
+	CVector forward = player->GetForward();
+	CVector right = player->GetRight();
+	CVector testPositions[] = {
+		playerPos + forward * 10.0f + right * 5.0f,
+		playerPos + forward * 10.0f - right * 5.0f,
+		playerPos - forward * 10.0f + right * 5.0f,
+		playerPos - forward * 10.0f - right * 5.0f
+	};
+
+	int32 node = -1;
+	CVector pos;
+	for (uint32 i = 0; i < ARRAY_SIZE(testPositions); i++) {
+		int32 candidate = ThePaths.FindNodeClosestToCoors(testPositions[i], PATH_CAR, 30.0f, true, true);
+		if (candidate < 0)
+			continue;
+
+		CVector candidatePos = ThePaths.m_pathNodes[candidate].GetPosition();
+		int16 colliding = 0;
+		CWorld::FindObjectsKindaColliding(candidatePos, 3.5f, true, &colliding, 1,
+			nil, false, true, true, false, false);
+		if (colliding == 0) {
+			node = candidate;
+			pos = candidatePos;
+			break;
+		}
+	}
+	if (node < 0)
+		return false;
+
+	CAutomobile *car = new CAutomobile(MI_MAFIA, RANDOM_VEHICLE);
+	if (car == nil)
+		return false;
+
+	bool foundGround;
+	float ground = CWorld::FindGroundZFor3DCoord(pos.x, pos.y, pos.z + 3.0f, &foundGround);
+	if (foundGround)
+		pos.z = ground;
+	pos.z += car->GetDistanceFromCentreOfMassToBaseOfModel();
+	car->SetPosition(pos);
+	car->SetHeading(DEGTORAD(ThePaths.FindNodeOrientationForCarPlacement(node)));
+	car->SetStatus(STATUS_ABANDONED);
+	car->m_nDoorLock = CARLOCK_UNLOCKED;
+	car->bEngineOn = false;
+	car->bHasBeenOwnedByPlayer = true;
+	car->m_nZoneLevel = CTheZones::GetLevelFromPosition(&pos);
+	CCarCtrl::JoinCarWithRoadSystem(car);
+	CWorld::Add(car);
+	return true;
+}
+
+static bool
+SpawnArmedLeone(CPlayerPed *player, int32 model, float sideOffset)
+{
+	if (!LoadCorleoneSpawnModel(model))
+		return false;
+
+	CVector pos = player->GetPosition() + player->GetForward() * 3.0f +
+		player->GetRight() * sideOffset;
+	bool foundGround;
+	pos.z = CWorld::FindGroundZFor3DCoord(pos.x, pos.y, pos.z + 2.0f, &foundGround);
+	if (!foundGround || !CPedPlacement::IsPositionClearForPed(&pos))
+		return false;
+	pos.z += 0.7f;
+
+	CPed *ped = CPopulation::AddPed(PEDTYPE_GANG1, model, pos);
+	if (ped == nil)
+		return false;
+
+	ped->m_fRotationCur = ped->m_fRotationDest = player->m_fRotationCur;
+	ped->SetHeading(ped->m_fRotationCur);
+	ped->ClearWeapons();
+	eWeaponType weapon = player->GetWeapon()->m_eWeaponType;
+	if (weapon != WEAPONTYPE_UNARMED)
+		ped->SetCurrentWeapon(ped->GiveWeapon(weapon, 25001));
+	ped->SetWanderPath(CGeneral::GetRandomNumberInRange(0, 8));
+	return true;
+}
+
+static void
+ShowCorleoneSpawnMessage(const char *text)
+{
+	static wchar message[64];
+	AsciiToUnicode(text, message);
+	CMessages::AddMessageJumpQ(message, 1800, 0);
+}
+
+static void
+UpdateCorleoneSpawnCommands(CPlayerPed *player)
+{
+	CPad *pad = CPad::GetPad(0);
+	if (!player->IsPedInControl())
+		return;
+
+	if (pad->GetFJustDown(4)) {
+		ShowCorleoneSpawnMessage(SpawnCorleoneSentinel(player) ?
+			"Mafia Sentinel generata." : "Spazio insufficiente per la Sentinel.");
+	}
+	if (pad->GetFJustDown(5)) {
+		ShowCorleoneSpawnMessage(SpawnArmedLeone(player, MI_GANG01, -1.3f) ?
+			"Leone variante 1 generato." : "Spazio insufficiente per il Leone.");
+	}
+	if (pad->GetFJustDown(6)) {
+		ShowCorleoneSpawnMessage(SpawnArmedLeone(player, MI_GANG02, 1.3f) ?
+			"Leone variante 2 generato." : "Spazio insufficiente per il Leone.");
+	}
 }
 
 static CPed *
@@ -495,6 +640,8 @@ UpdateCorleoneVilla(void)
 	if (player == nil || player->DyingOrDead())
 		return;
 
+	KeepPlayerAmmoInfinite(player);
+	UpdateCorleoneSpawnCommands(player);
 	UpdateRecruitedBodyguards(player);
 	UpdatePedConversation(player);
 	UpdatePlayerLeoneCustomization(player);
