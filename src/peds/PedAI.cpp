@@ -566,6 +566,21 @@ CPed::ClearLeader(void)
 void
 CPed::UpdateFromLeader(void)
 {
+	// A recruited Leone engaged with a rival gang must finish that native
+	// combat objective before looking at or returning to the player. Explicit
+	// player orders still override this through CGameLogic.
+	bool recruitedLeoneFightingRival =
+		m_nPedType == PEDTYPE_GANG1 && CharCreatedBy == MISSION_CHAR &&
+		m_leader && m_leader->IsPlayer() &&
+		(m_objective == OBJECTIVE_KILL_CHAR_ON_FOOT ||
+		 m_objective == OBJECTIVE_KILL_CHAR_ANY_MEANS) &&
+		m_pedInObjective &&
+		m_pedInObjective->m_nPedType >= PEDTYPE_GANG2 &&
+		m_pedInObjective->m_nPedType <= PEDTYPE_GANG9 &&
+		!m_pedInObjective->DyingOrDead();
+	if (recruitedLeoneFightingRival)
+		return;
+
 	if (CTimer::GetTimeInMilliseconds() <= m_objectiveTimer)
 		return;
 
