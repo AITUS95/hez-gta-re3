@@ -38,6 +38,8 @@ static int32 gVillaRecruitHandles[NUM_VILLA_RECRUIT_SLOTS] = { -1, -1 };
 static uint32 gVillaRecruitPromptTime;
 static uint32 gVillaBodyguardScanTime;
 static bool gBodyguardInteractionPromptShown;
+static int32 gPlayerPriorityTargetHandle = -1;
+static uint32 gPlayerPriorityTargetUntil;
 static const CVector VILLA_RECRUIT_POSITIONS[NUM_VILLA_RECRUIT_SLOTS] = {
 	CVector(1438.0f, -173.5f, 55.0f),
 	CVector(1438.2f, -174.8f, 55.0f)
@@ -361,6 +363,31 @@ SendLeoneToAttackTarget(CPed *leone, CPed *target)
 	leone->SetMoveState(PEDMOVE_RUN);
 }
 
+static CVehicle *
+GetTargetDriverVehicle(CPed *target)
+{
+	if (target == nil || !target->InVehicle() || target->m_pMyVehicle == nil ||
+	    target->m_pMyVehicle->pDriver != target)
+		return nil;
+	return target->m_pMyVehicle;
+}
+
+static void
+SendBodyguardToExtractDriver(CPed *bodyguard, CPed *target)
+{
+	CVehicle *vehicle = GetTargetDriverVehicle(target);
+	if (vehicle == nil || !vehicle->CanPedOpenLocks(bodyguard)) {
+		SendLeoneToAttackTarget(bodyguard, target);
+		return;
+	}
+
+	// Entering as driver uses the native carjack flow: the rival is pulled
+	// out through the driver's door. The squad target remains the driver, so
+	// the bodyguard resumes the kill objective as soon as he is on foot.
+	bodyguard->SetObjective(OBJECTIVE_ENTER_CAR_AS_DRIVER, vehicle);
+	bodyguard->SetMoveState(PEDMOVE_RUN);
+}
+
 static bool
 IsRecruitedBodyguard(CPed *ped, CPlayerPed *player)
 {
@@ -391,6 +418,46 @@ IsPriorityGangTarget(CPed *target)
 		(target && target->InVehicle() && IsRivalGangVehicle(target->m_pMyVehicle));
 }
 
+static bool
+CanAnyBodyguardSeeTarget(CPlayerPed *player, CPed *target)
+{
+	CEntity *sightTarget = GetTargetDriverVehicle(target);
+	if (sightTarget == nil)
+		sightTarget = target;
+
+	CPedPool *pool = CPools::GetPedPool();
+	for (int32 i = 0; i < pool->GetSize(); i++) {
+		CPed *guard = pool->GetSlot(i);
+		if (!IsRecruitedBodyguard(guard, player) || !guard->IsPedInControl() ||
+		    guard->m_nPedState == PED_CHAT)
+			continue;
+		if ((sightTarget->GetPosition() - guard->GetPosition()).MagnitudeSqr2D() <= SQR(60.0f) &&
+		    guard->OurPedCanSeeThisOne(sightTarget))
+			return true;
+	}
+	return false;
+}
+
+static CPed *
+FindPlayerPriorityTarget(CPlayerPed *player)
+{
+	if (gPlayerPriorityTargetHandle < 0)
+		return nil;
+	if (CTimer::GetTimeInMilliseconds() > gPlayerPriorityTargetUntil) {
+		gPlayerPriorityTargetHandle = -1;
+		gPlayerPriorityTargetUntil = 0;
+		return nil;
+	}
+
+	CPed *target = CPools::GetPedPool()->GetAt(gPlayerPriorityTargetHandle);
+	if (!IsValidBodyguardTarget(target, player)) {
+		gPlayerPriorityTargetHandle = -1;
+		gPlayerPriorityTargetUntil = 0;
+		return nil;
+	}
+	return target;
+}
+
 static CPed *
 FindSquadGangTarget(CPlayerPed *player)
 {
@@ -408,6 +475,28 @@ FindSquadGangTarget(CPlayerPed *player)
 		if (!IsValidBodyguardTarget(target, player) || !IsPriorityGangTarget(target))
 			continue;
 		float distance = (target->GetPosition() - player->GetPosition()).MagnitudeSqr2D();
+		if (distance < bestDistance) {
+			bestDistance = distance;
+			bestTarget = target;
+		}
+	}
+
+	// With no explicit player target, bodyguards actively seek visible rival
+	// members and the drivers of rival gang vehicles. Street Leone retain the
+	// existing lock-on-only behaviour.
+	for (int32 i = 0; i < pedPool->GetSize(); i++) {
+		CPed *target = pedPool->GetSlot(i);
+		if (!IsValidBodyguardTarget(target, player) || !IsPriorityGangTarget(target))
+			continue;
+		if (target->InVehicle() && GetTargetDriverVehicle(target) == nil)
+			continue;
+		if (!CanAnyBodyguardSeeTarget(player, target))
+			continue;
+
+		CEntity *distanceTarget = GetTargetDriverVehicle(target);
+		if (distanceTarget == nil)
+			distanceTarget = target;
+		float distance = (distanceTarget->GetPosition() - player->GetPosition()).MagnitudeSqr2D();
 		if (distance < bestDistance) {
 			bestDistance = distance;
 			bestTarget = target;
@@ -456,6 +545,30 @@ FindSquadCombatTarget(CPlayerPed *player)
 	return bestTarget;
 }
 
+static CPed *
+FindClosestDriverExtractor(CPlayerPed *player, CPed *target)
+{
+	CVehicle *vehicle = GetTargetDriverVehicle(target);
+	if (vehicle == nil)
+		return nil;
+
+	CPed *closest = nil;
+	float closestDistance = SQR(90.0f);
+	CPedPool *pool = CPools::GetPedPool();
+	for (int32 i = 0; i < pool->GetSize(); i++) {
+		CPed *guard = pool->GetSlot(i);
+		if (!IsRecruitedBodyguard(guard, player) || !guard->IsPedInControl() ||
+		    guard->m_nPedState == PED_CHAT)
+			continue;
+		float distance = (vehicle->GetPosition() - guard->GetPosition()).MagnitudeSqr2D();
+		if (distance < closestDistance) {
+			closestDistance = distance;
+			closest = guard;
+		}
+	}
+	return closest;
+}
+
 static void
 UpdateRecruitedBodyguards(CPlayerPed *player)
 {
@@ -498,11 +611,15 @@ UpdateRecruitedBodyguards(CPlayerPed *player)
 		return;
 	gVillaBodyguardScanTime = CTimer::GetTimeInMilliseconds() + 500;
 
-	// One shared, already-engaged target makes recruits cover one another.
-	// Without a combat target they return to the normal follow-player order.
-	CPed *squadTarget = FindSquadGangTarget(player);
+	// Explicit player attacks always win, including civilians. Otherwise the
+	// squad finishes its current fight before automatically seeking a visible
+	// rival gang member or gang vehicle.
+	CPed *squadTarget = FindPlayerPriorityTarget(player);
 	if (squadTarget == nil)
 		squadTarget = FindSquadCombatTarget(player);
+	if (squadTarget == nil)
+		squadTarget = FindSquadGangTarget(player);
+	CPed *driverExtractor = FindClosestDriverExtractor(player, squadTarget);
 
 	for (int32 i = 0; i < pool->GetSize(); i++) {
 		CPed *guard = pool->GetSlot(i);
@@ -511,7 +628,10 @@ UpdateRecruitedBodyguards(CPlayerPed *player)
 			continue;
 
 		if (squadTarget) {
-			SendLeoneToAttackTarget(guard, squadTarget);
+			if (guard == driverExtractor)
+				SendBodyguardToExtractDriver(guard, squadTarget);
+			else
+				SendLeoneToAttackTarget(guard, squadTarget);
 			continue;
 		}
 
@@ -542,6 +662,8 @@ CGameLogic::NotifyPlayerOrderedAttack(CEntity *target)
 		return;
 
 	CPedPool *pool = CPools::GetPedPool();
+	gPlayerPriorityTargetHandle = pool->GetIndex(enemy);
+	gPlayerPriorityTargetUntil = CTimer::GetTimeInMilliseconds() + 30000;
 	for (int32 i = 0; i < pool->GetSize(); i++) {
 		CPed *leone = pool->GetSlot(i);
 		if (leone == nil || leone == player ||
@@ -772,6 +894,8 @@ CGameLogic::InitAtStartOfGame()
 	gVillaRecruitPromptTime = 0;
 	gVillaBodyguardScanTime = 0;
 	gBodyguardInteractionPromptShown = false;
+	gPlayerPriorityTargetHandle = -1;
+	gPlayerPriorityTargetUntil = 0;
 	CPlayerPed::m_nCorleoneMovementStyle = CORLEONE_MOVEMENT_LEONE_ORIGINAL;
 }
 
@@ -825,10 +949,14 @@ CGameLogic::Update()
 	case WBSTATE_PLAYING:
 		if (pPlayerInfo.m_pPed->m_nPedState == PED_DEAD) {
 			pPlayerInfo.m_pPed->ClearAdrenaline();
+			gPlayerPriorityTargetHandle = -1;
+			gPlayerPriorityTargetUntil = 0;
 			pPlayerInfo.KillPlayer();
 		}
 		if (pPlayerInfo.m_pPed->m_nPedState == PED_ARRESTED) {
 			pPlayerInfo.m_pPed->ClearAdrenaline();
+			gPlayerPriorityTargetHandle = -1;
+			gPlayerPriorityTargetUntil = 0;
 			pPlayerInfo.ArrestPlayer();
 		}
 		break;

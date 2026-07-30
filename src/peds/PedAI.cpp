@@ -26,6 +26,7 @@
 #include "Cranes.h"
 #include "Pools.h"
 #include "PlayerPed.h"
+#include "GameLogic.h"
 
 CVector vecPedCarDoorAnimOffset;
 CVector vecPedCarDoorLoAnimOffset;
@@ -2249,8 +2250,10 @@ CPed::ReactToAttack(CEntity *attacker)
 		// Leone join only when the player actually hits the ped (or the driver
 		// of a vehicle) currently selected by weapon lock-on.
 		if (attackerPed->IsPlayer() && m_nPedType != PEDTYPE_GANG1 &&
-		    IsPlayerLockedOnTarget((CPlayerPed*)attackerPed, this))
+		    IsPlayerLockedOnTarget((CPlayerPed*)attackerPed, this)) {
 			MakeNearbyLeoneDefendPlayer(this);
+			CGameLogic::NotifyPlayerOrderedAttack(this);
+		}
 
 		// Leone never retaliate, flee from, or target the player.
 		if (m_nPedType == PEDTYPE_GANG1 && attackerPed->IsPlayer()) {
@@ -2271,6 +2274,7 @@ CPed::ReactToAttack(CEntity *attacker)
 		// Being attacked is the defensive exception to the lock-on rule:
 		// recruited and street Leone nearby immediately protect the player.
 		MakeNearbyLeoneDefendPlayer(attacker);
+		CGameLogic::NotifyPlayerOrderedAttack(attacker);
 		InformMyGangOfAttack(attacker);
 		SetLookFlag(attacker, true);
 		SetLookTimer(700);
