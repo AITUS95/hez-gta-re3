@@ -158,7 +158,10 @@ SpawnCorleoneSentinel(CPlayerPed *player, bool withLeoneDriver)
 	car->m_nDoorLock = CARLOCK_UNLOCKED;
 	car->m_nZoneLevel = CTheZones::GetLevelFromPosition(&pos);
 	if (withLeoneDriver) {
-		car->SetStatus(STATUS_SIMPLE);
+		// STATUS_SIMPLE is only safe for traffic cars whose complete curve
+		// timing was initialized by GenerateOneRandomCar. This command places
+		// the car directly on a node, so keep real physics active.
+		car->SetStatus(STATUS_PHYSICS);
 		car->AutoPilot.m_nCarMission = MISSION_CRUISE;
 		car->AutoPilot.m_nTempAction = TEMPACT_NONE;
 		car->AutoPilot.m_nDrivingStyle = DRIVINGSTYLE_STOP_FOR_CARS;
@@ -174,10 +177,17 @@ SpawnCorleoneSentinel(CPlayerPed *player, bool withLeoneDriver)
 	CCarCtrl::JoinCarWithRoadSystem(car);
 	CWorld::Add(car);
 
-	if (withLeoneDriver && car->SetUpDriver() == nil) {
-		CWorld::Remove(car);
-		delete car;
-		return false;
+	if (withLeoneDriver) {
+		CPed *driver = car->SetUpDriver();
+		if (driver == nil || driver->m_nPedType != PEDTYPE_GANG1) {
+			if (driver)
+				driver->bRemoveFromWorld = true;
+			CWorld::Remove(car);
+			delete car;
+			return false;
+		}
+		CCarCtrl::SwitchVehicleToRealPhysics(car);
+		car->SetMoveSpeed(CVector(0.0f, 0.0f, 0.0f));
 	}
 	return true;
 }
