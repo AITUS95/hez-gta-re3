@@ -67,12 +67,6 @@
 #define MIN_ANGLE_TO_APPLY_HANDBRAKE 0.7f
 #define MIN_SPEED_TO_APPLY_HANDBRAKE 0.3f
 
-enum {
-	CORLEONE_RANDOM_CAR_TARGET = 32,
-	CORLEONE_MIN_CAR_LIMIT = 45,
-	CORLEONE_VEHICLE_POOL_RESERVE = 15
-};
-
 int CCarCtrl::NumLawEnforcerCars;
 int CCarCtrl::NumAmbulancesOnDuty;
 int CCarCtrl::NumFiretrucksOnDuty;
@@ -98,11 +92,7 @@ CCarCtrl::GenerateRandomCars()
 {
 	if (CCutsceneMgr::IsRunning())
 		return;
-	// Keep a moderately denser baseline regardless of the current zone density or
-	// frontend multiplier, while reserving pool slots for mission vehicles.
-	MaxNumberOfCarsInUse = Min(Max(MaxNumberOfCarsInUse, CORLEONE_MIN_CAR_LIMIT),
-		NUMVEHICLES - CORLEONE_VEHICLE_POOL_RESERVE);
-	if (NumRandomCars < CORLEONE_RANDOM_CAR_TARGET){
+	if (NumRandomCars < 30){
 		if (CountDownToCarsAtStart == 0){
 			GenerateOneRandomCar();
 		}
@@ -131,10 +121,7 @@ CCarCtrl::GenerateOneRandomCar()
 	CZoneInfo zone;
 	CTheZones::GetZoneInfoForTimeOfDay(&vecTargetPos, &zone);
 	pPlayer->m_nTrafficMultiplier = pPlayer->m_fRoadDensity * zone.carDensity;
-	float randomCarTarget = Max(
-		pPlayer->m_nTrafficMultiplier * CarDensityMultiplier * CIniFile::CarNumberMultiplier,
-		(float)CORLEONE_RANDOM_CAR_TARGET);
-	if (NumRandomCars >= randomCarTarget)
+	if (NumRandomCars >= pPlayer->m_nTrafficMultiplier * CarDensityMultiplier * CIniFile::CarNumberMultiplier)
 		return;
 	if (NumFiretrucksOnDuty + NumAmbulancesOnDuty + NumParkedCars + NumMissionCars + NumLawEnforcerCars + NumRandomCars >= MaxNumberOfCarsInUse)
 		return;

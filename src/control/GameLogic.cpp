@@ -104,9 +104,14 @@ LoadCorleoneSpawnModel(int32 model)
 }
 
 static bool
-SpawnCorleoneSentinel(CPlayerPed *player)
+SpawnCorleoneSentinel(CPlayerPed *player, bool withLeoneDriver)
 {
-	if (!LoadCorleoneSpawnModel(MI_MAFIA))
+	if (!LoadCorleoneSpawnModel(MI_MAFIA) ||
+	    (withLeoneDriver &&
+	     (!LoadCorleoneSpawnModel(MI_GANG01) || !LoadCorleoneSpawnModel(MI_GANG02))))
+		return false;
+	if (withLeoneDriver &&
+	    CPools::GetPedPool()->GetNoOfUsedSpaces() >= CPools::GetPedPool()->GetSize() - 1)
 		return false;
 
 	CVector playerPos = player->GetPosition();
@@ -150,18 +155,35 @@ SpawnCorleoneSentinel(CPlayerPed *player)
 	pos.z += car->GetDistanceFromCentreOfMassToBaseOfModel();
 	car->SetPosition(pos);
 	car->SetHeading(DEGTORAD(ThePaths.FindNodeOrientationForCarPlacement(node)));
-	car->SetStatus(STATUS_ABANDONED);
 	car->m_nDoorLock = CARLOCK_UNLOCKED;
-	car->bEngineOn = false;
-	car->bHasBeenOwnedByPlayer = true;
 	car->m_nZoneLevel = CTheZones::GetLevelFromPosition(&pos);
+	if (withLeoneDriver) {
+		car->SetStatus(STATUS_SIMPLE);
+		car->AutoPilot.m_nCarMission = MISSION_CRUISE;
+		car->AutoPilot.m_nTempAction = TEMPACT_NONE;
+		car->AutoPilot.m_nDrivingStyle = DRIVINGSTYLE_STOP_FOR_CARS;
+		car->AutoPilot.m_nCruiseSpeed = 12;
+		car->AutoPilot.m_fMaxTrafficSpeed = 12.0f;
+		car->bEngineOn = true;
+		car->bHasBeenOwnedByPlayer = false;
+	} else {
+		car->SetStatus(STATUS_ABANDONED);
+		car->bEngineOn = false;
+		car->bHasBeenOwnedByPlayer = true;
+	}
 	CCarCtrl::JoinCarWithRoadSystem(car);
 	CWorld::Add(car);
+
+	if (withLeoneDriver && car->SetUpDriver() == nil) {
+		CWorld::Remove(car);
+		delete car;
+		return false;
+	}
 	return true;
 }
 
 static bool
-SpawnArmedLeoneBodyguard(CPlayerPed *player, int32 model, float sideOffset)
+SpawnArmedLeone(CPlayerPed *player, int32 model, float sideOffset, bool bodyguard)
 {
 	if (!LoadCorleoneSpawnModel(model))
 		return false;
@@ -178,16 +200,20 @@ SpawnArmedLeoneBodyguard(CPlayerPed *player, int32 model, float sideOffset)
 	if (ped == nil)
 		return false;
 
-	ped->CharCreatedBy = MISSION_CHAR;
 	ped->m_fRotationCur = ped->m_fRotationDest = player->m_fRotationCur;
 	ped->SetHeading(ped->m_fRotationCur);
 	ped->ClearWeapons();
 	eWeaponType weapon = player->GetWeapon()->m_eWeaponType;
 	if (weapon != WEAPONTYPE_UNARMED)
 		ped->SetCurrentWeapon(ped->GiveWeapon(weapon, 25001));
-	ped->SetLeader(player);
-	ped->SetObjective(OBJECTIVE_GOTO_CHAR_ON_FOOT, player);
-	ped->SetMoveState(PEDMOVE_RUN);
+	if (bodyguard) {
+		ped->CharCreatedBy = MISSION_CHAR;
+		ped->SetLeader(player);
+		ped->SetObjective(OBJECTIVE_GOTO_CHAR_ON_FOOT, player);
+		ped->SetMoveState(PEDMOVE_RUN);
+	} else {
+		ped->SetWanderPath(CGeneral::GetRandomNumberInRange(0, 8));
+	}
 	return true;
 }
 
@@ -207,16 +233,28 @@ UpdateCorleoneSpawnCommands(CPlayerPed *player)
 		return;
 
 	if (pad->GetFJustDown(4)) {
-		ShowCorleoneSpawnMessage(SpawnCorleoneSentinel(player) ?
+		ShowCorleoneSpawnMessage(SpawnCorleoneSentinel(player, false) ?
 			"Mafia Sentinel generata." : "Spazio insufficiente per la Sentinel.");
 	}
 	if (pad->GetFJustDown(5)) {
-		ShowCorleoneSpawnMessage(SpawnArmedLeoneBodyguard(player, MI_GANG01, -1.3f) ?
+		ShowCorleoneSpawnMessage(SpawnArmedLeone(player, MI_GANG01, -1.3f, true) ?
 			"Bodyguard Leone variante 1 generato." : "Spazio insufficiente per il Leone.");
 	}
 	if (pad->GetFJustDown(6)) {
-		ShowCorleoneSpawnMessage(SpawnArmedLeoneBodyguard(player, MI_GANG02, 1.3f) ?
+		ShowCorleoneSpawnMessage(SpawnArmedLeone(player, MI_GANG02, 1.3f, true) ?
 			"Bodyguard Leone variante 2 generato." : "Spazio insufficiente per il Leone.");
+	}
+	if (pad->GetFJustDown(7)) {
+		ShowCorleoneSpawnMessage(SpawnArmedLeone(player, MI_GANG01, -1.3f, false) ?
+			"Leone autonomo variante 1 generato." : "Spazio insufficiente per il Leone.");
+	}
+	if (pad->GetFJustDown(8)) {
+		ShowCorleoneSpawnMessage(SpawnArmedLeone(player, MI_GANG02, 1.3f, false) ?
+			"Leone autonomo variante 2 generato." : "Spazio insufficiente per il Leone.");
+	}
+	if (pad->GetFJustDown(9)) {
+		ShowCorleoneSpawnMessage(SpawnCorleoneSentinel(player, true) ?
+			"Sentinel Leone con autista generata." : "Spazio insufficiente per la Sentinel.");
 	}
 }
 

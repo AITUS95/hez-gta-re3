@@ -607,6 +607,16 @@ CPed::UpdateFromLeader(void)
 			WarpPedToNearLeaderOffScreen();
 
 		if (m_leader->m_nPedState == PED_DEAD) {
+			// Recruited Leone keep the player reference across the local
+			// death respawn. UpdateRecruitedBodyguards restores their
+			// follow order as soon as the player is alive again.
+			if (m_nPedType == PEDTYPE_GANG1 && CharCreatedBy == MISSION_CHAR &&
+			    m_leader->IsPlayer()) {
+				SetObjective(OBJECTIVE_NONE);
+				SetIdle();
+				SetMoveState(PEDMOVE_STILL);
+				return;
+			}
 			SetLeader(nil);
 			SetObjective(OBJECTIVE_FLEE_ON_FOOT_TILL_SAFE);
 			return;
