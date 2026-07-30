@@ -45,11 +45,17 @@ CCivilianPed::CCivilianPed(ePedType pedtype, uint32 mi) : CPed(pedtype)
 void
 CCivilianPed::CivilianAI(void)
 {
-	// Occasionally start a local fight when two different random gang
-	// members meet. This uses only peds already selected by the vanilla zone
-	// tables and never targets the player, civilians or mission characters.
-	if (IsGangMember() && CharCreatedBy == RANDOM_CHAR &&
-	    m_objective == OBJECTIVE_NONE && !InVehicle() &&
+	// Recruited Leone use this same local gang encounter as random street
+	// Leone. Their follow order is the only additional idle objective allowed;
+	// distance, visibility, timing and combat objective remain identical.
+	bool recruitedLeoneFollowingPlayer =
+		m_nPedType == PEDTYPE_GANG1 && CharCreatedBy == MISSION_CHAR &&
+		m_leader && m_leader->IsPlayer() &&
+		m_objective == OBJECTIVE_GOTO_CHAR_ON_FOOT &&
+		m_pedInObjective == m_leader;
+	if (IsGangMember() &&
+	    ((CharCreatedBy == RANDOM_CHAR && m_objective == OBJECTIVE_NONE) ||
+	     recruitedLeoneFollowingPlayer) && !InVehicle() &&
 	    ((CTimer::GetFrameCounter() + (uint8)m_randomSeed) & 0xFF) == 0 &&
 	    (CGeneral::GetRandomNumber() & 3) == 0) {
 		for (int i = 0; i < m_numNearPeds; i++) {

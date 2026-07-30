@@ -331,26 +331,6 @@ IsRivalGangPed(CPed *ped)
 	return ped && ped->m_nPedType >= PEDTYPE_GANG2 && ped->m_nPedType <= PEDTYPE_GANG9;
 }
 
-static bool
-IsRivalGangVehicle(CVehicle *vehicle)
-{
-	if (vehicle == nil)
-		return false;
-
-	switch (vehicle->GetModelIndex()) {
-	case MI_BELLYUP:
-	case MI_YARDIE:
-	case MI_YAKUZA:
-	case MI_DIABLOS:
-	case MI_COLUMB:
-	case MI_HOODS:
-	case MI_PANLANT:
-		return true;
-	default:
-		return false;
-	}
-}
-
 static void
 SendLeoneToAttackTarget(CPed *leone, CPed *target)
 {
@@ -361,31 +341,6 @@ SendLeoneToAttackTarget(CPed *leone, CPed *target)
 	leone->SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, target);
 	leone->SetObjectiveTimer(30000);
 	leone->SetMoveState(PEDMOVE_RUN);
-}
-
-static CVehicle *
-GetTargetDriverVehicle(CPed *target)
-{
-	if (target == nil || !target->InVehicle() || target->m_pMyVehicle == nil ||
-	    target->m_pMyVehicle->pDriver != target)
-		return nil;
-	return target->m_pMyVehicle;
-}
-
-static void
-SendBodyguardToExtractDriver(CPed *bodyguard, CPed *target)
-{
-	CVehicle *vehicle = GetTargetDriverVehicle(target);
-	if (vehicle == nil || !vehicle->CanPedOpenLocks(bodyguard)) {
-		SendLeoneToAttackTarget(bodyguard, target);
-		return;
-	}
-
-	// Entering as driver uses the native carjack flow: the rival is pulled
-	// out through the driver's door. The squad target remains the driver, so
-	// the bodyguard resumes the kill objective as soon as he is on foot.
-	bodyguard->SetObjective(OBJECTIVE_ENTER_CAR_AS_DRIVER, vehicle);
-	bodyguard->SetMoveState(PEDMOVE_RUN);
 }
 
 static bool
@@ -412,30 +367,11 @@ IsValidBodyguardTarget(CPed *target, CPlayerPed *player)
 }
 
 static bool
-IsPriorityGangTarget(CPed *target)
+HasNativeRivalGangObjective(CPed *guard)
 {
-	return IsRivalGangPed(target) ||
-		(target && target->InVehicle() && IsRivalGangVehicle(target->m_pMyVehicle));
-}
-
-static bool
-CanAnyBodyguardSeeTarget(CPlayerPed *player, CPed *target)
-{
-	CEntity *sightTarget = GetTargetDriverVehicle(target);
-	if (sightTarget == nil)
-		sightTarget = target;
-
-	CPedPool *pool = CPools::GetPedPool();
-	for (int32 i = 0; i < pool->GetSize(); i++) {
-		CPed *guard = pool->GetSlot(i);
-		if (!IsRecruitedBodyguard(guard, player) || !guard->IsPedInControl() ||
-		    guard->m_nPedState == PED_CHAT)
-			continue;
-		if ((sightTarget->GetPosition() - guard->GetPosition()).MagnitudeSqr2D() <= SQR(60.0f) &&
-		    guard->OurPedCanSeeThisOne(sightTarget))
-			return true;
-	}
-	return false;
+	return IsBodyguardCombatObjective(guard) &&
+		IsRivalGangPed(guard->m_pedInObjective) &&
+		!guard->m_pedInObjective->DyingOrDead();
 }
 
 static CPed *
@@ -456,117 +392,6 @@ FindPlayerPriorityTarget(CPlayerPed *player)
 		return nil;
 	}
 	return target;
-}
-
-static CPed *
-FindSquadGangTarget(CPlayerPed *player)
-{
-	CPedPool *pedPool = CPools::GetPedPool();
-	CPed *bestTarget = nil;
-	float bestDistance = SQR(90.0f);
-
-	// Share only a rival already engaged by one recruit. Merely seeing a rival
-	// must not start a fight without a player lock-on attack.
-	for (int32 i = 0; i < pedPool->GetSize(); i++) {
-		CPed *guard = pedPool->GetSlot(i);
-		if (!IsRecruitedBodyguard(guard, player) || !IsBodyguardCombatObjective(guard))
-			continue;
-		CPed *target = guard->m_pedInObjective;
-		if (!IsValidBodyguardTarget(target, player) || !IsPriorityGangTarget(target))
-			continue;
-		float distance = (target->GetPosition() - player->GetPosition()).MagnitudeSqr2D();
-		if (distance < bestDistance) {
-			bestDistance = distance;
-			bestTarget = target;
-		}
-	}
-
-	// With no explicit player target, bodyguards actively seek visible rival
-	// members and the drivers of rival gang vehicles. Street Leone retain the
-	// existing lock-on-only behaviour.
-	for (int32 i = 0; i < pedPool->GetSize(); i++) {
-		CPed *target = pedPool->GetSlot(i);
-		if (!IsValidBodyguardTarget(target, player) || !IsPriorityGangTarget(target))
-			continue;
-		if (target->InVehicle() && GetTargetDriverVehicle(target) == nil)
-			continue;
-		if (!CanAnyBodyguardSeeTarget(player, target))
-			continue;
-
-		CEntity *distanceTarget = GetTargetDriverVehicle(target);
-		if (distanceTarget == nil)
-			distanceTarget = target;
-		float distance = (distanceTarget->GetPosition() - player->GetPosition()).MagnitudeSqr2D();
-		if (distance < bestDistance) {
-			bestDistance = distance;
-			bestTarget = target;
-		}
-	}
-	return bestTarget;
-}
-
-static CPed *
-FindSquadCombatTarget(CPlayerPed *player)
-{
-	CPedPool *pool = CPools::GetPedPool();
-	CPed *bestTarget = nil;
-	float bestDistance = SQR(90.0f);
-
-	for (int32 i = 0; i < pool->GetSize(); i++) {
-		CPed *guard = pool->GetSlot(i);
-		if (!IsRecruitedBodyguard(guard, player) || !IsBodyguardCombatObjective(guard))
-			continue;
-		CPed *target = guard->m_pedInObjective;
-		if (!IsValidBodyguardTarget(target, player))
-			continue;
-		float distance = (target->GetPosition() - player->GetPosition()).MagnitudeSqr2D();
-		if (distance < bestDistance) {
-			bestDistance = distance;
-			bestTarget = target;
-		}
-	}
-	if (bestTarget)
-		return bestTarget;
-
-	// If an aggressor targets one recruit before he can retaliate, the whole
-	// squad immediately treats that aggressor as its shared target.
-	for (int32 i = 0; i < pool->GetSize(); i++) {
-		CPed *attacker = pool->GetSlot(i);
-		if (!IsValidBodyguardTarget(attacker, player) ||
-		    !IsBodyguardCombatObjective(attacker) ||
-		    !IsRecruitedBodyguard(attacker->m_pedInObjective, player))
-			continue;
-		float distance = (attacker->GetPosition() - player->GetPosition()).MagnitudeSqr2D();
-		if (distance < bestDistance) {
-			bestDistance = distance;
-			bestTarget = attacker;
-		}
-	}
-	return bestTarget;
-}
-
-static CPed *
-FindClosestDriverExtractor(CPlayerPed *player, CPed *target)
-{
-	CVehicle *vehicle = GetTargetDriverVehicle(target);
-	if (vehicle == nil)
-		return nil;
-
-	CPed *closest = nil;
-	float closestDistance = SQR(90.0f);
-	CPedPool *pool = CPools::GetPedPool();
-	for (int32 i = 0; i < pool->GetSize(); i++) {
-		CPed *guard = pool->GetSlot(i);
-		if (!IsRecruitedBodyguard(guard, player) || !guard->IsPedInControl() ||
-		    guard->m_nPedState == PED_CHAT)
-			continue;
-		float distance = (vehicle->GetPosition() - guard->GetPosition()).MagnitudeSqr2D();
-		if (distance < closestDistance) {
-			closestDistance = distance;
-			closest = guard;
-		}
-	}
-	return closest;
 }
 
 static void
@@ -611,15 +436,10 @@ UpdateRecruitedBodyguards(CPlayerPed *player)
 		return;
 	gVillaBodyguardScanTime = CTimer::GetTimeInMilliseconds() + 500;
 
-	// Explicit player attacks always win, including civilians. Otherwise the
-	// squad finishes its current fight before automatically seeking a visible
-	// rival gang member or gang vehicle.
-	CPed *squadTarget = FindPlayerPriorityTarget(player);
-	if (squadTarget == nil)
-		squadTarget = FindSquadCombatTarget(player);
-	if (squadTarget == nil)
-		squadTarget = FindSquadGangTarget(player);
-	CPed *driverExtractor = FindClosestDriverExtractor(player, squadTarget);
+	// A target explicitly attacked by the player has absolute priority.
+	// Without that order, each recruit keeps only his own native Leone-vs-gang
+	// fight; GameLogic neither scans for rivals nor shares a squad target.
+	CPed *playerTarget = FindPlayerPriorityTarget(player);
 
 	for (int32 i = 0; i < pool->GetSize(); i++) {
 		CPed *guard = pool->GetSlot(i);
@@ -627,13 +447,13 @@ UpdateRecruitedBodyguards(CPlayerPed *player)
 		    guard->m_nPedState == PED_CHAT)
 			continue;
 
-		if (squadTarget) {
-			if (guard == driverExtractor)
-				SendBodyguardToExtractDriver(guard, squadTarget);
-			else
-				SendLeoneToAttackTarget(guard, squadTarget);
+		if (playerTarget) {
+			SendLeoneToAttackTarget(guard, playerTarget);
 			continue;
 		}
+
+		if (HasNativeRivalGangObjective(guard))
+			continue;
 
 		if (IsBodyguardCombatObjective(guard))
 			guard->ClearObjective();
