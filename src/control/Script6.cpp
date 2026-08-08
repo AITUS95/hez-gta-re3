@@ -126,7 +126,7 @@ SetUpColombianCompound(void)
 	// Permanent Cartel Cruiser parked inside the compound forecourt.
 	int32 limo = CTheCarGenerators::CreateCarGenerator(
 		61.5f, -332.0f, -100.0f, 180.0f,
-		MI_COLUMB, 0, 0, 1, 0, 0, 0, 10000);
+		MI_COLUMB, 54, 76, 1, 0, 0, 0, 10000);
 	CTheCarGenerators::CarGeneratorArray[limo].SwitchOn();
 
 	static const eWeaponType weapons[] = {

@@ -28,6 +28,7 @@
 #include "Font.h"
 #include "General.h"
 #include "Zones.h"
+#include "Radar.h"
 #include "screendroplets.h"
 
 uint8 CGameLogic::ActivePlayers;
@@ -68,6 +69,28 @@ EnsureColombianCompoundGarage(void)
 	}
 	if (bestGarage >= 0 && CGarages::aGarages[bestGarage].m_eGarageType != GARAGE_HIDEOUT_COLOMBIAN)
 		CGarages::ChangeGarageType(bestGarage, GARAGE_HIDEOUT_COLOMBIAN, 0);
+}
+
+static void
+EnsureCustomHideoutRadarBlip(void)
+{
+	const CVector hideoutPos(58.0f, -329.0f, 17.0f);
+	bool foundSaveBlip = false;
+	for (int32 i = 0; i < NUMRADARBLIPS; i++) {
+		sRadarTrace &trace = CRadar::ms_RadarTrace[i];
+		if (!trace.m_bInUse || trace.m_eRadarSprite != RADAR_SPRITE_SAVE)
+			continue;
+		trace.m_eBlipType = BLIP_COORD;
+		trace.m_vecPos = hideoutPos;
+		trace.m_vec2DPos.x = hideoutPos.x;
+		trace.m_vec2DPos.y = hideoutPos.y;
+		trace.m_eBlipDisplay = BLIP_DISPLAY_BLIP_ONLY;
+		foundSaveBlip = true;
+	}
+	if (!foundSaveBlip) {
+		int32 blip = CRadar::SetCoordBlip(BLIP_COORD, hideoutPos, RADAR_TRACE_GREEN, BLIP_DISPLAY_BLIP_ONLY);
+		CRadar::SetBlipSprite(blip, RADAR_SPRITE_SAVE);
+	}
 }
 
 static void
@@ -768,6 +791,7 @@ CGameLogic::Update()
 	if (CCutsceneMgr::IsCutsceneProcessing()) return;
 
 	CPlayerInfo &pPlayerInfo = CWorld::Players[CWorld::PlayerInFocus];
+	EnsureCustomHideoutRadarBlip();
 	if (pPlayerInfo.m_WBState == WBSTATE_PLAYING)
 		UpdateColombianCompound();
 	switch (pPlayerInfo.m_WBState) {
@@ -805,7 +829,6 @@ CGameLogic::Update()
 				pPlayerInfo.m_bGetOutOfHospitalFree = false;
 			} else {
 				pPlayerInfo.m_nMoney = Max(0, pPlayerInfo.m_nMoney - 1000);
-				pPlayerInfo.m_pPed->ClearWeapons();
 			}
 
 			if (pPlayerInfo.m_pPed->bInVehicle) {
