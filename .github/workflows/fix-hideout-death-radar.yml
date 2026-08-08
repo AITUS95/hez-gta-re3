@@ -1,0 +1,105 @@
+name: Fix hideout death radar
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - colombian
+    paths:
+      - ".github/workflows/fix-hideout-death-radar.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply Colombian hideout fixes
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          game = Path('src/control/GameLogic.cpp')
+          s = game.read_text()
+
+          if '#include "Radar.h"' not in s:
+              s = s.replace('#include "Zones.h"\n', '#include "Zones.h"\n#include "Radar.h"\n')
+
+          helper = '''static void
+          EnsureCustomHideoutRadarBlip(void)
+          {
+          \tconst CVector hideoutPos(58.0f, -329.0f, 17.0f);
+          \tbool foundSaveBlip = false;
+          \tfor (int32 i = 0; i < NUMRADARBLIPS; i++) {
+          \t\tsRadarTrace &trace = CRadar::ms_RadarTrace[i];
+          \t\tif (!trace.m_bInUse || trace.m_eRadarSprite != RADAR_SPRITE_SAVE)
+          \t\t\tcontinue;
+          \t\ttrace.m_eBlipType = BLIP_COORD;
+          \t\ttrace.m_vecPos = hideoutPos;
+          \t\ttrace.m_vec2DPos.x = hideoutPos.x;
+          \t\ttrace.m_vec2DPos.y = hideoutPos.y;
+          \t\ttrace.m_eBlipDisplay = BLIP_DISPLAY_BLIP_ONLY;
+          \t\tfoundSaveBlip = true;
+          \t}
+          \tif (!foundSaveBlip) {
+          \t\tint32 blip = CRadar::SetCoordBlip(BLIP_COORD, hideoutPos, RADAR_TRACE_GREEN, BLIP_DISPLAY_BLIP_ONLY);
+          \t\tCRadar::SetBlipSprite(blip, RADAR_SPRITE_SAVE);
+          \t}
+          }
+
+          '''.replace('          ', '')
+          marker = 'static void\nGiveCompoundGuardPlayerWeapon(CPed *guard, CPlayerPed *player)\n'
+          if 'EnsureCustomHideoutRadarBlip' not in s:
+              if marker not in s:
+                  raise SystemExit('GameLogic helper insertion marker not found')
+              s = s.replace(marker, helper + marker, 1)
+
+          update_marker = '\tCPlayerInfo &pPlayerInfo = CWorld::Players[CWorld::PlayerInFocus];\n'
+          if '\tEnsureCustomHideoutRadarBlip();\n' not in s:
+              if update_marker not in s:
+                  raise SystemExit('GameLogic update marker not found')
+              s = s.replace(update_marker, update_marker + '\tEnsureCustomHideoutRadarBlip();\n', 1)
+
+          wasted_start = s.index('\tcase WBSTATE_WASTED:')
+          busted_start = s.index('\tcase WBSTATE_BUSTED:', wasted_start)
+          wasted = s[wasted_start:busted_start]
+          clear = '\t\t\t\tpPlayerInfo.m_pPed->ClearWeapons();\n'
+          if clear not in wasted:
+              raise SystemExit('Expected death weapon clear not found')
+          wasted = wasted.replace(clear, '', 1)
+          s = s[:wasted_start] + wasted + s[busted_start:]
+          game.write_text(s)
+
+          script = Path('src/control/Script6.cpp')
+          t = script.read_text()
+          old = 'MI_COLUMB, 0, 0, 1, 0, 0, 0, 10000);'
+          new = 'MI_COLUMB, 54, 76, 1, 0, 0, 0, 10000);'
+          if old not in t:
+              raise SystemExit('Expected black Cartel Cruiser generator not found')
+          t = t.replace(old, new, 1)
+          script.write_text(t)
+          PY
+
+          grep -n 'MI_COLUMB, 54, 76' src/control/Script6.cpp
+          grep -n 'EnsureCustomHideoutRadarBlip' src/control/GameLogic.cpp
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('src/control/GameLogic.cpp').read_text()
+          a = s.index('\tcase WBSTATE_WASTED:')
+          b = s.index('\tcase WBSTATE_BUSTED:', a)
+          if 'ClearWeapons();' in s[a:b]:
+              raise SystemExit('Weapons are still cleared on death')
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/control/GameLogic.cpp src/control/Script6.cpp
+          git commit -m "Fix Colombian hideout respawn and radar"
+          git push origin HEAD:colombian
