@@ -1,4 +1,5 @@
 name: Colombian Windows artifact
+# Builds and packages the final Colombian Cartel gameplay variant.
 
 on:
   workflow_dispatch:
