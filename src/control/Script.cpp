@@ -525,12 +525,8 @@ void CTheScripts::Init()
 	UpsideDownCars.Init();
 	StuckCars.Init();
 #ifdef USE_DEBUG_SCRIPT_LOADER
-	// glfwGetKey doesn't work because of CGame::Initialise is blocking
-	CPad::UpdatePads();
-	if(CPad::GetPad(0)->GetChar('G')) ScriptToLoad = 0;
-	if(CPad::GetPad(0)->GetChar('R')) ScriptToLoad = 1;
-	if(CPad::GetPad(0)->GetChar('D')) ScriptToLoad = 2;
-
+	// Use GTA III's normal world and mission script.
+	ScriptToLoad = 0;
 	int mainf = OpenScript();
 #else
 	CFileMgr::SetDir("data");
@@ -1369,7 +1365,24 @@ int8 CRunningScript::ProcessCommands0To99(int32 command)
 			CStreaming::RequestSpecialModel(MI_PLAYER, "player", STREAMFLAGS_DONT_REMOVE | STREAMFLAGS_DEPENDENCY);
 			CStreaming::LoadAllRequestedModels(false);
 		}
+		if (!CStreaming::HasModelLoaded(MI_GANG11)) {
+			CStreaming::RequestModel(MI_GANG11, STREAMFLAGS_DONT_REMOVE | STREAMFLAGS_DEPENDENCY);
+			CStreaming::LoadAllRequestedModels(false);
+		}
+		if (!CStreaming::HasModelLoaded(MI_GANG12)) {
+			CStreaming::RequestModel(MI_GANG12, STREAMFLAGS_DONT_REMOVE | STREAMFLAGS_DEPENDENCY);
+			CStreaming::LoadAllRequestedModels(false);
+		}
 		CPlayerPed::SetupPlayerPed(index);
+		CPlayerPed *player = CWorld::Players[index].m_pPed;
+		player->DeleteRwObject();
+		player->m_modelIndex = -1;
+		player->SetModelIndex(MI_GANG11);
+		player->SetPedStats(PEDSTAT_PLAYER);
+		player->m_headingRate = player->m_pedStats->m_headingChangeRate;
+		uint32 coltSlot = player->GiveWeapon(WEAPONTYPE_COLT45, 999);
+		player->SetCurrentWeapon(coltSlot);
+		player->m_nSelectedWepSlot = coltSlot;
 		CWorld::Players[index].m_pPed->CharCreatedBy = MISSION_CHAR;
 		CPlayerPed::DeactivatePlayerPed(index);
 		CVector pos = *(CVector*)&ScriptParams[1];

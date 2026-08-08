@@ -24,6 +24,9 @@
 #include "CarAI.h"
 #include "Zones.h"
 #include "Cranes.h"
+#include "Pools.h"
+#include "PlayerPed.h"
+#include "GameLogic.h"
 
 CVector vecPedCarDoorAnimOffset;
 CVector vecPedCarDoorLoAnimOffset;
@@ -167,6 +170,38 @@ void
 CPed::SetObjective(eObjective newObj, void *entity)
 {
 	if (DyingOrDead())
+		return;
+
+	// Cartel never receive hostile objectives against the player. The only
+	// player-directed movement orders allowed are for compound recruits,
+	// identified as mission-created Cartel bodyguards.
+	bool compoundBodyguardOrder =
+		CharCreatedBy == MISSION_CHAR &&
+		(newObj == OBJECTIVE_GOTO_CHAR_ON_FOOT ||
+		 newObj == OBJECTIVE_FOLLOW_CHAR_IN_FORMATION ||
+		 newObj == OBJECTIVE_GUARD_ATTACK ||
+		 newObj == OBJECTIVE_SET_LEADER);
+	bool hostileObjective =
+		newObj == OBJECTIVE_KILL_CHAR_ON_FOOT ||
+		newObj == OBJECTIVE_KILL_CHAR_ANY_MEANS ||
+		newObj == OBJECTIVE_MUG_CHAR ||
+		newObj == OBJECTIVE_GUARD_ATTACK;
+	if (m_nPedType == PEDTYPE_GANG6 && hostileObjective &&
+	    entity && ((CEntity*)entity)->IsPed() &&
+	    ((CPed*)entity)->m_nPedType == PEDTYPE_GANG6)
+		return;
+	if (m_nPedType == PEDTYPE_GANG6 &&
+	    (newObj == OBJECTIVE_KILL_CHAR_ON_FOOT ||
+	     newObj == OBJECTIVE_KILL_CHAR_ANY_MEANS ||
+	     newObj == OBJECTIVE_MUG_CHAR ||
+	     newObj == OBJECTIVE_FLEE_CHAR_ON_FOOT_TILL_SAFE ||
+	     newObj == OBJECTIVE_FLEE_CHAR_ON_FOOT_ALWAYS ||
+	     newObj == OBJECTIVE_GOTO_CHAR_ON_FOOT ||
+	     newObj == OBJECTIVE_FOLLOW_CHAR_IN_FORMATION ||
+	     newObj == OBJECTIVE_GUARD_ATTACK ||
+	     newObj == OBJECTIVE_SET_LEADER) &&
+	    entity && ((CEntity*)entity)->IsPed() && ((CPed*)entity)->IsPlayer() &&
+	    !compoundBodyguardOrder)
 		return;
 
 	if (m_prevObjective == newObj) {
@@ -531,10 +566,33 @@ CPed::ClearLeader(void)
 void
 CPed::UpdateFromLeader(void)
 {
+	// A recruited Cartel engaged with a rival gang must finish that native
+	// combat objective before looking at or returning to the player. Explicit
+	// player orders still override this through CGameLogic.
+	bool recruitedCartelFightingRival =
+		m_nPedType == PEDTYPE_GANG6 && CharCreatedBy == MISSION_CHAR &&
+		m_leader && m_leader->IsPlayer() &&
+		(m_objective == OBJECTIVE_KILL_CHAR_ON_FOOT ||
+		 m_objective == OBJECTIVE_KILL_CHAR_ANY_MEANS) &&
+		m_pedInObjective &&
+		m_pedInObjective->m_nPedType >= PEDTYPE_GANG1 &&
+		m_pedInObjective->m_nPedType <= PEDTYPE_GANG9 &&
+		m_pedInObjective->m_nPedType != PEDTYPE_GANG6 &&
+		!m_pedInObjective->DyingOrDead();
+	if (recruitedCartelFightingRival)
+		return;
+
 	if (CTimer::GetTimeInMilliseconds() <= m_objectiveTimer)
 		return;
 
 	if (!m_leader)
+		return;
+
+	// A recruited Cartel must be allowed to finish a player-triggered native
+	// conversation instead of immediately resuming the follow objective.
+	if (m_nPedType == PEDTYPE_GANG6 && CharCreatedBy == MISSION_CHAR &&
+	    m_leader->IsPlayer() && m_nPedState == PED_CHAT &&
+	    m_leader->m_nPedState == PED_CHAT)
 		return;
 
 	CVector leaderDist;
@@ -544,6 +602,14 @@ CPed::UpdateFromLeader(void)
 		leaderDist = m_leader->GetPosition() - GetPosition();
 
 	if (leaderDist.Magnitude() > 30.0f) {
+		if (m_nPedType == PEDTYPE_GANG6 && CharCreatedBy == MISSION_CHAR &&
+		    m_leader->IsPlayer()) {
+			if (!WarpPedToNearLeaderOffScreen()) {
+				SetObjective(OBJECTIVE_GOTO_CHAR_ON_FOOT, m_leader);
+				SetMoveState(PEDMOVE_RUN);
+			}
+			return;
+		}
 		if (IsPedInControl()) {
 			SetObjective(OBJECTIVE_NONE);
 			SetIdle();
@@ -558,6 +624,16 @@ CPed::UpdateFromLeader(void)
 			WarpPedToNearLeaderOffScreen();
 
 		if (m_leader->m_nPedState == PED_DEAD) {
+			// Recruited Cartel keep the player reference across the local
+			// death respawn. UpdateRecruitedBodyguards restores their
+			// follow order as soon as the player is alive again.
+			if (m_nPedType == PEDTYPE_GANG6 && CharCreatedBy == MISSION_CHAR &&
+			    m_leader->IsPlayer()) {
+				SetObjective(OBJECTIVE_NONE);
+				SetIdle();
+				SetMoveState(PEDMOVE_STILL);
+				return;
+			}
 			SetLeader(nil);
 			SetObjective(OBJECTIVE_FLEE_ON_FOOT_TILL_SAFE);
 			return;
@@ -2051,6 +2127,10 @@ CPed::SelectGunIfArmed(void)
 void
 CPed::ReactToPointGun(CEntity *entWithGun)
 {
+	if (m_nPedType == PEDTYPE_GANG6 && entWithGun && entWithGun->IsPed() &&
+	    ((CPed*)entWithGun)->IsPlayer())
+		return;
+
 	CPed *pedWithGun = (CPed*)entWithGun;
 	int waitTime;
 
@@ -2132,10 +2212,85 @@ CPed::ReactToPointGun(CEntity *entWithGun)
 	}
 }
 
+static void
+MakeNearbyCartelDefendPlayer(CEntity *target)
+{
+	if (target == nil || !target->IsPed())
+		return;
+
+	CPlayerPed *player = FindPlayerPed();
+	CPed *enemy = (CPed*)target;
+	if (player == nil || enemy == player || enemy->m_nPedType == PEDTYPE_GANG6)
+		return;
+
+	CPedPool *pool = CPools::GetPedPool();
+	for (int32 i = 0; i < pool->GetSize(); i++) {
+		CPed *cartel = pool->GetSlot(i);
+		if (cartel == nil || cartel == player ||
+		    cartel->m_nPedType != PEDTYPE_GANG6 ||
+		    cartel->DyingOrDead() || !cartel->IsPedInControl())
+			continue;
+
+		if ((cartel->GetPosition() - player->GetPosition()).MagnitudeSqr() > SQR(40.0f))
+			continue;
+
+		if (cartel->m_leader == player && cartel->CharCreatedBy != MISSION_CHAR)
+			cartel->ClearLeader();
+		cartel->SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, enemy);
+		cartel->SetObjectiveTimer(30000);
+		cartel->SetMoveState(PEDMOVE_RUN);
+	}
+}
+
+static bool
+IsPlayerLockedOnTarget(CPlayerPed *player, CPed *target)
+{
+	if (player == nil || target == nil || player->m_pPointGunAt == nil)
+		return false;
+
+	if (player->m_pPointGunAt == target)
+		return true;
+
+	if (player->m_pPointGunAt->IsVehicle())
+		return ((CVehicle*)player->m_pPointGunAt)->pDriver == target;
+
+	return false;
+}
+
 void
 CPed::ReactToAttack(CEntity *attacker)
 {
+	if (attacker && attacker->IsPed()) {
+		CPed *attackerPed = (CPed*)attacker;
+
+		// Cartel join only when the player actually hits the ped (or the driver
+		// of a vehicle) currently selected by weapon lock-on.
+		if (attackerPed->IsPlayer() && m_nPedType != PEDTYPE_GANG6 &&
+		    IsPlayerLockedOnTarget((CPlayerPed*)attackerPed, this)) {
+			MakeNearbyCartelDefendPlayer(this);
+			CGameLogic::NotifyPlayerOrderedAttack(this);
+		}
+
+		// Cartel never retaliate, flee from, or target the player.
+		if (m_nPedType == PEDTYPE_GANG6 && attackerPed->IsPlayer()) {
+			if (m_objective == OBJECTIVE_KILL_CHAR_ON_FOOT ||
+			    m_objective == OBJECTIVE_KILL_CHAR_ANY_MEANS ||
+			    m_objective == OBJECTIVE_FLEE_CHAR_ON_FOOT_TILL_SAFE ||
+			    m_objective == OBJECTIVE_FLEE_CHAR_ON_FOOT_ALWAYS) {
+				ClearObjective();
+				RestorePreviousState();
+			}
+			ClearLookFlag();
+			ClearPointGunAt();
+			return;
+		}
+	}
+
 	if (IsPlayer() && attacker->IsPed()) {
+		// Being attacked is the defensive exception to the lock-on rule:
+		// recruited and street Cartel nearby immediately protect the player.
+		MakeNearbyCartelDefendPlayer(attacker);
+		CGameLogic::NotifyPlayerOrderedAttack(attacker);
 		InformMyGangOfAttack(attacker);
 		SetLookFlag(attacker, true);
 		SetLookTimer(700);
@@ -2297,7 +2452,9 @@ CPed::PedAnimAlignCB(CAnimBlendAssociation *animAssoc, void *arg)
 			ped->m_pVehicleAnim = CAnimManager::AddAnimation(ped->GetClump(), ASSOCGRP_STD, ANIM_STD_COACH_OPEN_LHS);
 		} else {
 
-			if (ped->m_objective == OBJECTIVE_ENTER_CAR_AS_DRIVER && veh->pDriver) {
+			// The player uses the full Cartel pull-out sequence below, including
+			// its low-car variant for sports cars such as the Banshee.
+			if (!ped->IsPlayer() && ped->m_objective == OBJECTIVE_ENTER_CAR_AS_DRIVER && veh->pDriver) {
 
 				if (!veh->bLowVehicle
 					&& veh->pDriver->CharCreatedBy != MISSION_CHAR
@@ -4767,7 +4924,9 @@ CPed::RegisterThreatWithGangPeds(CEntity *attacker)
 				if (nearVeh->VehicleCreatedBy != MISSION_VEHICLE) {
 					CPed *nearVehDriver = nearVeh->pDriver;
 
-					if (nearVehDriver && nearVehDriver != this && nearVehDriver->m_nPedType == m_nPedType) {
+					if (nearVehDriver && nearVehDriver != this &&
+					    nearVehDriver->m_nPedType == m_nPedType &&
+					    m_nPedType != PEDTYPE_GANG6) {
 
 						if (nearVeh->IsVehicleNormal() && nearVeh->IsCar()) {
 							nearVeh->AutoPilot.m_nCruiseSpeed = GAME_SPEED_TO_CARAI_SPEED * nearVeh->pHandling->Transmission.fMaxCruiseVelocity * 0.8f;

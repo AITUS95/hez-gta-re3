@@ -6,6 +6,14 @@ class CPad;
 class CCopPed;
 class CWanted;
 
+enum eColombianMovementStyle
+{
+	COLOMBIAN_MOVEMENT_CARTEL_ORIGINAL,
+	COLOMBIAN_MOVEMENT_CARTEL_ALTERNATE,
+	COLOMBIAN_MOVEMENT_CLAUDE,
+	COLOMBIAN_MOVEMENT_TOTAL
+};
+
 class CPlayerPed : public CPed
 {
 public:
@@ -43,6 +51,7 @@ public:
 #ifdef VC_PED_PORTS
 	static bool bDontAllowWeaponChange;
 #endif
+	static eColombianMovementStyle m_nColombianMovementStyle;
 
 	CPlayerPed();
 	~CPlayerPed();
@@ -78,6 +87,7 @@ public:
 	bool FindNextWeaponLockOnTarget(CEntity*, bool);
 	bool FindWeaponLockOnTarget(void);
 	void ProcessAnimGroups(void);
+	void ToggleCartelMovementStyle(void);
 	void ProcessPlayerWeapon(CPad*);
 	void PlayerControlZelda(CPad*);
 

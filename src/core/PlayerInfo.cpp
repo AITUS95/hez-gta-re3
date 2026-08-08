@@ -51,8 +51,8 @@ CPlayerInfo::Clear(void)
 	m_bInRemoteMode = false;
 	m_bUnusedTaxiThing = false;
 	m_nUnusedTaxiTimer = 0;
-	m_nCollectedPackages = 0;
-	m_nTotalPackages = 3;
+	m_nTotalPackages = 100;
+	m_nCollectedPackages = m_nTotalPackages;
 	m_nTimeLastHealthLoss = 0;
 	m_nTimeLastArmourLoss = 0;
 	m_nNextSexFrequencyUpdateTime = 0;
@@ -62,10 +62,10 @@ CPlayerInfo::Clear(void)
 	m_nTimeTankShotGun = 0;
 	field_248 = 0;
 	m_nUpsideDownCounter = 0;
-	m_bInfiniteSprint = false;
-	m_bFastReload = false;
-	m_bGetOutOfJailFree = false;
-	m_bGetOutOfHospitalFree = false;
+	m_bInfiniteSprint = true;
+	m_bFastReload = true;
+	m_bGetOutOfJailFree = true;
+	m_bGetOutOfHospitalFree = true;
 	m_nPreviousTimeRewardedForExplosion = 0;
 	m_nExplosionsSinceLastReward = 0;
 }

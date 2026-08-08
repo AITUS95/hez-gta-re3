@@ -152,6 +152,14 @@ CWeapon::Fire(CEntity *shooter, CVector *fireSource)
 		(*source).y +=  Cos(angle) * 0.15f;
 	}
 
+	const bool infinitePlayerAmmo =
+		shooter == FindPlayerPed() && GetInfo()->m_eWeaponFire != WEAPON_FIRE_MELEE;
+	if (infinitePlayerAmmo) {
+		m_nAmmoTotal = Max(m_nAmmoTotal, 1);
+		m_nAmmoInClip = Max(m_nAmmoInClip, 1);
+		m_eWeaponState = WEAPONSTATE_READY;
+	}
+
 	if ( m_eWeaponState != WEAPONSTATE_READY && m_eWeaponState != WEAPONSTATE_FIRING )
 		return false;
 
@@ -289,15 +297,20 @@ CWeapon::Fire(CEntity *shooter, CVector *fireSource)
 				DMAudio.PlayOneShot(shooterPed->m_audioEntityId, SOUND_WEAPON_SHOT_FIRED, 0.0f);
 			}
 
-			if (m_nAmmoInClip > 0) m_nAmmoInClip--;
-			if (m_nAmmoTotal > 0 && (m_nAmmoTotal < 25000 || isPlayer)) m_nAmmoTotal--;
+			if (!infinitePlayerAmmo) {
+				if (m_nAmmoInClip > 0) m_nAmmoInClip--;
+				if (m_nAmmoTotal > 0 && (m_nAmmoTotal < 25000 || isPlayer)) m_nAmmoTotal--;
+			} else {
+				m_nAmmoInClip = Max(m_nAmmoInClip, 1);
+				m_nAmmoTotal = Max(m_nAmmoTotal, 1);
+			}
 
 			if (m_eWeaponState == WEAPONSTATE_READY && m_eWeaponType == WEAPONTYPE_FLAMETHROWER)
 				DMAudio.PlayOneShot(((CPhysical*)shooter)->m_audioEntityId, SOUND_WEAPON_FLAMETHROWER_FIRE, 0.0f);
 
 			m_eWeaponState = WEAPONSTATE_FIRING;
 
-			if (m_nAmmoInClip == 0)
+			if (!infinitePlayerAmmo && m_nAmmoInClip == 0)
 			{
 				if (m_nAmmoTotal == 0)
 					return true;
@@ -341,6 +354,13 @@ CWeapon::FireFromCar(CAutomobile *shooter, bool left)
 {
 	ASSERT(shooter!=nil);
 
+	const bool infinitePlayerAmmo = shooter == FindPlayerVehicle();
+	if (infinitePlayerAmmo) {
+		m_nAmmoTotal = Max(m_nAmmoTotal, 1);
+		m_nAmmoInClip = Max(m_nAmmoInClip, 1);
+		m_eWeaponState = WEAPONSTATE_READY;
+	}
+
 	if ( m_eWeaponState != WEAPONSTATE_READY && m_eWeaponState != WEAPONSTATE_FIRING )
 		return false;
 
@@ -351,12 +371,14 @@ CWeapon::FireFromCar(CAutomobile *shooter, bool left)
 	{
 		DMAudio.PlayOneShot(shooter->m_audioEntityId, SOUND_WEAPON_SHOT_FIRED, 0.0f);
 
-		if ( m_nAmmoInClip > 0 ) m_nAmmoInClip--;
-		if ( m_nAmmoTotal < 25000 && m_nAmmoTotal > 0 ) m_nAmmoTotal--;
+		if (!infinitePlayerAmmo) {
+			if ( m_nAmmoInClip > 0 ) m_nAmmoInClip--;
+			if ( m_nAmmoTotal < 25000 && m_nAmmoTotal > 0 ) m_nAmmoTotal--;
+		}
 
 		m_eWeaponState = WEAPONSTATE_FIRING;
 
-		if ( m_nAmmoInClip == 0 )
+		if (!infinitePlayerAmmo && m_nAmmoInClip == 0)
 		{
 			if ( m_nAmmoTotal == 0 )
 				return true;

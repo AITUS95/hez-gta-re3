@@ -13,12 +13,73 @@
 #include "RpAnimBlend.h"
 #include "AnimBlendAssociation.h"
 #include "General.h"
+#include "ModelInfo.h"
+#include "PedModelInfo.h"
 #include "Pools.h"
 #include "Darkel.h"
 #include "CarCtrl.h"
+#include "GameLogic.h"
 #include "SaveBuf.h"
+#include "Vehicle.h"
 
 #define PAD_MOVE_TO_GAME_WORLD_MOVE 60.0f
+
+static float
+GetPlayerLockOnRange(eWeaponType weaponType)
+{
+	// The unarmed slot doubles as the Cartel command mode. Use the standard
+	// handgun lock-on range so pedestrians and occupied cars can be selected
+	// without requiring the player to stand within punching distance.
+	if (weaponType == WEAPONTYPE_UNARMED)
+		return CWeaponInfo::GetWeaponInfo(WEAPONTYPE_COLT45)->m_fRange;
+	return CWeaponInfo::GetWeaponInfo(weaponType)->m_fRange;
+}
+
+static bool
+IsRivalGangPedForTargeting(const CPed *ped)
+{
+	return ped && ped->m_nPedType >= PEDTYPE_GANG1 && ped->m_nPedType <= PEDTYPE_GANG9 && ped->m_nPedType != PEDTYPE_GANG6;
+}
+
+static bool
+IsRivalGangVehicleForTargeting(const CVehicle *vehicle)
+{
+	if (vehicle == nil)
+		return false;
+
+	switch (vehicle->GetModelIndex()) {
+	case MI_BELLYUP:
+	case MI_YARDIE:
+	case MI_YAKUZA:
+	case MI_DIABLOS:
+	case MI_COLUMB:
+	case MI_HOODS:
+	case MI_PANLANT:
+		return true;
+	default:
+		break;
+	}
+
+	if (IsRivalGangPedForTargeting(vehicle->pDriver))
+		return true;
+	for (int32 i = 0; i < ARRAY_SIZE(vehicle->pPassengers); i++) {
+		if (IsRivalGangPedForTargeting(vehicle->pPassengers[i]))
+			return true;
+	}
+	return false;
+}
+
+static bool
+IsRivalGangTarget(CEntity *entity)
+{
+	if (entity == nil)
+		return false;
+	if (entity->IsPed())
+		return IsRivalGangPedForTargeting((CPed*)entity);
+	if (entity->IsVehicle())
+		return IsRivalGangVehicleForTargeting((CVehicle*)entity);
+	return false;
+}
 
 #ifdef VC_PED_PORTS
 bool CPlayerPed::bDontAllowWeaponChange;
@@ -252,7 +313,7 @@ CPlayerPed::SetInitialState(void)
 	SetPedState(PED_IDLE);
 	SetMoveState(PEDMOVE_STILL);
 	m_nLastPedState = PED_NONE;
-	m_animGroup = ASSOCGRP_PLAYER;
+	m_animGroup = ASSOCGRP_STD;
 	m_fMoveSpeed = 0.0f;
 	m_nSelectedWepSlot = WEAPONTYPE_UNARMED;
 	m_nEvadeAmount = 0;
@@ -530,7 +591,7 @@ CPlayerPed::DoesTargetHaveToBeBroken(CVector target, CWeapon *weaponUsed)
 {
 	CVector distVec = target - GetPosition();
 
-	if (distVec.Magnitude() > CWeaponInfo::GetWeaponInfo(weaponUsed->m_eWeaponType)->m_fRange)
+	if (distVec.Magnitude() > GetPlayerLockOnRange(weaponUsed->m_eWeaponType))
 		return true;
 
 	if (weaponUsed->m_eWeaponType != WEAPONTYPE_SHOTGUN && weaponUsed->m_eWeaponType != WEAPONTYPE_AK47)
@@ -829,6 +890,8 @@ CPlayerPed::EvaluateNeighbouringTarget(CEntity *candidate, CEntity **targetPtr, 
 			} else {
 				closeness = angleBetweenUs > 0.0f ? -100000.0f : -Abs(angleBetweenUs);
 			}
+			if (IsRivalGangTarget(candidate))
+				closeness += 10000.0f;
 
 			if (closeness > *lastCloseness) {
 				*targetPtr = candidate;
@@ -852,6 +915,8 @@ CPlayerPed::EvaluateTarget(CEntity *candidate, CEntity **targetPtr, float *lastC
 			if (priority) {
 				closeness += 5.0f;
 			}
+			if (IsRivalGangTarget(candidate))
+				closeness += 10000.0f;
 
 			if (closeness > *lastCloseness) {
 				*targetPtr = candidate;
@@ -865,7 +930,7 @@ bool
 CPlayerPed::FindNextWeaponLockOnTarget(CEntity *previousTarget, bool lookToLeft)
 {
 	CEntity *nextTarget = nil;
-	float weaponRange = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType)->m_fRange;
+	float weaponRange = GetPlayerLockOnRange(GetWeapon()->m_eWeaponType);
 	// nextTarget = nil; // duplicate
 	float lastCloseness = -10000.0f;
 	// CGeneral::GetATanOfXY(GetForward().x, GetForward().y); // unused
@@ -889,10 +954,20 @@ CPlayerPed::FindNextWeaponLockOnTarget(CEntity *previousTarget, bool lookToLeft)
 			}
 		}
 	}
-	for (int i = 0; i < ARRAY_SIZE(m_nTargettableObjects); i++) {
-		CObject *obj = CPools::GetObjectPool()->GetAt(m_nTargettableObjects[i]);
-		if (obj)
-			EvaluateNeighbouringTarget(obj, &nextTarget, &lastCloseness, weaponRange, referenceBeta, lookToLeft);
+	if (GetWeapon()->m_eWeaponType != WEAPONTYPE_UNARMED) {
+		for (int i = 0; i < ARRAY_SIZE(m_nTargettableObjects); i++) {
+			CObject *obj = CPools::GetObjectPool()->GetAt(m_nTargettableObjects[i]);
+			if (obj)
+				EvaluateNeighbouringTarget(obj, &nextTarget, &lastCloseness, weaponRange, referenceBeta, lookToLeft);
+		}
+	}
+	for (int i = CPools::GetVehiclePool()->GetSize() - 1; i >= 0; i--) {
+		CVehicle *vehicle = CPools::GetVehiclePool()->GetSlot(i);
+		if (vehicle && vehicle != previousTarget && vehicle != FindPlayerVehicle() &&
+		    vehicle->IsCar() && vehicle->bIsVisible &&
+		    vehicle->GetStatus() != STATUS_WRECKED && OurPedCanSeeThisOne(vehicle))
+			EvaluateNeighbouringTarget(vehicle, &nextTarget, &lastCloseness,
+				weaponRange, referenceBeta, lookToLeft);
 	}
 	if (!nextTarget)
 		return false;
@@ -901,7 +976,10 @@ CPlayerPed::FindNextWeaponLockOnTarget(CEntity *previousTarget, bool lookToLeft)
 #ifdef VC_PED_PORTS
 	bDontAllowWeaponChange = true;
 #endif
-	SetPointGunAt(nextTarget);
+	if (GetWeapon()->m_eWeaponType == WEAPONTYPE_UNARMED)
+		SetLookFlag(nextTarget, true);
+	else
+		SetPointGunAt(nextTarget);
 	return true;
 }
 
@@ -909,7 +987,7 @@ bool
 CPlayerPed::FindWeaponLockOnTarget(void)
 {
 	CEntity *nextTarget = nil;
-	float weaponRange = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType)->m_fRange;
+	float weaponRange = GetPlayerLockOnRange(GetWeapon()->m_eWeaponType);
 
 	if (m_pPointGunAt) {
 		CVector distVec = m_pPointGunAt->GetPosition() - GetPosition();
@@ -937,10 +1015,20 @@ CPlayerPed::FindWeaponLockOnTarget(void)
 			}
 		}
 	}
-	for (int i = 0; i < ARRAY_SIZE(m_nTargettableObjects); i++) {
-		CObject *obj = CPools::GetObjectPool()->GetAt(m_nTargettableObjects[i]);
-		if (obj)
-			EvaluateTarget(obj, &nextTarget, &lastCloseness, weaponRange, referenceBeta, false);
+	if (GetWeapon()->m_eWeaponType != WEAPONTYPE_UNARMED) {
+		for (int i = 0; i < ARRAY_SIZE(m_nTargettableObjects); i++) {
+			CObject *obj = CPools::GetObjectPool()->GetAt(m_nTargettableObjects[i]);
+			if (obj)
+				EvaluateTarget(obj, &nextTarget, &lastCloseness, weaponRange, referenceBeta, false);
+		}
+	}
+	for (int i = CPools::GetVehiclePool()->GetSize() - 1; i >= 0; i--) {
+		CVehicle *vehicle = CPools::GetVehiclePool()->GetSlot(i);
+		if (vehicle && vehicle != FindPlayerVehicle() &&
+		    vehicle->IsCar() && vehicle->bIsVisible &&
+		    vehicle->GetStatus() != STATUS_WRECKED && OurPedCanSeeThisOne(vehicle))
+			EvaluateTarget(vehicle, &nextTarget, &lastCloseness,
+				weaponRange, referenceBeta, false);
 	}
 	if (!nextTarget)
 		return false;
@@ -949,14 +1037,55 @@ CPlayerPed::FindWeaponLockOnTarget(void)
 #ifdef VC_PED_PORTS
 	bDontAllowWeaponChange = true;
 #endif
-	SetPointGunAt(nextTarget);
+	if (GetWeapon()->m_eWeaponType == WEAPONTYPE_UNARMED)
+		SetLookFlag(nextTarget, true);
+	else
+		SetPointGunAt(nextTarget);
 	return true;
+}
+
+eColombianMovementStyle CPlayerPed::m_nColombianMovementStyle;
+
+static AssocGroupId
+GetCartelMovementGroup(CPlayerPed *player, eColombianMovementStyle style)
+{
+	AssocGroupId nativeGroup = ASSOCGRP_GANG1;
+	if (player->GetModelIndex() == MI_GANG11 || player->GetModelIndex() == MI_GANG12)
+		nativeGroup =
+			(AssocGroupId)((CPedModelInfo*)CModelInfo::GetModelInfo(player->GetModelIndex()))->m_animGroup;
+	if (style == COLOMBIAN_MOVEMENT_CARTEL_ORIGINAL)
+		return nativeGroup;
+
+	// Both Cartel pedestrian variants use one of the two native gang
+	// movement sets. L switches to the other one without substituting a
+	// movement group belonging to an unrelated pedestrian archetype.
+	return nativeGroup == ASSOCGRP_GANG1 ? ASSOCGRP_GANG2 : ASSOCGRP_GANG1;
+}
+
+void
+CPlayerPed::ToggleCartelMovementStyle(void)
+{
+	m_nColombianMovementStyle =
+		(eColombianMovementStyle)((m_nColombianMovementStyle + 1) % COLOMBIAN_MOVEMENT_TOTAL);
+	ProcessAnimGroups();
 }
 
 void
 CPlayerPed::ProcessAnimGroups(void)
 {
 	AssocGroupId groupToSet;
+
+	// Cartel movement can be combined with any selected player skin. The
+	// Claude option deliberately continues into the original player logic
+	// below, which selects his native armed and directional movement groups.
+	if (m_nColombianMovementStyle != COLOMBIAN_MOVEMENT_CLAUDE) {
+		groupToSet = GetCartelMovementGroup(this, m_nColombianMovementStyle);
+		if (m_animGroup != groupToSet) {
+			m_animGroup = groupToSet;
+			ReApplyMoveAnims();
+		}
+		return;
+	}
 
 #ifdef PC_PLAYER_CONTROLS
 	if ((m_fWalkAngle <= -DEGTORAD(50.0f) || m_fWalkAngle >= DEGTORAD(50.0f))
@@ -991,7 +1120,7 @@ CPlayerPed::ProcessAnimGroups(void)
 				groupToSet = ASSOCGRP_PLAYERBBBAT;
 			} else if (GetWeapon()->m_eWeaponType != WEAPONTYPE_COLT45 && GetWeapon()->m_eWeaponType != WEAPONTYPE_UZI) {
 				if (!GetWeapon()->IsType2Handed()) {
-					groupToSet = ASSOCGRP_PLAYER;
+					groupToSet = ASSOCGRP_STD;
 				} else {
 					groupToSet = ASSOCGRP_PLAYER2ARMED;
 				}
@@ -1047,12 +1176,17 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
 	if (padUsed->GetWeapon() && m_nMoveState != PEDMOVE_SPRINT) {
 		if (m_nSelectedWepSlot == m_currentWeapon) {
 			if (m_pPointGunAt) {
+				if (m_currentWeapon == WEAPONTYPE_UNARMED) {
+					if (padUsed->WeaponJustDown())
+						CGameLogic::NotifyPlayerOrderedAttack(m_pPointGunAt);
+				} else {
 #ifdef FREE_CAM
-				if (CCamera::bFreeCam && weaponInfo->m_eWeaponFire == WEAPON_FIRE_MELEE && m_fMoveSpeed < 1.0f)
-					StartFightAttack(padUsed->GetWeapon());
-				else
+					if (CCamera::bFreeCam && weaponInfo->m_eWeaponFire == WEAPON_FIRE_MELEE && m_fMoveSpeed < 1.0f)
+						StartFightAttack(padUsed->GetWeapon());
+					else
 #endif
-					SetAttack(m_pPointGunAt);
+						SetAttack(m_pPointGunAt);
+				}
 			} else if (m_currentWeapon != WEAPONTYPE_UNARMED) {
 				if (m_nPedState == PED_ATTACK) {
 					if (padUsed->WeaponJustDown()) {
@@ -1182,9 +1316,12 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
 			TheCamera.UpdateAimingCoors(m_pPointGunAt->GetPosition());
 		}
 #ifdef FREE_CAM
-		else if ((CCamera::bFreeCam && weaponInfo->m_eWeaponFire == WEAPON_FIRE_MELEE) || (weaponInfo->IsFlagSet(WEAPONFLAG_CANAIM) && !CCamera::m_bUseMouse3rdPerson)) {
+		else if (GetWeapon()->m_eWeaponType == WEAPONTYPE_UNARMED ||
+		         (CCamera::bFreeCam && weaponInfo->m_eWeaponFire == WEAPON_FIRE_MELEE) ||
+		         (weaponInfo->IsFlagSet(WEAPONFLAG_CANAIM) && !CCamera::m_bUseMouse3rdPerson)) {
 #else
-		else if (weaponInfo->IsFlagSet(WEAPONFLAG_CANAIM) && !CCamera::m_bUseMouse3rdPerson) {
+		else if (GetWeapon()->m_eWeaponType == WEAPONTYPE_UNARMED ||
+		         (weaponInfo->IsFlagSet(WEAPONFLAG_CANAIM) && !CCamera::m_bUseMouse3rdPerson)) {
 #endif
 			if (padUsed->TargetJustDown())
 				FindWeaponLockOnTarget();

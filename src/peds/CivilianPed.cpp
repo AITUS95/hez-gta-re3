@@ -45,6 +45,85 @@ CCivilianPed::CCivilianPed(ePedType pedtype, uint32 mi) : CPed(pedtype)
 void
 CCivilianPed::CivilianAI(void)
 {
+	bool recruitedCartelFollowingPlayer =
+		m_nPedType == PEDTYPE_GANG6 && CharCreatedBy == MISSION_CHAR &&
+		m_leader && m_leader->IsPlayer() &&
+		m_objective == OBJECTIVE_GOTO_CHAR_ON_FOOT &&
+		m_pedInObjective == m_leader;
+	bool checkForLocalGangFight =
+		recruitedCartelFollowingPlayer ?
+			((CTimer::GetFrameCounter() + (uint8)m_randomSeed) & 0x0F) == 0 :
+			((CTimer::GetFrameCounter() + (uint8)m_randomSeed) & 0xFF) == 0 &&
+			(CGeneral::GetRandomNumber() & 3) == 0;
+
+	// Street gang members keep the existing random encounter rate. Recruited
+	// Cartel check more often while following, but use the same native kill
+	// objective once a rival is seen.
+	if (IsGangMember() &&
+	    ((CharCreatedBy == RANDOM_CHAR && m_objective == OBJECTIVE_NONE) ||
+	     recruitedCartelFollowingPlayer) && !InVehicle() &&
+	    checkForLocalGangFight) {
+		CPed *rival = nil;
+		for (int i = 0; i < m_numNearPeds; i++) {
+			CPed *candidate = m_nearPeds[i];
+			if (candidate == nil || !candidate->IsGangMember() ||
+			    candidate->m_nPedType == m_nPedType ||
+			    candidate->CharCreatedBy != RANDOM_CHAR ||
+			    candidate->DyingOrDead() || !candidate->IsPedInControl() ||
+			    candidate->InVehicle())
+				continue;
+
+			if ((candidate->GetPosition() - GetPosition()).MagnitudeSqr2D() > sq(18.0f) ||
+			    !OurPedCanSeeThisOne(candidate))
+				continue;
+
+			rival = candidate;
+			break;
+		}
+
+		// In-vehicle peds never enter m_nearPeds. Recruits therefore inspect
+		// nearby vehicles separately and select only actual rival-gang
+		// occupants; the normal kill objective handles shooting or approaching
+		// the occupied vehicle without a forced carjack.
+		if (rival == nil && recruitedCartelFollowingPlayer) {
+			int16 numVehicles;
+			CEntity *vehicles[8];
+			CWorld::FindObjectsInRange(GetPosition(), 18.0f, true,
+				&numVehicles, 6, vehicles, false, true, false, false, false);
+			for (int32 i = 0; i < numVehicles && rival == nil; i++) {
+				CVehicle *vehicle = (CVehicle*)vehicles[i];
+				if (vehicle == nil || !OurPedCanSeeThisOne(vehicle))
+					continue;
+
+				CPed *occupant = vehicle->pDriver;
+				if (occupant && occupant->IsGangMember() &&
+				    occupant->m_nPedType != m_nPedType &&
+				    occupant->CharCreatedBy == RANDOM_CHAR &&
+				    !occupant->DyingOrDead()) {
+					rival = occupant;
+					break;
+				}
+
+				for (int32 seat = 0; seat < vehicle->m_nNumMaxPassengers; seat++) {
+					occupant = vehicle->pPassengers[seat];
+					if (occupant && occupant->IsGangMember() &&
+					    occupant->m_nPedType != m_nPedType &&
+					    occupant->CharCreatedBy == RANDOM_CHAR &&
+					    !occupant->DyingOrDead()) {
+						rival = occupant;
+						break;
+					}
+				}
+			}
+		}
+
+		if (rival) {
+			SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, rival);
+			SetObjectiveTimer(20000);
+			SetMoveState(PEDMOVE_RUN);
+		}
+	}
+
 	if (CTimer::GetTimeInMilliseconds() <= m_fleeTimer || m_objective != OBJECTIVE_NONE && !bRespondsToThreats
 		|| !IsPedInControl())  {
 

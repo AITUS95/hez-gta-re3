@@ -4,7 +4,9 @@
 #include "ScriptCommands.h"
 
 #include "Bike.h"
+#include "Camera.h"
 #include "CarCtrl.h"
+#include "CarGen.h"
 #include "Cranes.h"
 #include "Credits.h"
 #include "CutsceneMgr.h"
@@ -18,8 +20,12 @@
 #include "GenericGameStorage.h"
 #endif
 #include "Messages.h"
+#include "Object.h"
 #include "Pad.h"
 #include "Particle.h"
+#include "PathFind.h"
+#include "Pickups.h"
+#include "PlayerPed.h"
 #include "Phones.h"
 #include "Population.h"
 #include "Pools.h"
@@ -30,11 +36,127 @@
 #include "Stats.h"
 #include "Streaming.h"
 #include "Weather.h"
+#include "World.h"
 #include "Zones.h"
 #include "main.h"
 
 // NB: on PS2 this file did not exist; ProcessCommands1000To1099 was in Script5.cpp and ProcessCommands1100To1199 was only added on PC
 // however to avoid redundant copies of code, Script6.cpp is used with PS2 defines
+
+static bool
+IsColombianWorldBlocker(const CVector &pos)
+{
+	return (pos - CVector(988.9375f, -471.75f, 5.1875f)).MagnitudeSqr() < 1.0f ||
+	       (pos - CVector(730.3125f, 172.4375f, -21.0625f)).MagnitudeSqr() < 1.0f ||
+	       (pos - CVector(-73.125f, -630.3125f, 25.875f)).MagnitudeSqr() < 1.0f;
+}
+
+static void
+UnlockColombianWorld(void)
+{
+	// These three script objects physically close the Portland subway,
+	// Portland tunnel and Staunton lift bridge before story progression.
+	CObjectPool *objectPool = CPools::GetObjectPool();
+	for (int32 i = objectPool->GetSize() - 1; i >= 0; i--) {
+		CObject *object = objectPool->GetSlot(i);
+		if (object && IsColombianWorldBlocker(object->GetPosition())) {
+			CWorld::Remove(object);
+			delete object;
+		}
+	}
+
+	// Restore only the road links normally enabled when Portland and
+	// Staunton are completed. All unrelated mission and traffic areas keep
+	// their original state.
+	ThePaths.SwitchRoadsOffInArea(619.5625f, 834.25f, -954.5f, -911.5f, 32.0f, 45.0f, false);
+	ThePaths.SwitchRoadsOffInArea(659.5625f, 945.75f, 147.5f, 200.0f, -20.0f, 5.0f, false);
+	ThePaths.SwitchPedRoadsOffInArea(659.5625f, 945.75f, 147.5f, 200.0f, -25.0f, 5.0f, false);
+	ThePaths.SwitchRoadsOffInArea(529.5625f, 581.375f, 65.6875f, 106.5f, -30.0f, 0.0f, false);
+	ThePaths.SwitchRoadsOffInArea(-69.0625f, -46.75f, -648.0f, -614.0f, 39.0f, 50.0f, false);
+	ThePaths.SwitchRoadsOffInArea(484.0f, 496.6875f, 44.1875f, 75.5f, -30.0f, 0.0f, false);
+}
+
+static void
+ApplyCompletedStoryZoneState(void)
+{
+	// Preserve the zone tables initialized by the original main.scm and
+	// apply the permanent population changes made by story missions plus
+	// the Colombian presence requested for the Red Light District.  All
+	// unrelated gang, police and vehicle values remain untouched.
+	int16 redLight = CTheZones::FindZoneByLabelAndReturnIndex("REDLIGH");
+	if (redLight >= 0) {
+		// Moderate Cartel presence by day, slightly stronger at night.
+		CTheZones::SetZonePedInfo(redLight, 1, -1, 180, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+		CTheZones::SetZonePedInfo(redLight, 0, -1, 220, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+	}
+
+	int16 fishFactory = CTheZones::FindZoneByLabelAndReturnIndex("FISHFAC");
+	if (fishFactory >= 0) {
+		CTheZones::SetZonePedInfo(fishFactory, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+		CTheZones::SetZonePedInfo(fishFactory, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+	}
+
+	int16 construction = CTheZones::FindZoneByLabelAndReturnIndex("CONSTRU");
+	if (construction >= 0) {
+		CTheZones::SetZonePedInfo(construction, 1, 30, 0, 0, 0, 250, 0, 50, 0, 0, 0, 20);
+		CTheZones::SetZonePedInfo(construction, 0, 15, 0, 0, 0, 300, 0, 70, 0, 0, 0, 10);
+	}
+}
+
+static void
+SetUpColombianCompound(void)
+{
+	const float targetX = 57.0393f;
+	const float targetY = -317.127f;
+	int16 bestGarage = -1;
+	float bestDistSq = SQR(30.0f);
+	for (uint32 i = 0; i < CGarages::NumGarages; i++) {
+		CGarage &garage = CGarages::aGarages[i];
+		float dx = garage.GetGarageCenterX() - targetX;
+		float dy = garage.GetGarageCenterY() - targetY;
+		float distSq = dx * dx + dy * dy;
+		if (distSq < bestDistSq) {
+			bestDistSq = distSq;
+			bestGarage = (int16)i;
+		}
+	}
+	if (bestGarage >= 0)
+		CGarages::ChangeGarageType(bestGarage, GARAGE_HIDEOUT_COLOMBIAN, 0);
+
+	// Permanent Cartel Cruiser parked inside the compound forecourt.
+	int32 limo = CTheCarGenerators::CreateCarGenerator(
+		61.5f, -332.0f, -100.0f, 180.0f,
+		MI_COLUMB, 0, 0, 1, 0, 0, 0, 10000);
+	CTheCarGenerators::CarGeneratorArray[limo].SwitchOn();
+
+	static const eWeaponType weapons[] = {
+		WEAPONTYPE_BASEBALLBAT,
+		WEAPONTYPE_COLT45,
+		WEAPONTYPE_UZI,
+		WEAPONTYPE_SHOTGUN,
+		WEAPONTYPE_AK47,
+		WEAPONTYPE_M16,
+		WEAPONTYPE_SNIPERRIFLE,
+		WEAPONTYPE_ROCKETLAUNCHER,
+		WEAPONTYPE_FLAMETHROWER,
+		WEAPONTYPE_MOLOTOV,
+		WEAPONTYPE_GRENADE
+	};
+	for (uint32 i = 0; i < ARRAY_SIZE(weapons); i++) {
+		// Compact armoury beside the mansion, clear of the driveway, gate
+		// and usable garage entrance.
+		CVector pos(43.0f + (i % 6) * 1.55f, -324.0f - (i / 6) * 2.2f, 17.0f);
+		pos.z = CWorld::FindGroundZForCoord(pos.x, pos.y) + PICKUP_PLACEMENT_OFFSET;
+		CPickups::GenerateNewOne_WeaponType(pos, weapons[i], PICKUP_ON_STREET, 500);
+	}
+
+	CVector healthPos(43.0f, -328.4f, 17.0f);
+	healthPos.z = CWorld::FindGroundZForCoord(healthPos.x, healthPos.y) + PICKUP_PLACEMENT_OFFSET;
+	CPickups::GenerateNewOne(healthPos, MI_PICKUP_HEALTH, PICKUP_ON_STREET, 0);
+	CVector armourPos(45.2f, -328.4f, 17.0f);
+	armourPos.z = CWorld::FindGroundZForCoord(armourPos.x, armourPos.y) + PICKUP_PLACEMENT_OFFSET;
+	CPickups::GenerateNewOne(armourPos, MI_PICKUP_BODYARMOUR, PICKUP_ON_STREET, 0);
+}
 
 int8 CRunningScript::ProcessCommands1000To1099(int32 command)
 {
@@ -297,6 +419,35 @@ int8 CRunningScript::ProcessCommands1000To1099(int32 command)
 	case COMMAND_LOAD_AND_LAUNCH_MISSION_INTERNAL:
 	{
 		CollectParameters(&m_nIp, 1);
+
+		// A Colombian new game is a completed free-roam game.  Keep the
+		// original main script for normal traffic, zones, garages and world
+		// objects, but do not launch GTA III's bridge/8-Ball introduction.
+		// Mission 0 is only launched by the main script when starting a new
+		// game, so loading an existing save is left untouched.
+		if (ScriptParams[0] == 0 && !m_bIsMissionScript) {
+			UnlockColombianWorld();
+			ApplyCompletedStoryZoneState();
+			CTheCarGenerators::ApplyCompletedGameState();
+			SetUpColombianCompound();
+			CPlayerPed *player = FindPlayerPed();
+			if (player) {
+				// Cartel mansion forecourt, facing the two parked Cruisers.
+				CVector pos(58.0f, -329.0f, 17.0f);
+				CStreaming::LoadScene(pos);
+				pos.z = CWorld::FindGroundZForCoord(pos.x, pos.y);
+				pos.z += player->GetDistanceFromCentreOfMassToBaseOfModel();
+				player->Teleport(pos);
+				player->m_fRotationCur = player->m_fRotationDest = DEGTORAD(140.0f);
+				player->SetHeading(player->m_fRotationCur);
+				CTheScripts::ClearSpaceForMissionEntity(pos, player);
+				TheCamera.RestoreWithJumpCut();
+				TheCamera.SetFadeColour(0, 0, 0);
+				TheCamera.Fade(1.0f, FADE_IN);
+			}
+			return 0;
+		}
+
 #ifdef MISSION_REPLAY
 		missionRetryScriptIndex = ScriptParams[0];
 		if (missionRetryScriptIndex == 19)

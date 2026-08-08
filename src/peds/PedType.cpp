@@ -120,6 +120,16 @@ CPedType::LoadPedData(void)
 		}
 	}
 
+	// Cartel regard the player as an ally; every other gang is maximally hostile.
+	const uint32 playerFlags = PED_FLAG_PLAYER1 | PED_FLAG_PLAYER2 |
+		PED_FLAG_PLAYER3 | PED_FLAG_PLAYER4;
+	for (int gangType = PEDTYPE_GANG1; gangType <= PEDTYPE_GANG9; gangType++) {
+		if (gangType == PEDTYPE_GANG6)
+			RemoveThreat(gangType, playerFlags);
+		else
+			AddThreat(gangType, playerFlags);
+	}
+
 	delete[] buf;
 }
 

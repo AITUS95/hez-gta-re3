@@ -150,6 +150,12 @@ CheckForPedsOnGroundToAttack(CPed *attacker, CPed **pedOnGround)
 void
 CPed::SetPointGunAt(CEntity *to)
 {
+	if (m_nPedType == PEDTYPE_GANG6 && to && to->IsPed() &&
+	    (((CPed*)to)->IsPlayer() || ((CPed*)to)->m_nPedType == PEDTYPE_GANG6)) {
+		ClearPointGunAt();
+		return;
+	}
+
 	if (to) {
 		SetLookFlag(to, true);
 		SetAimFlag(to);
@@ -246,6 +252,13 @@ CPed::SetAttack(CEntity *victim)
 	CPed *victimPed = nil;
 	if (victim && victim->IsPed())
 		victimPed = (CPed*)victim;
+
+	if (m_nPedType == PEDTYPE_GANG6 && victimPed &&
+	    (victimPed->IsPlayer() || victimPed->m_nPedType == PEDTYPE_GANG6)) {
+		bIsAttacking = false;
+		ClearPointGunAt();
+		return;
+	}
 
 	CAnimBlendAssociation *animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_IDLE_BIGGUN);
 	if (animAssoc) {
@@ -2057,6 +2070,18 @@ bool
 CPed::InflictDamage(CEntity *damagedBy, eWeaponType method, float damage, ePedPieceTypes pedPiece, uint8 direction)
 {
 	CPlayerPed *player = FindPlayerPed();
+
+	// Player and Cartel (GANG1) are mutually immune to direct damage.
+	// Keeping this at the common damage entry point also covers melee,
+	// drive-by weapons and any future weapon implementation.
+	if (damagedBy && damagedBy->IsPed()) {
+		CPed *attacker = (CPed*)damagedBy;
+		if ((this == player && attacker->m_nPedType == PEDTYPE_GANG6) ||
+		    (m_nPedType == PEDTYPE_GANG6 && attacker == player) ||
+		    (m_nPedType == PEDTYPE_GANG6 && attacker->m_nPedType == PEDTYPE_GANG6))
+			return false;
+	}
+
 	float dieDelta = 4.0f;
 	float dieSpeed = 0.0f;
 	AnimationId dieAnim = ANIM_STD_KO_FRONT;

@@ -803,13 +803,17 @@ do { \
 		}
 	}
 
+	memset(buf2, 0, NUM_COLOMBIAN_GARAGE_STORED_CARS * sizeof(CStoredCar));
+	buf2 += NUM_COLOMBIAN_GARAGE_STORED_CARS * sizeof(CStoredCar);
+	written += NUM_COLOMBIAN_GARAGE_STORED_CARS * sizeof(CStoredCar);
+
 	*size = 0;
 
 	assert(buf - buf_start == read);
 	assert(buf2 - buf2_start == written);
 
 #ifdef FIX_GARAGE_SIZE
-	*size = (6 * sizeof(uint32) + TOTAL_COLLECTCARS_GARAGES * sizeof(*CGarages::CarTypesCollected) + sizeof(uint32) + 3 * NUM_GARAGE_STORED_CARS * sizeof(CStoredCar) + NUM_GARAGES * sizeof(CGarage));
+	*size = (6 * sizeof(uint32) + TOTAL_COLLECTCARS_GARAGES * sizeof(*CGarages::CarTypesCollected) + sizeof(uint32) + 3 * NUM_GARAGE_STORED_CARS * sizeof(CStoredCar) + NUM_GARAGES * sizeof(CGarage) + NUM_COLOMBIAN_GARAGE_STORED_CARS * sizeof(CStoredCar));
 #else
 	*size = 5484;
 #endif

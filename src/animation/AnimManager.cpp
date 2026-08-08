@@ -441,12 +441,14 @@ char const *aGang1Animations[] = {
 	"run_gang1",
 	"sprint_civi",
 	"idle_stance",
+	"walk_start",
 };
 char const *aGang2Animations[] = {
 	"walk_gang2",
 	"run_gang1",
 	"sprint_civi",
 	"idle_stance",
+	"walk_start",
 };
 char const *aFatAnimations[] = {
 	"walk_fat",
