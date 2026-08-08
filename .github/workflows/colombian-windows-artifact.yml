@@ -1,0 +1,71 @@
+name: Colombian Windows artifact
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - colombian
+    paths:
+      - ".github/workflows/colombian-windows-artifact.yml"
+      - "src/**"
+      - "gamefiles/**"
+      - "premake5.lua"
+      - "premake5.exe"
+      - "vendor/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-x86:
+    name: Windows x86 Release
+    runs-on: windows-2022
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Generate Visual Studio solution
+        shell: pwsh
+        run: ./premake5.exe vs2019 --with-librw --no-full-paths
+
+      - name: Build re3
+        shell: pwsh
+        run: msbuild build/re3.sln /m /p:Configuration=Release /p:Platform=win-x86-librw_d3d9-oal
+
+      - name: Assemble artifact
+        shell: pwsh
+        run: |
+          $artifact = "artifact/colombian-re3-win-x86"
+          New-Item -ItemType Directory -Force -Path $artifact | Out-Null
+          Copy-Item "gamefiles/*" $artifact -Recurse -Force
+          Copy-Item "bin/win-x86-librw_d3d9-oal/Release/re3.exe" $artifact
+          if (Test-Path "bin/win-x86-librw_d3d9-oal/Release/re3.pdb") {
+            Copy-Item "bin/win-x86-librw_d3d9-oal/Release/re3.pdb" $artifact
+          }
+          Copy-Item "vendor/mpg123/dist/Win32/libmpg123-0.dll" $artifact
+          Copy-Item "vendor/openal-soft/dist/Win32/OpenAL32.dll" $artifact
+          @(
+            "INSTALLAZIONE:"
+            "1. Usa una copia completa e funzionante di GTA III per Windows."
+            "2. Copia tutto il contenuto di questo artifact nella cartella principale di GTA III."
+            "3. Mantieni le sottocartelle data, models e TEXT; non avviare re3.exe dalla cartella dell'artifact isolata."
+            "4. Avvia re3.exe dalla cartella principale di GTA III."
+            ""
+            "Variante: Claude membro del Cartello Colombiano."
+            "Questo artifact non include i file originali protetti da copyright di GTA III."
+          ) | Set-Content -Path "$artifact/INSTALLAZIONE.txt" -Encoding UTF8
+
+      - name: Upload compiled game
+        uses: actions/upload-artifact@v4
+        with:
+          name: colombian-re3-win-x86-${{ github.sha }}
+          path: artifact/colombian-re3-win-x86
+          if-no-files-found: error
+          retention-days: 30
