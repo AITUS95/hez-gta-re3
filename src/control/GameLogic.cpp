@@ -28,6 +28,7 @@
 #include "Font.h"
 #include "General.h"
 #include "Zones.h"
+#include "Radar.h"
 #include "screendroplets.h"
 
 uint8 CGameLogic::ActivePlayers;
@@ -62,6 +63,28 @@ EnsureCorleoneVillaGarage(void)
 				CGarages::ChangeGarageType(i, GARAGE_HIDEOUT_CORLEONE, 0);
 			return;
 		}
+	}
+}
+
+static void
+EnsureCustomHideoutRadarBlip(void)
+{
+	const CVector hideoutPos(1425.0f, -182.0f, 55.0f);
+	bool foundSaveBlip = false;
+	for (int32 i = 0; i < NUMRADARBLIPS; i++) {
+		sRadarTrace &trace = CRadar::ms_RadarTrace[i];
+		if (!trace.m_bInUse || trace.m_eRadarSprite != RADAR_SPRITE_SAVE)
+			continue;
+		trace.m_eBlipType = BLIP_COORD;
+		trace.m_vecPos = hideoutPos;
+		trace.m_vec2DPos.x = hideoutPos.x;
+		trace.m_vec2DPos.y = hideoutPos.y;
+		trace.m_eBlipDisplay = BLIP_DISPLAY_BLIP_ONLY;
+		foundSaveBlip = true;
+	}
+	if (!foundSaveBlip) {
+		int32 blip = CRadar::SetCoordBlip(BLIP_COORD, hideoutPos, RADAR_TRACE_GREEN, BLIP_DISPLAY_BLIP_ONLY);
+		CRadar::SetBlipSprite(blip, RADAR_SPRITE_SAVE);
 	}
 }
 
@@ -763,6 +786,7 @@ CGameLogic::Update()
 	if (CCutsceneMgr::IsCutsceneProcessing()) return;
 
 	CPlayerInfo &pPlayerInfo = CWorld::Players[CWorld::PlayerInFocus];
+	EnsureCustomHideoutRadarBlip();
 	if (pPlayerInfo.m_WBState == WBSTATE_PLAYING)
 		UpdateCorleoneVilla();
 	switch (pPlayerInfo.m_WBState) {
@@ -800,7 +824,6 @@ CGameLogic::Update()
 				pPlayerInfo.m_bGetOutOfHospitalFree = false;
 			} else {
 				pPlayerInfo.m_nMoney = Max(0, pPlayerInfo.m_nMoney - 1000);
-				pPlayerInfo.m_pPed->ClearWeapons();
 			}
 
 			if (pPlayerInfo.m_pPed->bInVehicle) {
