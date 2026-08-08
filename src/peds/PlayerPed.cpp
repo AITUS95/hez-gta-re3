@@ -52,7 +52,7 @@ IsRivalGangVehicleForTargeting(const CVehicle *vehicle)
 	case MI_YARDIE:
 	case MI_YAKUZA:
 	case MI_DIABLOS:
-	case MI_COLUMB:
+	case MI_MAFIA:
 	case MI_HOODS:
 	case MI_PANLANT:
 		return true;
