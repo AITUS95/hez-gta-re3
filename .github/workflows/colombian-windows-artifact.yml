@@ -1,5 +1,6 @@
 name: Colombian Windows artifact
 # Builds and packages the final Colombian Cartel gameplay variant.
+# Validates hideout color, death inventory, and radar fixes.
 
 on:
   workflow_dispatch:
