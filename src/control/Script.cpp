@@ -2766,9 +2766,27 @@ int8 CRunningScript::ProcessCommands200To299(int32 command)
 		return 0;
 	case COMMAND_IS_CHAR_DEAD:
 	{
+		uint32 commandIp = m_nIp - sizeof(uint16);
 		CollectParameters(&m_nIp, 1);
 		CPed* pPed = CPools::GetPedPool()->GetAt(ScriptParams[0]);
-		UpdateCompareFlag(!pPed || pPed->GetPedState() == PED_DIE || pPed->GetPedState() == PED_DEAD);
+		bool vigilante = m_bIsMissionScript && strcmp(m_abScriptName, "copcar") == 0;
+		if (vigilante && pPed && !CPoliceDuty::IsOfficer(pPed)) {
+			// COPCAR polls its criminal here each frame. Also repairs the flag
+			// in saved missions without changing immunity in unrelated scripts.
+			pPed->bOnlyDamagedByPlayer = false;
+			if (!pPed->DyingOrDead() && pPed->GetPedState() != PED_ARRESTED && !CPoliceDuty::IsSuspect(pPed))
+				CPoliceDuty::AddSuspicion(pPed, 2);
+		}
+		if (vigilante && pPed && pPed->GetPedState() == PED_ARRESTED && !CPoliceDuty::IsArrestComplete(pPed)) {
+			// Yield this thread at the poll, so its escape/leave-car commands
+			// cannot overwrite custody while the officer completes the pose.
+			m_nIp = commandIp;
+			return 1;
+		}
+		// Only Vigilante treats custody as completion; the ped stays alive.
+		// Its original reward, cleanup and next-criminal code then runs unchanged.
+		UpdateCompareFlag(!pPed || pPed->GetPedState() == PED_DIE || pPed->GetPedState() == PED_DEAD ||
+			(vigilante && CPoliceDuty::IsArrestComplete(pPed)));
 		return 0;
 	}
 	case COMMAND_IS_CAR_DEAD:

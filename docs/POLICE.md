@@ -206,3 +206,20 @@ un comportamento degli agenti per lanciarle. `CAutomobile::BurstTyre` e la
 fisica delle gomme danneggiate esistono, ma non costituiscono quel sistema.
 Non vengono simulate forature a distanza o aggiunte strisce invisibili:
 il lancio di strisce chiodate rimane una funzionalità non implementata.
+
+### Bersagli Vigilante e arresti alla portiera
+
+Il controllo del criminale nel thread missione `COPCAR` rimuove la protezione
+«danneggiabile solo dal giocatore» anche nelle missioni caricate da salvataggio
+e registra il bersaglio nel sistema di sospetto per il supporto degli alleati.
+Solo quel thread riconosce anche l'arresto concluso come esito del controllo
+originale di eliminazione: il sospetto rimane vivo, mentre premi, contatore,
+pulizia e generazione del prossimo ricercato seguono il codice SCM originale.
+Durante la posa di arresto il thread attende, evitando ordini di fuga o uscita
+dall'auto che annullerebbero la custodia. Le altre missioni e i loro controlli
+di morte/protezione non vengono modificati.
+
+L'agente termina correttamente l'ingresso/carjacking, rilascia le prenotazioni
+della portiera e disattiva i callback della vecchia animazione prima di arrestare
+un NPC. La posa non riapplica l'allineamento alla portiera di Claude; il mezzo
+del sospetto viene fermato senza riutilizzare lo stato del veicolo del giocatore.

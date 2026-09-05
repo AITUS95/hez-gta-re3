@@ -93,12 +93,26 @@ CCopPed::SetArrestPlayer(CPed *player)
 
 	if (!player->IsPlayer()) {
 		if (player->DyingOrDead()) return;
+		// Finish the car-entry lifecycle before switching to the arrest pose.
+		// A stale vehicle callback/alignment otherwise moves the officer again.
+		if (!bInVehicle && (EnteringCar() || m_pVehicleAnim)) {
+			if (m_pVehicleAnim) {
+				m_pVehicleAnim->SetFinishCallback(nil, nil);
+				m_pVehicleAnim->SetDeleteCallback(nil, nil);
+			}
+			QuitEnteringCar();
+		}
+		SetMoveState(PEDMOVE_STILL);
+		m_vecMoveSpeed = CVector(0.0f, 0.0f, 0.0f);
+		m_vecTurnSpeed = CVector(0.0f, 0.0f, 0.0f);
 		player->ClearObjective();
 		player->ClearAttack();
 		player->SetPedState(PED_ARRESTED);
 		if (player->bInVehicle && player->m_pMyVehicle) {
 			player->m_pMyVehicle->AutoPilot.m_nCarMission = MISSION_STOP_FOREVER;
 			player->m_pMyVehicle->bIsHandbrakeOn = true;
+			player->m_pMyVehicle->m_vecMoveSpeed = CVector(0.0f, 0.0f, 0.0f);
+			player->m_pMyVehicle->m_vecTurnSpeed = CVector(0.0f, 0.0f, 0.0f);
 		}
 		SetPedState(PED_ARREST_PLAYER);
 		m_nPedStateTimer = CTimer::GetTimeInMilliseconds() + 2000;
@@ -269,7 +283,7 @@ CCopPed::ArrestPlayer(void)
 		if (suspect->CanSetPedState())
 			suspect->SetPedState(PED_ARRESTED);
 
-		if (suspect->bInVehicle && m_pMyVehicle && suspect->m_pMyVehicle == m_pMyVehicle) {
+		if (suspect->IsPlayer() && suspect->bInVehicle && m_pMyVehicle && suspect->m_pMyVehicle == m_pMyVehicle) {
 
 			// BUG? I will never understand why they used LINE_UP_TO_CAR_2...
 			LineUpPedWithCar(LINE_UP_TO_CAR_2);

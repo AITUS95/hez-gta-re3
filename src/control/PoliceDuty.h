@@ -26,6 +26,7 @@ public:
 	static void ReportAttack(CEntity *attacker, CEntity *victim);
 	static void AddSuspicion(CEntity *entity, int level = 0);
 	static bool IsSuspect(CPed *ped);
+	static bool IsArrestComplete(CPed *ped);
 	static bool IsSpawnedOfficer(CPed *ped);
 	static bool IsDesignating();
 	static bool ScriptIntCompare(const char *thread, int32 *variable, int32 value);

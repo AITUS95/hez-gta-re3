@@ -429,6 +429,19 @@ void CPoliceDuty::ReportAttack(CEntity *attacker, CEntity *victim)
 	}
 }
 
+bool CPoliceDuty::IsArrestComplete(CPed *ped)
+{
+	if (!ped || ped->GetPedState() != PED_ARRESTED) return false;
+	// Let the arrest pose finish before SCM releases the suspect and advances.
+	// Pool traversal needs no extra persistent references or save fields.
+	for (int i = 0; i < CPools::GetPedPool()->GetSize(); ++i) {
+		CPed *officer = CPools::GetPedPool()->GetSlot(i);
+		if (officer && officer->GetPedState() == PED_ARREST_PLAYER && officer->m_pSeekTarget == ped)
+			return false;
+	}
+	return true;
+}
+
 bool CPoliceDuty::IsSuspect(CPed *ped)
 {
 	for (int i = 0; i < MAX_INCIDENTS; ++i) if (Valid(incidents[i]) && PedOf(incidents[i]) == ped) return true;
