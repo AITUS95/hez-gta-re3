@@ -25,6 +25,8 @@
 #include "Game.h"
 #include "Hud.h"
 #include "Replay.h"
+#include "ControllerConfig.h"
+#include "Frontend.h"
 
 namespace {
 const int MAX_INCIDENTS = 32;
@@ -58,6 +60,54 @@ void Release(CEntity **ref)
 	CEntity *old = *ref;
 	*ref = nil;
 	if (old) old->PruneReferences();
+}
+
+bool ActionDown(e_ControllerAction action)
+{
+	// Read the configured PC binding directly: the input mapper normally drops
+	// PED_LOCK_TARGET when driving, before it reaches CPad::GetTarget.
+	for (int type = KEYBOARD; type <= OPTIONAL_EXTRA; ++type) {
+		int key = ControlsManager.GetControllerKeyAssociatedWithAction(action, (eControllerType)type);
+		if (key >= 0 && key != rsNULL && ControlsManager.GetIsKeyboardKeyDown((RsKeyCodes)key)) return true;
+	}
+	int button = ControlsManager.GetControllerKeyAssociatedWithAction(action, MOUSE);
+	return button > 0 && ControlsManager.GetIsMouseButtonDown((RsKeyCodes)button);
+}
+
+bool CanDesignate(CEntity *entity)
+{
+	if (!entity || entity == FindPlayerPed() || entity == FindPlayerVehicle()) return false;
+	if (entity->IsPed()) {
+		CPed *ped = (CPed*)entity;
+		return !ped->DyingOrDead() && !ped->bInVehicle && ped->m_nPedState != PED_ARRESTED && !CPoliceDuty::IsOfficer(ped);
+	}
+	if (entity->IsVehicle()) {
+		CVehicle *car = (CVehicle*)entity;
+		return car->GetStatus() != STATUS_WRECKED && car->m_fHealth > 0.0f && !CPoliceDuty::IsOfficer(car);
+	}
+	return false;
+}
+
+void ConsiderAimTarget(CEntity *candidate, const CVector &source, const CVector &direction, CEntity *&best, float &bestScore)
+{
+	if (!CanDesignate(candidate) || (candidate->GetPosition() - FindPlayerCoors()).MagnitudeSqr() > sq(100.0f)) return;
+	CVector offset = candidate->GetBoundCentre() - source;
+	float distance = offset.Magnitude();
+	if (distance < 0.1f) return;
+	float alignment = DotProduct(offset, direction) / distance;
+	// A small acquisition cone, like the vanilla lock-on search, also works for
+	// neutral peds and vehicles. It does not depend on unarmed weapon range.
+	if (alignment < Cos(DEGTORAD(25.0f))) return;
+	float score = (1.0f - alignment) * 1000.0f + distance * 0.02f;
+	if (candidate == marked) score *= 0.8f;
+	if (score >= bestScore) return;
+	CColPoint point;
+	CEntity *obstacle = nil;
+	bool blocked = CWorld::ProcessLineOfSight(source, candidate->GetBoundCentre(), point, obstacle,
+		true, true, true, true, true, false, false);
+	if (blocked && obstacle != candidate) return;
+	best = candidate;
+	bestScore = score;
 }
 
 CPed *PedOf(Incident &incident)
@@ -412,7 +462,9 @@ bool CPoliceDuty::IsDesignating()
 	CPlayerPed *player = FindPlayerPed();
 	CPad *pad = CPad::GetPad(0);
 	return ready && shiftStarted && player && !player->DyingOrDead() && !pad->ArePlayerControlsDisabled() &&
-		(pad->GetTarget() || pad->GetRightMouse()) && (player->bInVehicle || player->GetWeapon()->m_eWeaponType == WEAPONTYPE_UNARMED);
+		!FrontEndMenuManager.GetIsMenuActive() && !CReplay::IsPlayingBack() &&
+		(ActionDown(PED_LOCK_TARGET) || pad->GetTarget() || pad->GetRightMouse()) &&
+		(player->bInVehicle || player->GetWeapon()->m_eWeaponType == WEAPONTYPE_UNARMED);
 }
 
 bool CPoliceDuty::ScriptIntCompare(const char *thread, int32 *variable, int32 value)
@@ -503,25 +555,49 @@ void CPoliceDuty::Update()
 		if (pad->GetFJustDown(7)) SpawnOfficer(COP_FBI);
 		if (pad->GetFJustDown(8)) SpawnOfficer(COP_ARMY);
 	}
-	bool fire = pad->GetWeaponInput() || (FindPlayerVehicle() && pad->GetCarGunInput());
+}
+
+void CPoliceDuty::UpdateAim()
+{
+	// Run AFTER ped controls and camera processing. ClearWeaponTarget otherwise
+	// erases the marker in unarmed/vehicle states before anything is rendered.
+	if (!ready || !shiftStarted || !FindPlayerPed()) return;
+	CPad *pad = CPad::GetPad(0);
+	bool fire = ActionDown(PED_FIREWEAPON) || pad->GetWeaponInput() || (FindPlayerVehicle() && pad->GetCarGunInput());
 	if (IsDesignating()) {
-		CVector source, end;
-		TheCamera.Find3rdPersonCamTargetVector(100.0f, FindPlayerCoors(), source, end);
+		CCam &camera = TheCamera.Cams[TheCamera.ActiveCam];
+		CVector source = camera.Source;
+		CVector direction = camera.Front;
+		direction.Normalise();
 		CColPoint point;
 		CEntity *hit = nil;
+		CEntity *oldIgnore = CWorld::pIgnoreEntity;
 		CWorld::pIgnoreEntity = FindPlayerVehicle() ? (CEntity*)FindPlayerVehicle() : (CEntity*)FindPlayerPed();
-		CWorld::ProcessLineOfSight(source, end, point, hit, true, true, true, true, true, false, false);
-		CWorld::pIgnoreEntity = nil;
-		Release(&marked);
-		if (hit && (hit->IsPed() || hit->IsVehicle()) && hit != FindPlayerPed() && hit != FindPlayerVehicle()) {
+		CWorld::ProcessLineOfSight(source, source + direction * 100.0f, point, hit, true, true, true, true, true, false, false);
+		if (!CanDesignate(hit)) {
+			hit = nil;
+			float score = 1.0e20f;
+			for (int i = 0; i < CPools::GetPedPool()->GetSize(); ++i)
+				ConsiderAimTarget(CPools::GetPedPool()->GetSlot(i), source, direction, hit, score);
+			for (int i = 0; i < CPools::GetVehiclePool()->GetSize(); ++i)
+				ConsiderAimTarget(CPools::GetVehiclePool()->GetSlot(i), source, direction, hit, score);
+		}
+		CWorld::pIgnoreEntity = oldIgnore;
+		if (marked != hit) {
+			Release(&marked);
 			marked = hit;
-			hit->RegisterReference(&marked);
+			if (marked) marked->RegisterReference(&marked);
+		}
+		if (marked) {
 			if (fire && !fireHeld) AddSuspicion(marked);
 			int level = 0;
 			for (int i = 0; i < MAX_INCIDENTS; ++i) if (incidents[i].entity == marked) level = incidents[i].wanted.GetWantedLevel();
 			CWeaponEffects::MarkTarget(hit->GetBoundCentre(), 32 + level * 32, 224 - level * 32, 32, 255, 0.6f + level * 0.1f);
-			marking = true;
-		} else CWeaponEffects::ClearCrossHair();
+		} else {
+			// Visible aiming feedback even before a target is acquired.
+			CWeaponEffects::MarkTarget(source + direction * 10.0f, 220, 220, 220, 255, 0.08f);
+		}
+		marking = true;
 	} else if (marking) {
 		CWeaponEffects::ClearCrossHair();
 		Release(&marked);

@@ -17,6 +17,7 @@ public:
 	static void BeginShift();
 	static void RestoreShift();
 	static void Update();
+	static void UpdateAim();
 	static void EquipPlayer();
 	static bool IsPlayerWanted(const CWanted *wanted);
 	static bool IsOfficer(CEntity *entity);

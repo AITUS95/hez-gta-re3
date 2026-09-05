@@ -2249,7 +2249,7 @@ CAutomobile::ProcessControlInputs(uint8 pad)
 		bIsHandbrakeOn = !!CPad::GetPad(pad)->GetHandBrake();
 
 	// Steer left/right
-	if(CCamera::m_bUseMouse3rdPerson && !CVehicle::m_bDisableMouseSteering){
+	if(CCamera::m_bUseMouse3rdPerson && !CVehicle::m_bDisableMouseSteering && !CPoliceDuty::IsDesignating()){
 		if(CPad::GetPad(pad)->GetMouseX() != 0.0f){
 			m_fSteerInput += fMouseSteerSens*CPad::GetPad(pad)->GetMouseX();
 			nLastControlInput = 2;

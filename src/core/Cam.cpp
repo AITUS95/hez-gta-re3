@@ -1,4 +1,5 @@
 #include "common.h"
+#include "PoliceDuty.h"
 
 #include "main.h"
 #include "Draw.h"
@@ -138,6 +139,17 @@ CCam::Process(void)
 		SpeedVar = 0.0f;
 	}
 
+	// A different follow-camera callback needs fresh history and angles.
+	// Track each camera without changing CCam's saved layout.
+	static bool wasDesignating[ARRAY_SIZE(TheCamera.Cams)] = {};
+	for (int i = 0; i < ARRAY_SIZE(TheCamera.Cams); ++i) {
+		if (this != &TheCamera.Cams[i]) continue;
+		bool designating = CPoliceDuty::IsDesignating();
+		if (wasDesignating[i] != designating) ResetStatics = true;
+		wasDesignating[i] = designating;
+		break;
+	}
+
 	switch(Mode){
 	case MODE_TOPDOWN:
 	case MODE_GTACLASSIC:
@@ -148,7 +160,7 @@ CCam::Process(void)
 		break;
 	case MODE_FOLLOWPED:
 #ifdef PC_PLAYER_CONTROLS
-		if(CCamera::m_bUseMouse3rdPerson)
+		if(CCamera::m_bUseMouse3rdPerson || CPoliceDuty::IsDesignating())
 			Process_FollowPedWithMouse(CameraTarget, TargetOrientation, SpeedVar, TargetSpeedVar);
 		else
 #endif
@@ -196,7 +208,7 @@ CCam::Process(void)
 		break;
 	case MODE_CAM_ON_A_STRING:
 #ifdef FREE_CAM
-		if(CCamera::bFreeCam && !CVehicle::bCheat5)
+		if((CCamera::bFreeCam || CPoliceDuty::IsDesignating()) && !CVehicle::bCheat5)
 			Process_FollowCar_SA(CameraTarget, TargetOrientation, SpeedVar, TargetSpeedVar);
 		else
 #endif
@@ -213,7 +225,7 @@ CCam::Process(void)
 		break;
 	case MODE_BEHINDBOAT:
 #ifdef FREE_CAM
-		if (CCamera::bFreeCam)
+		if (CCamera::bFreeCam || CPoliceDuty::IsDesignating())
 			Process_FollowCar_SA(CameraTarget, TargetOrientation, SpeedVar, TargetSpeedVar);
 		else
 #endif
@@ -5088,14 +5100,14 @@ CCam::Process_FollowCar_SA(const CVector& CameraTarget, float TargetOrientation,
 	bool mouseChangesBeta = false;
 
 	// FIX: Disable mouse movement in drive-by, it's buggy. Original SA bug.
-	if (/*bFreeMouseCam &&*/ CCamera::m_bUseMouse3rdPerson && !pad->ArePlayerControlsDisabled() && nextDirectionIsForward) {
+	if ((CCamera::m_bUseMouse3rdPerson || CPoliceDuty::IsDesignating()) && !pad->ArePlayerControlsDisabled() && nextDirectionIsForward) {
 		float mouseY = pad->GetMouseY() * 2.0f;
 		float mouseX = pad->GetMouseX() * -2.0f;
 
 		// If you want an ability to toggle free cam while steering with mouse, you can add an OR after DisableMouseSteering.
 		// There was a pad->NewState.m_bVehicleMouseLook in SA, which doesn't exists in III.
 
-		if ((mouseX != 0.0 || mouseY != 0.0) && (CVehicle::m_bDisableMouseSteering)) {
+		if ((mouseX != 0.0 || mouseY != 0.0) && (CVehicle::m_bDisableMouseSteering || CPoliceDuty::IsDesignating())) {
 			yMovement = mouseY * FOV / 80.0f * TheCamera.m_fMouseAccelHorzntl; // Same as SA, horizontal sensitivity.
 			BetaSpeed = 0.0;
 			AlphaSpeed = 0.0;

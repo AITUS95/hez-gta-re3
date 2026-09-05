@@ -1088,6 +1088,7 @@ void CGame::Process(void)
 		CTimeCycle::Update();
 		if (CReplay::ShouldStandardCameraBeProcessed())
 			TheCamera.Process();
+		CPoliceDuty::UpdateAim();
 		CCullZones::Update();
 		if (!CReplay::IsPlayingBack())
 			CGameLogic::Update();
