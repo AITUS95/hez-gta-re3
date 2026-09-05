@@ -55,7 +55,8 @@ originale e richiede un esplosivo associato al suo utilizzatore.
 | **F9** | Genera un militare |
 | **Blocco Maiuscole / +** | Attiva/disattiva Vigilante su Police, Enforcer, FBI o Rhino (comando configurabile `TOGGLE_SUBMISSIONS`) |
 | **A piedi: L1 + Cerchio** | Aumenta di una stella il sospetto, anche con un’arma equipaggiata |
-| **In veicolo: L1 + Cerchio** | Stessa designazione su pedoni o altri veicoli |
+| **In veicolo: L1 + Cerchio** | Stessa designazione su pedoni o veicoli occupati |
+| **L1 + R2 / L2** | Bersaglio successivo / precedente, in ordine orizzontale con ritorno circolare |
 
 I tasti funzionali sono documentati anche nel codice: l'array `CPad::F` parte
 da zero (F6 corrisponde all'indice 5). Gli agenti vengono collocati in una
@@ -84,7 +85,7 @@ bersagli dietro ostacoli. Sono esclusi anche i bersagli alle spalle del giocator
 rispetto alla direzione di mira, compresi quelli fra camera e giocatore. La mira
 disarmata conserva la direzione della visuale, cancella eventuali agganci della
 vecchia arma e impedisce il ricentraggio automatico e la camera da combattimento
-durante la designazione. Anche pedoni neutrali e veicoli vuoti sono selezionabili.
+durante la designazione. Anche pedoni neutrali sono selezionabili; le auto vuote sono escluse.
 Il marcatore vanilla diventa colorato sul bersaglio acquisito; il messaggio
 «Sospetto: N / 6» mostra il livello dopo ogni incremento. Il marcatore viene
 aggiornato dopo i controlli del giocatore e la camera, così la pulizia vanilla
@@ -229,3 +230,14 @@ L'agente termina correttamente l'ingresso/carjacking, rilascia le prenotazioni
 della portiera e disattiva i callback della vecchia animazione prima di arrestare
 un NPC. La posa non riapplica l'allineamento alla portiera di Claude; il mezzo
 del sospetto viene fermato senza riutilizzare lo stato del veicolo del giocatore.
+
+### Cambio bersaglio con L1
+
+Le auto sono selezionabili solo se contengono almeno un occupante vivo e non
+arrestato. R2/L2, mentre si tiene L1, scorrono i bersagli validi da sinistra a
+destra e viceversa, con ritorno circolare. Si applicano gli stessi controlli
+di distanza, cono frontale e visibilità della selezione normale. Il bersaglio
+scelto rimane agganciato finché valido e visibile o fino al rilascio di L1;
+non viene sovrascritto dal raggio centrale al fotogramma successivo.
+Durante L1 questi pulsanti non cambiano arma né ruotano la visuale laterale
+in auto. Fuori dalla designazione mantengono le funzioni originali.

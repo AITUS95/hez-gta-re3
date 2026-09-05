@@ -50,6 +50,7 @@ bool ready;
 bool shiftStarted;
 bool fireHeld;
 bool marking;
+bool cycledTarget;
 CEntity *marked;
 int32 *portlandSaveRadar;
 
@@ -71,7 +72,11 @@ bool CanDesignate(CEntity *entity)
 	}
 	if (entity->IsVehicle()) {
 		CVehicle *car = (CVehicle*)entity;
-		return car->GetStatus() != STATUS_WRECKED && car->m_fHealth > 0.0f && !CPoliceDuty::IsOfficer(car);
+		if (car->GetStatus() == STATUS_WRECKED || car->m_fHealth <= 0.0f || CPoliceDuty::IsOfficer(car)) return false;
+		if (car->pDriver && !car->pDriver->DyingOrDead() && car->pDriver->GetPedState() != PED_ARRESTED) return true;
+		for (int i = 0; i < ARRAY_SIZE(car->pPassengers); ++i)
+			if (car->pPassengers[i] && !car->pPassengers[i]->DyingOrDead() && car->pPassengers[i]->GetPedState() != PED_ARRESTED) return true;
+		return false;
 	}
 	return false;
 }
@@ -260,7 +265,7 @@ void CPoliceDuty::Init()
 	noIncident.Initialise();
 	noIncident.m_bIgnoredByCops = true;
 	ready = true;
-	shiftStarted = fireHeld = marking = false;
+	shiftStarted = fireHeld = marking = cycledTarget = false;
 	marked = nil;
 	portlandSaveRadar = nil;
 }
@@ -597,6 +602,45 @@ void CPoliceDuty::UpdateAim()
 			for (int i = 0; i < CPools::GetVehiclePool()->GetSize(); ++i)
 				ConsiderAimTarget(CPools::GetVehiclePool()->GetSlot(i), source, direction, hit, score);
 		}
+		// Keep a manually cycled target until release or loss of eligibility.
+		if (cycledTarget) {
+			CEntity *kept = nil;
+			float score = 1.0e20f;
+			ConsiderAimTarget(marked, source, direction, kept, score);
+			if (kept) hit = kept;
+			else cycledTarget = false;
+		}
+		bool next = pad->GetRightShoulder2JustDown();
+		bool previous = pad->GetLeftShoulder2JustDown();
+		if (next != previous) {
+			CEntity *targets[NUMPEDS + NUMVEHICLES];
+			float angles[NUMPEDS + NUMVEHICLES];
+			int count = 0;
+			CVector right(direction.y, -direction.x, 0.0f);
+			// Reuse the same cone, range and line-of-sight checks as acquisition.
+			auto collect = [&](CEntity *candidate) {
+				CEntity *valid = nil;
+				float score = 1.0e20f;
+				ConsiderAimTarget(candidate, source, direction, valid, score);
+				if (!valid || count == ARRAY_SIZE(targets)) return;
+				CVector offset = valid->GetBoundCentre() - source;
+				float angle = DotProduct(offset, right) / Max(0.01f, DotProduct(offset, direction));
+				int i = count++;
+				while (i > 0 && angles[i - 1] > angle) {
+					targets[i] = targets[i - 1]; angles[i] = angles[i - 1]; --i;
+				}
+				targets[i] = valid; angles[i] = angle;
+			};
+			for (int i = 0; i < CPools::GetPedPool()->GetSize(); ++i) collect(CPools::GetPedPool()->GetSlot(i));
+			for (int i = 0; i < CPools::GetVehiclePool()->GetSize(); ++i) collect(CPools::GetVehiclePool()->GetSlot(i));
+			if (count) {
+				int index = -1;
+				for (int i = 0; i < count; ++i) if (targets[i] == hit) index = i;
+				index = index < 0 ? (next ? 0 : count - 1) : (index + (next ? 1 : count - 1)) % count;
+				hit = targets[index];
+				cycledTarget = true;
+			}
+		}
 		CWorld::pIgnoreEntity = oldIgnore;
 		if (marked != hit) {
 			Release(&marked);
@@ -617,6 +661,7 @@ void CPoliceDuty::UpdateAim()
 		CWeaponEffects::ClearCrossHair();
 		Release(&marked);
 		marking = false;
+		cycledTarget = false;
 	}
 	fireHeld = fire;
 }

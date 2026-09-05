@@ -1741,6 +1741,7 @@ int16 CPad::GetAnalogueUpDown(void)
 
 bool CPad::GetLookLeft(void)
 {
+	if (CPoliceDuty::IsDesignating()) return false; // L2/R2 cycle duty targets.
 	if ( ArePlayerControlsDisabled() )
 		return false;
 
@@ -1749,6 +1750,7 @@ bool CPad::GetLookLeft(void)
 
 bool CPad::GetLookRight(void)
 {
+	if (CPoliceDuty::IsDesignating()) return false; // L2/R2 cycle duty targets.
 	if ( ArePlayerControlsDisabled() )
 		return false;
 
@@ -1758,6 +1760,7 @@ bool CPad::GetLookRight(void)
 
 bool CPad::GetLookBehindForCar(void)
 {
+	if (CPoliceDuty::IsDesignating()) return false; // L2/R2 cycle duty targets.
 	if ( ArePlayerControlsDisabled() )
 		return false;
 
@@ -2236,6 +2239,7 @@ bool CPad::ChangeStationJustDown(void)
 
 bool CPad::CycleWeaponLeftJustDown(void)
 {
+	if (CPoliceDuty::IsDesignating()) return false; // L2/R2 cycle duty targets.
 	if ( ArePlayerControlsDisabled() )
 		return false;
 
@@ -2244,6 +2248,7 @@ bool CPad::CycleWeaponLeftJustDown(void)
 
 bool CPad::CycleWeaponRightJustDown(void)
 {
+	if (CPoliceDuty::IsDesignating()) return false; // L2/R2 cycle duty targets.
 	if ( ArePlayerControlsDisabled() )
 		return false;
 
