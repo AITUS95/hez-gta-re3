@@ -27,6 +27,7 @@ public:
 	static bool IsSuspect(CPed *ped);
 	static bool IsSpawnedOfficer(CPed *ped);
 	static bool IsDesignating();
+	static bool ScriptIntCompare(const char *thread, int32 *variable, int32 value);
 	static void SpawnOfficer(int type);
 
 	// A null officer selects the dispatch incident (highest level, nearest player).

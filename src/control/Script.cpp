@@ -1198,7 +1198,7 @@ int8 CRunningScript::ProcessCommands0To99(int32 command)
 	{
 		int32* ptr = GetPointerToScriptVariable(&m_nIp, VAR_GLOBAL);
 		CollectParameters(&m_nIp, 1);
-		UpdateCompareFlag(*ptr == ScriptParams[0]);
+		UpdateCompareFlag(CPoliceDuty::ScriptIntCompare(m_abScriptName, ptr, ScriptParams[0]));
 		return 0;
 	}
 	case COMMAND_IS_INT_LVAR_EQUAL_TO_NUMBER:

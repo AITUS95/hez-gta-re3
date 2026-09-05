@@ -344,7 +344,7 @@ void CCarAI::UpdateCarAI(CVehicle* pVehicle)
 					pVehicle->AutoPilot.m_nCruiseSpeed = FindPoliceCarSpeedForWantedLevel(pVehicle);
 					pVehicle->SetStatus(STATUS_PHYSICS);
 					pVehicle->AutoPilot.m_nCarMission = 
-						FindPoliceCarMissionForWantedLevel();
+						FindPoliceCarMissionForWantedLevel(pVehicle);
 					pVehicle->AutoPilot.m_nTempAction = TEMPACT_NONE;
 					pVehicle->AutoPilot.m_nDrivingStyle = DRIVINGSTYLE_AVOID_CARS;
 				}else if (pVehicle->AutoPilot.m_nCarMission == MISSION_CRUISE){
@@ -550,9 +550,9 @@ void CCarAI::TellCarToBlockOtherCar(CVehicle* pVehicle, CVehicle* pTarget)
 	pVehicle->AutoPilot.m_nCruiseSpeed = Max(6, pVehicle->AutoPilot.m_nCruiseSpeed);
 }
 
-uint8 CCarAI::FindPoliceCarMissionForWantedLevel()
+uint8 CCarAI::FindPoliceCarMissionForWantedLevel(CVehicle *vehicle)
 {
-	switch (CPoliceDuty::WantedFor()->GetWantedLevel()){
+	switch ((vehicle ? CPoliceDuty::CarWanted(vehicle) : CPoliceDuty::WantedFor())->GetWantedLevel()){
 	case 0:
 	case 1: return MISSION_BLOCKPLAYER_FARAWAY;
 	case 2: return (CGeneral::GetRandomNumber() & 3) >= 3 ? MISSION_RAMPLAYER_FARAWAY : MISSION_BLOCKPLAYER_FARAWAY;
@@ -566,7 +566,9 @@ uint8 CCarAI::FindPoliceCarMissionForWantedLevel()
 
 int32 CCarAI::FindPoliceCarSpeedForWantedLevel(CVehicle* pVehicle)
 {
-	switch (CPoliceDuty::CarWanted(pVehicle)->GetWantedLevel()) {
+	// Generation calculates the initial speed before installing the cop driver.
+	CWanted *wanted = pVehicle->pDriver ? CPoliceDuty::CarWanted(pVehicle) : CPoliceDuty::WantedFor();
+	switch (wanted->GetWantedLevel()) {
 	case 0: return CGeneral::GetRandomNumberInRange(12, 16);
 	case 1: return 25;
 	case 2: return 34;

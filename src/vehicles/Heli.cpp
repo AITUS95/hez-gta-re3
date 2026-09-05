@@ -530,7 +530,7 @@ CHeli::ProcessControl(void)
 	// Drop Catalina's bombs
 	if(m_heliType == HELI_TYPE_CATALINA && m_pathState > 8 && (CTimer::GetTimeInMilliseconds()>>9) != (CTimer::GetPreviousTimeInMilliseconds()>>9)){
 		CVector bombPos = GetPosition() - 60.0f*m_vecMoveSpeed;
-		if(sq(CPoliceDuty::TargetPosition().x-bombPos.x) + sq(CPoliceDuty::TargetPosition().y-bombPos.y) < sq(35.0f)){
+		if(sq(FindPlayerCoors().x-bombPos.x) + sq(FindPlayerCoors().y-bombPos.y) < sq(35.0f)){
 			bool found;
 			float groundZ = CWorld::FindGroundZFor3DCoord(bombPos.x, bombPos.y, bombPos.z, &found);
 			float waterZ;
@@ -653,7 +653,7 @@ CHeli::PreRenderAlways(void)
 			50.0f, true, 1.0f);
 
 		CVector front = GetMatrix() * CVector(0.0f, 7.0f, 0.0f);
-		CVector toPlayer = CPoliceDuty::TargetPosition() - front;
+		CVector toPlayer = FindPlayerCoors() - front;
 		toPlayer.Normalise();
 		float intensity = m_fSearchLightIntensity*sq(CTimeCycle::GetSpriteBrightness());
 		if(DotProduct(toPlayer, TheCamera.GetForward()) < -0.8f)

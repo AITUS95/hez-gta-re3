@@ -20,6 +20,11 @@ create dal MAIN. Le barriere di ponti, tunnel, metropolitana e aree recintate
 vincolate alla storia perdono visibilità **e collisione**, conservando gli handle
 SCM. Il ponte levatoio mantiene il suo ciclo vanilla. Non vengono inventati
 missioni completate, pacchetti raccolti o un falso valore statistico del 100%.
+I thread originali `C_RSTRT` e `S_RSTRT` impostano i rispettivi flag di isola
+aperta quando ne leggono l'operando; `I_SAVE` può aprire il rifugio di Portland
+senza completare Luigi's Girls. Gli altri controlli di radar, salvataggio e
+missione rimangono originali. I respawn mantengono disponibili tutti e sei i
+livelli Wanted per gli NPC, anche a Portland.
 
 La camminata deriva dal gruppo animazioni del modello `MI_COP` in `ped.ide`,
 anche quando cambia l'arma; combattimento e controlli restano quelli del motore.
@@ -103,13 +108,19 @@ la disposizione in memoria delle classi vanilla né il formato dei salvataggi.
 
 ## Build e limiti tecnici
 
-La workflow esistente `.github/workflows/re3_msvc_amd64.yml` compila e collega
+La workflow `.github/workflows/police-windows.yml` compila e collega
 Debug e Release x64/D3D9/OpenAL con MSVC v143 su `windows-2022`. Usa i submodule
 fissati dal repository, Premake e le dipendenze audio già incluse. Ogni errore
 interrompe il job; gli eseguibili e le DLL vengono pubblicati come artifact.
 Le vecchie workflow di altre piattaforme non scattano per il branch `police`.
 
-La validazione di questa modifica è **solo compilazione**: nessun avvio del
+La configurazione sostituisce, nel solo branch `police`, la precedente
+`re3_msvc_amd64.yml`, disattivata manualmente nelle impostazioni GitHub.
+Il nuovo percorso consente una workflow attiva per questo branch senza
+riattivare le vecchie build degli altri branch e senza duplicare la build x64.
+
+La build completa locale Release x64/OpenGL/GLFW/OpenAL è stata compilata e
+collegata con CMake e GCC 13.3. La validazione è **solo compilazione**: nessun avvio del
 gioco, test di gameplay, emulatore o test automatico aggiuntivo.
 
 Limiti espliciti:
@@ -118,8 +129,9 @@ Limiti espliciti:
   normali pattuglie; lo spawn rispetta lo spazio libero del pool e le collisioni.
 - Streaming e popolazione restano centrati sul vero giocatore. Un sospetto
   rimosso dal mondo non viene mantenuto artificialmente in memoria.
-- La risposta generale seleziona un incidente prioritario; gli agenti già
-  assegnati possono inseguire incidenti diversi. Il motore non diventa una
+- La risposta generale seleziona un incidente prioritario; agenti e pattuglie
+  già assegnati conservano il proprio incidente anche passando dal veicolo
+  all'inseguimento a piedi. Sono disponibili 32 assegnazioni veicolari simultanee. Il motore non diventa una
   simulazione globale di tutti i sospetti su isole non caricate.
 - Sospetti e richiami sono transitori e non vengono serializzati. Caricando
   un salvataggio si ripristinano uniforme, armi e sblocco del mondo, conservando
@@ -128,3 +140,14 @@ Limiti espliciti:
 - Per un veicolo vuoto non esiste una persona da arrestare. Si chiude il relativo
   inseguimento alla distruzione o invalidazione del veicolo. L'arresto degli NPC
   riusa le condizioni vanilla, senza aggiungere trasporto in centrale o detenzione.
+
+## File interessati
+
+- Build Windows e filtri delle workflow esistenti: `.github/workflows/build-cmake-conan.yml`, `.github/workflows/build-switch.yml`, `.github/workflows/police-windows.yml` (sostituisce `re3_msvc_amd64.yml`), `.github/workflows/re3_msvc_x86.yml`.
+- Avvio SCM, registro sospetti, inseguimenti e posti di blocco: `src/control/CarAI.cpp`, `src/control/CarAI.h`, `src/control/CarCtrl.cpp`, `src/control/PoliceDuty.cpp`, `src/control/PoliceDuty.h`, `src/control/RoadBlocks.cpp`, `src/control/Script.cpp`, `src/control/Script2.cpp`, `src/control/Script6.cpp`.
+- Wanted, input, ciclo di gioco, streaming, danni e incendi: `src/core/Fire.cpp`, `src/core/Fire.h`, `src/core/Game.cpp`, `src/core/Pad.cpp`, `src/core/Pad.h`, `src/core/Streaming.cpp`, `src/core/Wanted.cpp`, `src/core/World.cpp`.
+- Giocatore, relazioni, combattimento e popolazione: `src/peds/CopPed.cpp`, `src/peds/PedAI.cpp`, `src/peds/PedFight.cpp`, `src/peds/PlayerPed.cpp`, `src/peds/Population.cpp`.
+- Danni, inseguimenti e supporto aereo: `src/vehicles/Automobile.cpp`, `src/vehicles/Heli.cpp`, `src/vehicles/Vehicle.cpp`.
+- Munizioni e attribuzione del danno: `src/weapons/BulletInfo.cpp`, `src/weapons/Explosion.cpp`, `src/weapons/ShotInfo.cpp`, `src/weapons/Weapon.cpp`, `src/weapons/Weapon.h`.
+- Ripristino della modalità dopo il caricamento: `src/save/GenericGameStorage.cpp`.
+- Documentazione: `README.md`, `docs/POLICE.md`.

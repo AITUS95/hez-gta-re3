@@ -158,7 +158,7 @@ CExplosion::AddExplosion(CEntity *explodingEntity, CEntity *culprit, eExplosionT
 				&& waterLevel - 6.0f < posGround.z) // some subway/tunnels check?
 				bDontExplode = true;
 			else
-				gFireManager.StartFire(posGround, 1.8f, false);
+				gFireManager.StartFire(posGround, 1.8f, false, culprit);
 		}
 		else
 			bDontExplode = true;

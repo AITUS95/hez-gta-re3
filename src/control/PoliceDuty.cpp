@@ -35,6 +35,13 @@ struct Incident {
 	CWanted wanted;
 };
 Incident incidents[MAX_INCIDENTS];
+// Autopilot's vanilla chase missions have no pedestrian target field. Keep
+// only their incident identity here; CCarAI/CCarCtrl still drive the pursuit.
+struct PatrolAssignment {
+	CVehicle *car;
+	Incident *incident;
+};
+PatrolAssignment patrols[MAX_BACKUP];
 CPed *backup[MAX_BACKUP];
 CWanted noIncident;
 bool ready;
@@ -42,6 +49,7 @@ bool shiftStarted;
 bool fireHeld;
 bool marking;
 CEntity *marked;
+int32 *portlandSaveRadar;
 
 // References point only into fixed storage. Prune before a slot is reused, so
 // an old entity cannot null a reference subsequently assigned to a new entity.
@@ -86,6 +94,11 @@ Incident *Select(CCopPed *officer)
 		for (int i = 0; i < MAX_INCIDENTS; ++i)
 			for (int j = 0; j < ARRAY_SIZE(incidents[i].wanted.m_pCops); ++j)
 				if (incidents[i].wanted.m_pCops[j] == officer) return &incidents[i];
+	// Officers leaving a patrol continue its incident on foot, including passengers.
+	if (officer && officer->m_pMyVehicle)
+		for (int i = 0; i < MAX_BACKUP; ++i)
+			if (patrols[i].car == officer->m_pMyVehicle && patrols[i].incident && Valid(*patrols[i].incident))
+				return patrols[i].incident;
 	Incident *best = nil;
 	float score = 1.0e20f;
 	CVector origin = officer ? officer->GetPosition() : FindPlayerCoors();
@@ -105,6 +118,11 @@ void ClearIncident(Incident &incident)
 	// ClearPursuit unregisters from this incident before its entity is released.
 	for (int i = ARRAY_SIZE(incident.wanted.m_pCops) - 1; i >= 0; --i)
 		if (incident.wanted.m_pCops[i]) incident.wanted.m_pCops[i]->ClearPursuit();
+	for (int i = 0; i < MAX_BACKUP; ++i)
+		if (patrols[i].incident == &incident) {
+			Release((CEntity**)&patrols[i].car);
+			patrols[i].incident = nil;
+		}
 	CPed *ped = PedOf(incident);
 	if (ped) ped->bBeingChasedByPolice = false;
 	Release(&incident.entity);
@@ -120,6 +138,30 @@ CCopPed *Driver(CVehicle *car)
 bool PoliceCar(CVehicle *car)
 {
 	return car && car != FindPlayerVehicle() && (car->bIsLawEnforcer || Driver(car));
+}
+
+Incident *SelectForCar(CVehicle *car)
+{
+	if (!ready || !PoliceCar(car)) return nil;
+	PatrolAssignment *freeSlot = nil;
+	for (int i = 0; i < MAX_BACKUP; ++i) {
+		PatrolAssignment &patrol = patrols[i];
+		if (patrol.car == car) {
+			if (patrol.incident && Valid(*patrol.incident)) return patrol.incident;
+			Release((CEntity**)&patrol.car);
+			patrol.incident = nil;
+		}
+		if (!patrol.car && !freeSlot) freeSlot = &patrol;
+	}
+	// Reinforcements start beyond the foot-patrol detection radius. Dispatch
+	// gives them an incident which persists through the normal far/close chase.
+	Incident *incident = Select(nil);
+	if (incident && freeSlot) {
+		freeSlot->car = car;
+		car->RegisterReference((CEntity**)&freeSlot->car);
+		freeSlot->incident = incident;
+	}
+	return incident;
 }
 
 void UnlockWorld()
@@ -163,12 +205,17 @@ void CPoliceDuty::Init()
 		incidents[i].driver = nil;
 		incidents[i].wanted.Initialise();
 	}
-	for (int i = 0; i < MAX_BACKUP; ++i) backup[i] = nil;
+	for (int i = 0; i < MAX_BACKUP; ++i) {
+		backup[i] = nil;
+		patrols[i].car = nil;
+		patrols[i].incident = nil;
+	}
 	noIncident.Initialise();
 	noIncident.m_bIgnoredByCops = true;
 	ready = true;
 	shiftStarted = fireHeld = marking = false;
 	marked = nil;
+	portlandSaveRadar = nil;
 }
 
 void CPoliceDuty::Shutdown()
@@ -330,11 +377,35 @@ CPhysical *CPoliceDuty::Target(CCopPed *officer) { Incident *i = Select(officer)
 CVehicle *CPoliceDuty::TargetVehicle(CCopPed *officer) { CPhysical *p = Target(officer); return p && p->IsVehicle() ? (CVehicle*)p : nil; }
 CVector CPoliceDuty::TargetPosition(CCopPed *officer) { CPhysical *p = Target(officer); return p ? p->GetPosition() : CVector(0.0f, 0.0f, 0.0f); }
 CVector CPoliceDuty::TargetSpeed(CCopPed *officer) { CPhysical *p = Target(officer); return p ? p->m_vecMoveSpeed : CVector(0.0f, 0.0f, 0.0f); }
-CWanted *CPoliceDuty::CarWanted(CVehicle *car) { return PoliceCar(car) ? WantedFor(Driver(car)) : FindPlayerPed()->m_pWanted; }
-CVehicle *CPoliceDuty::CarTargetVehicle(CVehicle *car) { return PoliceCar(car) ? TargetVehicle(Driver(car)) : FindPlayerVehicle(); }
-CPed *CPoliceDuty::CarTargetPed(CVehicle *car) { return PoliceCar(car) ? TargetPed(Driver(car)) : FindPlayerPed(); }
-CVector CPoliceDuty::CarTargetPosition(CVehicle *car) { return PoliceCar(car) ? TargetPosition(Driver(car)) : FindPlayerCoors(); }
-CVector CPoliceDuty::CarTargetSpeed(CVehicle *car) { return PoliceCar(car) ? TargetSpeed(Driver(car)) : FindPlayerSpeed(); }
+CWanted *CPoliceDuty::CarWanted(CVehicle *car)
+{
+	if (!PoliceCar(car)) return FindPlayerPed()->m_pWanted;
+	Incident *i = SelectForCar(car);
+	return i ? &i->wanted : &noIncident;
+}
+CVehicle *CPoliceDuty::CarTargetVehicle(CVehicle *car)
+{
+	if (!PoliceCar(car)) return FindPlayerVehicle();
+	Incident *i = SelectForCar(car);
+	CPhysical *target = i ? PhysicalOf(*i) : nil;
+	return target && target->IsVehicle() ? (CVehicle*)target : nil;
+}
+CPed *CPoliceDuty::CarTargetPed(CVehicle *car)
+{
+	if (!PoliceCar(car)) return FindPlayerPed();
+	Incident *i = SelectForCar(car);
+	return i ? PedOf(*i) : nil;
+}
+CVector CPoliceDuty::CarTargetPosition(CVehicle *car)
+{
+	Incident *i = SelectForCar(car);
+	return i ? PhysicalOf(*i)->GetPosition() : FindPlayerCoors();
+}
+CVector CPoliceDuty::CarTargetSpeed(CVehicle *car)
+{
+	Incident *i = SelectForCar(car);
+	return i ? PhysicalOf(*i)->m_vecMoveSpeed : FindPlayerSpeed();
+}
 
 bool CPoliceDuty::IsDesignating()
 {
@@ -342,6 +413,26 @@ bool CPoliceDuty::IsDesignating()
 	CPad *pad = CPad::GetPad(0);
 	return ready && shiftStarted && player && !player->DyingOrDead() && !pad->ArePlayerControlsDisabled() &&
 		(pad->GetTarget() || pad->GetRightMouse()) && (player->bInVehicle || player->GetWeapon()->m_eWeaponType == WEAPONTYPE_UNARMED);
+}
+
+bool CPoliceDuty::ScriptIntCompare(const char *thread, int32 *variable, int32 value)
+{
+	// Retail C_RSTRT/S_RSTRT each test their island-open global against 1.
+	// Discover the actual operand through the interpreter, without assuming SCM
+	// global offsets or setting debug flags. Keep the original restart threads.
+	if (shiftStarted && value == 1 && (!strcmp(thread, "c_rstrt") || !strcmp(thread, "s_rstrt")))
+		*variable = 1;
+	if (shiftStarted && !strcmp(thread, "i_save")) {
+		int32 *onMission = (int32*)&CTheScripts::ScriptSpace[CTheScripts::OnAMissionFlag];
+		// I_SAVE first tests its radar flag against 0, then Luigi's first mission
+		// against 1 to open the door. Bypass only the door's story condition; do
+		// not complete a mission or change the radar/on-mission conditions.
+		if (value == 0 && variable != onMission && !portlandSaveRadar)
+			portlandSaveRadar = variable;
+		if (value == 1 && portlandSaveRadar && variable != portlandSaveRadar && variable != onMission)
+			return true;
+	}
+	return *variable == value;
 }
 
 void CPoliceDuty::SpawnOfficer(int type)
@@ -378,6 +469,11 @@ void CPoliceDuty::SpawnOfficer(int type)
 void CPoliceDuty::Update()
 {
 	if (!ready || !FindPlayerPed() || CReplay::IsPlayingBack()) return;
+	for (int i = 0; i < MAX_BACKUP; ++i)
+		if (!patrols[i].car || !PoliceCar(patrols[i].car) || patrols[i].car->GetStatus() == STATUS_WRECKED) {
+			Release((CEntity**)&patrols[i].car);
+			patrols[i].incident = nil;
+		}
 	for (int i = 0; i < MAX_INCIDENTS; ++i) {
 		Incident &incident = incidents[i];
 		if (incident.driver && (!incident.entity || !incident.driver->bInVehicle ||

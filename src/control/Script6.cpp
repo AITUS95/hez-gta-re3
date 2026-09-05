@@ -76,26 +76,13 @@ int8 CRunningScript::ProcessCommands1000To1099(int32 command)
 		CollectParameters(&m_nIp, 1);
 		CPlayerPed* pPlayerPed = CWorld::Players[ScriptParams[0]].m_pPed;
 		script_assert(pPlayerPed);
-		UpdateCompareFlag(pPlayerPed->IsPedInControl() || pPlayerPed->m_nPedState == PED_DRIVING);
+		// MAIN launches INTRO directly; ambient mission triggers cannot start a job.
+		UpdateCompareFlag(false);
 		return 0;
 	}
 	case COMMAND_MAKE_PLAYER_SAFE_FOR_CUTSCENE:
 	{
 		CollectParameters(&m_nIp, 1);
-		if (ScriptParams[0] == 0) {
-			CPoliceDuty::BeginShift();
-			return 0;
-		}
-		// No story/vehicle mission can take control away from the duty session.
-		CWorld::Players[CWorld::PlayerInFocus].MakePlayerSafe(false);
-		TheCamera.RestoreWithJumpCut();
-		TheCamera.Fade(0.0f, FADE_IN);
-		CTheScripts::bAlreadyRunningAMissionScript = false;
-		if (CTheScripts::OnAMissionFlag)
-			*(int32*)&CTheScripts::ScriptSpace[CTheScripts::OnAMissionFlag] = 0;
-		RemoveScriptFromList(&CTheScripts::pActiveScripts);
-		AddScriptToList(&CTheScripts::pIdleScripts);
-		return 1;
 #ifdef MISSION_REPLAY
 		AllowMissionReplay = MISSION_RETRY_STAGE_NORMAL;
 		SaveGameForPause(SAVE_TYPE_QUICKSAVE_FOR_MISSION_REPLAY);
@@ -312,8 +299,21 @@ int8 CRunningScript::ProcessCommands1000To1099(int32 command)
 	case COMMAND_LOAD_AND_LAUNCH_MISSION_INTERNAL:
 	{
 		CollectParameters(&m_nIp, 1);
+		if (ScriptParams[0] == 0) {
+			CPoliceDuty::BeginShift();
+			return 0;
+		}
+		// Stop the launch trigger without loading story or vehicle mission code.
+		CWorld::Players[CWorld::PlayerInFocus].MakePlayerSafe(false);
+		TheCamera.RestoreWithJumpCut();
+		TheCamera.Fade(0.0f, FADE_IN);
+		CTheScripts::bAlreadyRunningAMissionScript = false;
+		if (CTheScripts::OnAMissionFlag)
+			*(int32*)&CTheScripts::ScriptSpace[CTheScripts::OnAMissionFlag] = 0;
+		RemoveScriptFromList(&CTheScripts::pActiveScripts);
+		AddScriptToList(&CTheScripts::pIdleScripts);
+		return 1;
 	}
-
 	case COMMAND_SET_OBJECT_DRAW_LAST:
 	{
 		CollectParameters(&m_nIp, 2);

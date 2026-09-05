@@ -1,4 +1,5 @@
 #include "common.h"
+#include "PoliceDuty.h"
 
 #include "ShotInfo.h"
 #include "Entity.h"
@@ -131,6 +132,7 @@ CShotInfo::Update()
 
 			for (int i = 0; i < ped->m_numNearPeds; ++i) {
 				CPed *nearPed = ped->m_nearPeds[i];
+				if (CPoliceDuty::IsFriendlyFire(shot.m_sourceEntity, nearPed)) continue;
 				if (nearPed->IsPointerValid()) {
 					if (nearPed->IsPedInControl() && (nearPed->GetPosition() - shot.m_startPos).MagnitudeSqr() < radius && !nearPed->bFireProof) {
 

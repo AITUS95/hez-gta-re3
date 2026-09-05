@@ -34,7 +34,7 @@ class CFireManager
 public:
 	uint32 m_nTotalFires;
 	CFire m_aFires[NUM_FIRES];
-	void StartFire(CVector pos, float size, bool propagation);
+	void StartFire(CVector pos, float size, bool propagation, CEntity *source = nil);
 	CFire *StartFire(CEntity *entityOnFire, CEntity *fleeFrom, float strength, bool propagation);
 	void Update(void);
 	CFire *FindFurthestFire_NeverMindFireMen(CVector coords, float minRange, float maxRange);

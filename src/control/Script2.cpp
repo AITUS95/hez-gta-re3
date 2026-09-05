@@ -1527,7 +1527,9 @@ int8 CRunningScript::ProcessCommands400To499(int32 command)
 	case COMMAND_SET_MAX_WANTED_LEVEL:
 	{
 		CollectParameters(&m_nIp, 1);
-		CWanted::SetMaximumWantedLevel(ScriptParams[0]);
+		// MAIN's island restart threads normally cap the player at 4/5 stars.
+		// Duty incidents need all six vanilla tiers on every unlocked island.
+		CWanted::SetMaximumWantedLevel(6);
 		return 0;
 	}
 	/* Debug commands?

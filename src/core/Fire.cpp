@@ -97,6 +97,7 @@ CFire::ProcessFire(void)
 		FindPlayerPed() && 
 #endif
 		!FindPlayerPed()->m_pFire && !(FindPlayerPed()->bFireProof)
+		&& !CPoliceDuty::IsFriendlyFire(FindPlayerPed(), m_pSource)
 		&& ((FindPlayerPed()->GetPosition() - m_vecPos).MagnitudeSqr() < 2.0f)) {
 		FindPlayerPed()->DoStuffToGoOnFire();
 		gFireManager.StartFire(FindPlayerPed(), m_pSource, 0.8f, 1);
@@ -176,7 +177,7 @@ CFire::Extinguish(void)
 }
 
 void
-CFireManager::StartFire(CVector pos, float size, bool propagation)
+CFireManager::StartFire(CVector pos, float size, bool propagation, CEntity *source)
 {
 	CFire *fire = GetNextFreeFire();
 
@@ -189,7 +190,8 @@ CFireManager::StartFire(CVector pos, float size, bool propagation)
 		fire->m_nExtinguishTime = CTimer::GetTimeInMilliseconds() + 10000;
 		fire->m_nStartTime = CTimer::GetTimeInMilliseconds() + 400;
 		fire->m_pEntity = nil;
-		fire->m_pSource = nil;
+		fire->m_pSource = source;
+		if (source) source->RegisterReference(&fire->m_pSource);
 		fire->m_nNextTimeToAddFlames = 0;
 		fire->ReportThisFire();
 		fire->m_fStrength = size;
@@ -200,6 +202,7 @@ CFire *
 CFireManager::StartFire(CEntity *entityOnFire, CEntity *fleeFrom, float strength, bool propagation)
 {
 	if (CPoliceDuty::IsFriendlyFire(entityOnFire, fleeFrom)) return nil;
+	CPoliceDuty::ReportAttack(fleeFrom, entityOnFire);
 	CPed *ped = (CPed *)entityOnFire;
 	CVehicle *veh = (CVehicle *)entityOnFire;
 
@@ -339,8 +342,13 @@ CFire *
 CFireManager::GetNextFreeFire(void)
 {
 	for (int i = 0; i < NUM_FIRES; i++) {
-		if (!m_aFires[i].m_bIsOngoing && !m_aFires[i].m_bIsScriptFire)
+		if (!m_aFires[i].m_bIsOngoing && !m_aFires[i].m_bIsScriptFire) {
+			// Prune the previous source before reusing this fixed fire slot.
+			CEntity *source = m_aFires[i].m_pSource;
+			m_aFires[i].m_pSource = nil;
+			if (source) source->PruneReferences();
 			return &m_aFires[i];
+		}
 	}
 	return nil;
 }

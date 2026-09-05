@@ -169,6 +169,10 @@ CCopPed::ClearPursuit(void)
 	if (!m_bIsInPursuit)
 		return;
 
+	if (m_bBeatingSuspect) {
+		if (wanted->m_CopsBeatingSuspect > 0) --wanted->m_CopsBeatingSuspect;
+		m_bBeatingSuspect = false;
+	}
 	m_bIsInPursuit = false;
 	for (int i = 0; i < Max(wanted->m_MaxCops, wanted->m_CurrentCops); ++i)  {
 		if (!foundMyself && wanted->m_pCops[i] == this) {
@@ -202,7 +206,10 @@ CCopPed::ClearPursuit(void)
 				SetSeek((CEntity*)m_pMyVehicle, 2.5f);
 			} else {
 				m_nLastPedState = PED_WANDER_PATH;
-				SetFindPathAndFlee(FindPlayerPed()->GetPosition(), 10000, true);
+				if (CPoliceDuty::IsSpawnedOfficer(this))
+					SetObjective(OBJECTIVE_SET_LEADER, player);
+				else
+					SetWanderPath(CGeneral::GetRandomNumberInRange(0, 8));
 			}
 		} else {
 			SetObjective(OBJECTIVE_ENTER_CAR_AS_DRIVER, m_pMyVehicle);
@@ -401,7 +408,7 @@ CCopPed::CopAI(void)
 				return;
 
 			if (!CPoliceDuty::IsSpawnedOfficer(this) && wantedLevel > 1 && GetWeapon()->m_eWeaponType == WEAPONTYPE_UNARMED)
-				if (!CPoliceDuty::IsSpawnedOfficer(this)) SetCurrentWeapon(WEAPONTYPE_COLT45);
+				SetCurrentWeapon(WEAPONTYPE_COLT45);
 			else if (!CPoliceDuty::IsSpawnedOfficer(this) && wantedLevel == 1 && GetWeapon()->m_eWeaponType != WEAPONTYPE_UNARMED && (!CPoliceDuty::TargetPed(this) || !CPoliceDuty::TargetPed(this)->m_pCurrentPhysSurface)) {
 				// i.e. if player is on top of car, cop will still use colt45.
 				SetCurrentWeapon(WEAPONTYPE_UNARMED);
