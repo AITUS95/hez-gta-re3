@@ -101,6 +101,7 @@ CCopPed::SetArrestPlayer(CPed *player)
 			player->m_pMyVehicle->bIsHandbrakeOn = true;
 		}
 		SetPedState(PED_ARREST_PLAYER);
+		m_nPedStateTimer = CTimer::GetTimeInMilliseconds() + 2000;
 		ClearObjective();
 		m_pSeekTarget = player;
 		player->RegisterReference((CEntity**)&m_pSeekTarget);
@@ -254,6 +255,16 @@ CCopPed::ArrestPlayer(void)
 {
 	m_pVehicleAnim = nil;
 	CPed *suspect = (CPed*)m_pSeekTarget;
+	if (!suspect || (!suspect->IsPlayer() &&
+		(suspect->DyingOrDead() || CTimer::GetTimeInMilliseconds() >= m_nPedStateTimer))) {
+		// Claude's arrest normally ends through the player restart. NPC arrests
+		// need to release the officer after the same arrest pose, without a restart.
+		ClearPursuit();
+		m_pSeekTarget = nil;
+		if (suspect) suspect->PruneReferences();
+		SetIdle();
+		return;
+	}
 	if (suspect) {
 		if (suspect->CanSetPedState())
 			suspect->SetPedState(PED_ARRESTED);
