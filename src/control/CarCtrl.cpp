@@ -88,12 +88,14 @@ int32 CCarCtrl::CarArrays[TOTAL_CUSTOM_CLASSES][MAX_CAR_MODELS_IN_ARRAY];
 CVehicle* apCarsToKeep[MAX_CARS_TO_KEEP];
 uint32 aCarsToKeepTime[MAX_CARS_TO_KEEP];
 
+static int32 MissingDutyReinforcement();
+
 void
 CCarCtrl::GenerateRandomCars()
 {
 	if (CCutsceneMgr::IsRunning())
 		return;
-	if (NumRandomCars < 30){
+	if (NumRandomCars < 30 || MissingDutyReinforcement() >= 0){
 		if (CountDownToCarsAtStart == 0){
 			GenerateOneRandomCar();
 		}
@@ -108,6 +110,35 @@ CCarCtrl::GenerateRandomCars()
 		GenerateEmergencyServicesCar();
 }
 
+// Escalation must get one of each required specialist into the existing road
+// spawner, even when older patrols already fill the wanted vehicle/cop quota.
+// Once present, subsequent choices and quotas use the vanilla distribution.
+static int32 MissingDutyReinforcement()
+{
+	CWanted *wanted = CPoliceDuty::WantedFor();
+	int32 models[2] = { -1, -1 };
+	int32 pedModel = MI_COP;
+	if (wanted->AreArmyRequired()) { models[0] = MI_RHINO; models[1] = MI_BARRACKS; pedModel = MI_ARMY; }
+	else if (wanted->AreFbiRequired()) { models[0] = MI_FBICAR; pedModel = MI_FBI; }
+	else if (wanted->AreSwatRequired()) { models[0] = MI_ENFORCER; pedModel = MI_SWAT; }
+	if (!CStreaming::HasModelLoaded(pedModel)) return -1;
+	for (int j = 0; j < 2; ++j) {
+		if (models[j] < 0 || !CStreaming::HasModelLoaded(models[j])) continue;
+		bool present = false;
+		for (int i = 0; i < CPools::GetVehiclePool()->GetSize(); ++i) {
+			CVehicle *car = CPools::GetVehiclePool()->GetSlot(i);
+			if (car && car != FindPlayerVehicle() && car->bIsLawEnforcer &&
+				car->GetModelIndex() == models[j] && car->GetStatus() != STATUS_WRECKED &&
+				car->m_fHealth > 0.0f && CPoliceDuty::CarWanted(car) == wanted) {
+				present = true;
+				break;
+			}
+		}
+		if (!present) return models[j];
+	}
+	return -1;
+}
+
 void
 CCarCtrl::GenerateOneRandomCar()
 {
@@ -118,22 +149,23 @@ CCarCtrl::GenerateOneRandomCar()
 	CZoneInfo zone;
 	CTheZones::GetZoneInfoForTimeOfDay(&vecTargetPos, &zone);
 	pPlayer->m_nTrafficMultiplier = pPlayer->m_fRoadDensity * zone.carDensity;
-	if (NumRandomCars >= pPlayer->m_nTrafficMultiplier * CarDensityMultiplier * CIniFile::CarNumberMultiplier)
+	int32 reinforcement = MissingDutyReinforcement();
+	if (reinforcement < 0 && NumRandomCars >= pPlayer->m_nTrafficMultiplier * CarDensityMultiplier * CIniFile::CarNumberMultiplier)
 		return;
 	if (NumFiretrucksOnDuty + NumAmbulancesOnDuty + NumParkedCars + NumMissionCars + NumLawEnforcerCars + NumRandomCars >= MaxNumberOfCarsInUse)
 		return;
 	CWanted* pWanted = CPoliceDuty::WantedFor();
 	int carClass;
 	int carModel;
-	if (pWanted->GetWantedLevel() > 1 && NumLawEnforcerCars < pWanted->m_MaximumLawEnforcerVehicles &&
+	if (reinforcement >= 0 || (pWanted->GetWantedLevel() > 1 && NumLawEnforcerCars < pWanted->m_MaximumLawEnforcerVehicles &&
 		pWanted->m_CurrentCops < pWanted->m_MaxCops && (
 			pWanted->GetWantedLevel() > 3 ||
 			pWanted->GetWantedLevel() > 2 && CTimer::GetTimeInMilliseconds() > LastTimeLawEnforcerCreated + 5000 ||
-			pWanted->GetWantedLevel() > 1 && CTimer::GetTimeInMilliseconds() > LastTimeLawEnforcerCreated + 8000)) {
+			pWanted->GetWantedLevel() > 1 && CTimer::GetTimeInMilliseconds() > LastTimeLawEnforcerCreated + 8000))) {
 		/* Last pWanted->GetWantedLevel() > 1 is unnecessary but I added it for better readability. */
 		/* Wouldn't be surprised it was there originally but was optimized out. */
 		carClass = COPS;
-		carModel = ChoosePoliceCarModel();
+		carModel = reinforcement >= 0 ? reinforcement : ChoosePoliceCarModel();
 	}else{
 		carModel = ChooseModel(&zone, &vecTargetPos, &carClass);
 		if (carClass == COPS && pWanted->GetWantedLevel() >= 1)
@@ -668,7 +700,7 @@ CCarCtrl::ChoosePoliceCarModel(void)
 {
 	if (CPoliceDuty::WantedFor()->AreSwatRequired() &&
 		CStreaming::HasModelLoaded(MI_ENFORCER) &&
-		CStreaming::HasModelLoaded(MI_POLICE))
+		CStreaming::HasModelLoaded(MI_POLICE) && CStreaming::HasModelLoaded(MI_SWAT))
 		return ((CGeneral::GetRandomNumber() & 0xF) == 0) ? MI_ENFORCER : MI_POLICE;
 	if (CPoliceDuty::WantedFor()->AreFbiRequired() &&
 		CStreaming::HasModelLoaded(MI_FBICAR) &&
@@ -706,7 +738,9 @@ CCarCtrl::RemoveDistantCars()
 			continue;
 		PossiblyRemoveVehicle(pVehicle);
 		if (pVehicle->bCreateRoadBlockPeds){
-			if ((pVehicle->GetPosition() - FindPlayerCentreOfWorld(CWorld::PlayerInFocus)).Magnitude2D() < DISTANCE_TO_SPAWN_ROADBLOCK_PEDS) {
+			if ((pVehicle->GetPosition() - FindPlayerCentreOfWorld(CWorld::PlayerInFocus)).Magnitude2D() < DISTANCE_TO_SPAWN_ROADBLOCK_PEDS ||
+				(CPoliceDuty::CarWanted(pVehicle)->GetWantedLevel() > 0 &&
+				 (pVehicle->GetPosition() - CPoliceDuty::CarTargetPosition(pVehicle)).Magnitude2D() < DISTANCE_TO_SPAWN_ROADBLOCK_PEDS)) {
 				CRoadBlocks::GenerateRoadBlockCopsForCar(pVehicle, pVehicle->m_nRoadblockType, pVehicle->m_nRoadblockNode);
 				pVehicle->bCreateRoadBlockPeds = false;
 			}

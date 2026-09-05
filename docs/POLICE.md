@@ -113,6 +113,18 @@ ha un vero `CWanted`. Non sostituisce il puntatore del giocatore, non usa un
   `CRoadBlocks` e `CHeli` usano l'incidente prioritario per la risposta:
   pattuglie, elicotteri, SWAT a 4 stelle, FBI a 5, esercito a 6, con le
   condizioni e probabilità originali.
+- L'escalation dà precedenza a un Enforcer/SWAT a 4 stelle, FBI a 5 e a
+  entrambi Rhino e Barracks a 6. Il generatore stradale `CCarCtrl` può superare
+  temporaneamente la quota Wanted occupata dalle pattuglie precedenti per
+  inserire i tipi mancanti; conserva il limite globale dei veicoli, streaming,
+  nodi stradali e controlli di collisione/visibilità. Una volta presenti,
+  distribuzione casuale e quote delle nuove pattuglie tornano vanilla.
+- I posti di blocco armano correttamente il controllo d'ingresso all'inizio di
+  una ricerca. Restano nei nodi stradali originali, con probabilità vanilla:
+  non sono garantiti su ogni strada. Su strade troppo strette per i furgoni
+  si prova una volante. Ogni blocco conserva l'incidente assegnato e i suoi
+  agenti vengono generati anche quando si avvicina il sospetto. Il giocatore
+  deve restare abbastanza vicino da mantenere caricata l'area.
 - I pedoni sospetti usano gli obiettivi di fuga vanilla o conservano il proprio
   combattimento. Il conducente resta sospetto anche quando abbandona il mezzo.
   I mezzi vuoti usano l'obiettivo vanilla `OBJECTIVE_DESTROY_CAR`, insieme alla
@@ -186,3 +198,11 @@ Limiti espliciti:
 - Munizioni e attribuzione del danno: `src/weapons/BulletInfo.cpp`, `src/weapons/Explosion.cpp`, `src/weapons/ShotInfo.cpp`, `src/weapons/Weapon.cpp`, `src/weapons/Weapon.h`.
 - Ripristino della modalità dopo il caricamento: `src/save/GenericGameStorage.cpp`.
 - Documentazione: `README.md`, `docs/POLICE.md`.
+
+### Strisce chiodate
+
+Questo branch GTA III/re3 non contiene un sistema di strisce chiodate né
+un comportamento degli agenti per lanciarle. `CAutomobile::BurstTyre` e la
+fisica delle gomme danneggiate esistono, ma non costituiscono quel sistema.
+Non vengono simulate forature a distanza o aggiunte strisce invisibili:
+il lancio di strisce chiodate rimane una funzionalità non implementata.

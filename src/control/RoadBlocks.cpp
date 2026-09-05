@@ -30,7 +30,7 @@ CRoadBlocks::Init(void)
 	for (i = 0; i < ThePaths.m_numMapObjects; i++) {
 		if (ThePaths.m_objectFlags[i] & UseInRoadBlock) {
 			if (NumRoadBlocks < NUMROADBLOCKS) {
-				InOrOut[NumRoadBlocks] = true;
+				InOrOut[NumRoadBlocks] = false;
 				RoadBlockObjects[NumRoadBlocks] = i;
 				NumRoadBlocks++;
 			} else {
@@ -49,9 +49,10 @@ CRoadBlocks::GenerateRoadBlockCopsForCar(CVehicle* pVehicle, int32 roadBlockType
 {
 	static const CVector vecRoadBlockOffets[6] = { CVector(-1.5, 1.8f, 0.0f), CVector(-1.5f, -1.8f, 0.0f), CVector(1.5f, 1.8f, 0.0f),
 	CVector(1.5f, -1.8f, 0.0f), CVector(-1.5f, 0.0f, 0.0f), CVector(1.5, 0.0, 0.0) };
-	CEntity* pEntityToAttack = (CEntity*)CPoliceDuty::TargetVehicle();
+	CEntity* pEntityToAttack = (CEntity*)CPoliceDuty::CarTargetVehicle(pVehicle);
 	if (!pEntityToAttack)
-		pEntityToAttack = (CEntity*)CPoliceDuty::Target();
+		pEntityToAttack = (CEntity*)CPoliceDuty::CarTargetPed(pVehicle);
+	if (CPoliceDuty::CarWanted(pVehicle)->GetWantedLevel() == 0) return;
 	CColModel* pPoliceColModel = CModelInfo::GetColModel(MI_POLICE);
 	float fRadius = pVehicle->GetBoundRadius() / pPoliceColModel->boundingSphere.radius;
 	for (int32 i = 0; i < 2; i++) {
@@ -103,16 +104,23 @@ CRoadBlocks::GenerateRoadBlockCopsForCar(CVehicle* pVehicle, int32 roadBlockType
 void 
 CRoadBlocks::GenerateRoadBlocks(void) 
 { 
-#ifdef SQUEEZE_PERFORMANCE
-	if (CPoliceDuty::WantedFor()->m_RoadblockDensity == 0)
+	// SQUEEZE_PERFORMANCE used to freeze all nodes as "inside" before the
+	// first incident. Arm the entry checks when there is no eligible pursuit.
+	if (CPoliceDuty::WantedFor()->m_RoadblockDensity == 0 || !CPoliceDuty::TargetVehicle()) {
+		for (int i = 0; i < NumRoadBlocks; ++i) InOrOut[i] = false;
 		return;
-#endif
+	}
 	CMatrix offsetMatrix;
 	uint32 frame = CTimer::GetFrameCounter() & 0xF;
 	int16 nRoadblockNode = (int16)(NUMROADBLOCKS * frame) / 16;
 	const int16 maxRoadBlocks = (int16)(NUMROADBLOCKS * (frame + 1)) / 16;
 	for (; nRoadblockNode < Min(NumRoadBlocks, maxRoadBlocks); nRoadblockNode++) {
 		CTreadable *mapObject = ThePaths.m_mapObjects[RoadBlockObjects[nRoadblockNode]];
+		// Collision/map streaming remains centred on the actual player.
+		if ((mapObject->GetPosition() - FindPlayerCoors()).Magnitude2D() > 180.0f) {
+			InOrOut[nRoadblockNode] = false;
+			continue;
+		}
 		CVector2D vecDistance = CPoliceDuty::TargetPosition() - mapObject->GetPosition();
 		if (vecDistance.x > -ROADBLOCKDIST && vecDistance.x < ROADBLOCKDIST &&
 			vecDistance.y > -ROADBLOCKDIST && vecDistance.y < ROADBLOCKDIST &&
@@ -131,9 +139,20 @@ CRoadBlocks::GenerateRoadBlocks(void)
 						vehicleId = MI_ENFORCER;
 					if (!CStreaming::HasModelLoaded(vehicleId))
 						vehicleId = MI_POLICE;
+					if (!CStreaming::HasModelLoaded(vehicleId)) {
+						InOrOut[nRoadblockNode] = false;
+						continue;
+					}
 					CColModel *pVehicleColModel = CModelInfo::GetColModel(vehicleId);
 					float fModelRadius = 2.0f * pVehicleColModel->boundingSphere.radius + 0.25f;
 					int16 radius = (int16)(fMapObjectRadius / fModelRadius);
+					// A large Enforcer/Barracks can fit zero times on a narrow road.
+					// Reuse a patrol car there instead of silently creating no block.
+					if (radius == 0 && vehicleId != MI_POLICE && CStreaming::HasModelLoaded(MI_POLICE)) {
+						vehicleId = MI_POLICE;
+						fModelRadius = 2.0f * CModelInfo::GetColModel(vehicleId)->boundingSphere.radius + 0.25f;
+						radius = (int16)(fMapObjectRadius / fModelRadius);
+					}
 					if (radius >= 6)
 						continue;
 					CVector2D vecDistanceToCamera = TheCamera.GetPosition() - mapObject->GetPosition();
@@ -180,6 +199,9 @@ CRoadBlocks::GenerateRoadBlocks(void)
 							if (pVehicle->GetUp().z > 0.94f) {
 								CVisibilityPlugins::SetClumpAlpha(pVehicle->GetClump(), 0);
 								CWorld::Add(pVehicle);
+								// Bind this block before its occupants are generated later.
+								pVehicle->ChangeLawEnforcerState(true);
+								CPoliceDuty::CarWanted(pVehicle);
 								pVehicle->bCreateRoadBlockPeds = true;
 								pVehicle->m_nRoadblockType = nRoadblockType;
 								pVehicle->m_nRoadblockNode = nRoadblockNode;
