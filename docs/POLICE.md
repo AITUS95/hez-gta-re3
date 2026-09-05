@@ -31,6 +31,10 @@ anche quando cambia l'arma; combattimento e controlli restano quelli del motore.
 Tutte le armi dell'inventario vanilla sono assegnate al giocatore. La riserva
 non si consuma; capienza del caricatore, ricarica, cadenza, danni e proiettili
 mantengono il comportamento originale. Anche gli agenti hanno riserva infinita.
+Per il fucile di precisione degli NPC, il bersaglio dell'AI e la posizione
+dell'arma sostituiscono la camera del giocatore: proiettile `CBulletInfo`, velocità,
+danno e ricarica restano quelli vanilla. Il detonatore conserva la funzione
+originale e richiede un esplosivo associato al suo utilizzatore.
 
 ## Comandi
 

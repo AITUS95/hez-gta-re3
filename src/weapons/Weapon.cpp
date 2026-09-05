@@ -183,7 +183,7 @@ CWeapon::Fire(CEntity *shooter, CVector *fireSource)
 
 			case WEAPONTYPE_SNIPERRIFLE:
 			{
-				fired = FireSniper(shooter);
+				fired = FireSniper(shooter, source);
 
 				break;
 			}
@@ -1596,9 +1596,22 @@ CWeapon::FireAreaEffect(CEntity *shooter, CVector *fireSource)
 }
 
 bool
-CWeapon::FireSniper(CEntity *shooter)
+CWeapon::FireSniper(CEntity *shooter, CVector *fireSource)
 {
 	ASSERT(shooter!=nil);
+	if (shooter->IsPed() && !((CPed*)shooter)->IsPlayer()) {
+		// NPCs have no scope camera. Use their existing aim target and muzzle,
+		// retaining the vanilla sniper bullet, speed, damage, clip and reload.
+		CPed *ped = (CPed*)shooter;
+		CEntity *target = ped->m_pPointGunAt ? ped->m_pPointGunAt : ped->m_pSeekTarget;
+		if (!target) target = ped->m_pedInObjective;
+		if (!target || CPoliceDuty::IsFriendlyFire(shooter, target)) return false;
+		CVector source = fireSource ? *fireSource : shooter->GetMatrix() * GetInfo()->m_vecFireOffset;
+		CVector direction = target->GetBoundCentre() - source;
+		if (direction.MagnitudeSqr() < 0.0001f) return false;
+		direction.Normalise();
+		return CBulletInfo::AddBullet(shooter, m_eWeaponType, source, direction * 16.0f);
+	}
 
 	int16 mode = TheCamera.Cams[TheCamera.ActiveCam].Mode;
 	if (!( mode == CCam::MODE_M16_1STPERSON

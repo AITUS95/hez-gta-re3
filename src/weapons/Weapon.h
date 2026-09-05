@@ -47,7 +47,7 @@ public:
 	static void GenerateFlameThrowerParticles(CVector pos, CVector dir);
 	
 	bool FireAreaEffect       (CEntity *shooter, CVector *fireSource);
-	bool FireSniper           (CEntity *shooter);
+	bool FireSniper           (CEntity *shooter, CVector *fireSource = nil);
 	bool FireM16_1stPerson    (CEntity *shooter);
 	bool FireInstantHitFromCar(CAutomobile *shooter, bool left);
 	

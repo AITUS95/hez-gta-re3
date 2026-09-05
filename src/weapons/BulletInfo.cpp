@@ -46,6 +46,9 @@ void CBulletInfo::Initialise(void)
 {
 	debug("Initialising CBulletInfo...\n");
 	for (int i = 0; i < NUM_BULLETS; i++) {
+		CEntity *source = gaBulletInfo[i].m_pSource;
+		gaBulletInfo[i].m_pSource = nil;
+		if (source) source->PruneReferences();
 		gaBulletInfo[i].m_bInUse = false;
 		gaBulletInfo[i].m_eWeaponType = WEAPONTYPE_COLT45;
 		gaBulletInfo[i].m_fTimer = 0.0f;
@@ -60,6 +63,12 @@ void CBulletInfo::Initialise(void)
 void CBulletInfo::Shutdown(void)
 {
 	debug("Shutting down CBulletInfo...\n");
+	for (int i = 0; i < NUM_BULLETS; ++i) {
+		CEntity *source = gaBulletInfo[i].m_pSource;
+		gaBulletInfo[i].m_pSource = nil;
+		if (source) source->PruneReferences();
+		gaBulletInfo[i].m_bInUse = false;
+	}
 	debug("CBulletInfo shut down\n");
 }
 
@@ -72,7 +81,12 @@ bool CBulletInfo::AddBullet(CEntity* pSource, eWeaponType type, CVector vecPosit
 	}
 	if (i == NUM_BULLETS)
 		return false;
+	// NPC shooters may leave the streaming world while their bullet is active.
+	CEntity *oldSource = gaBulletInfo[i].m_pSource;
+	gaBulletInfo[i].m_pSource = nil;
+	if (oldSource) oldSource->PruneReferences();
 	gaBulletInfo[i].m_pSource = pSource;
+	if (pSource) pSource->RegisterReference(&gaBulletInfo[i].m_pSource);
 	gaBulletInfo[i].m_eWeaponType = type;
 	gaBulletInfo[i].m_nDamage = CWeaponInfo::GetWeaponInfo(type)->m_nDamage;
 	gaBulletInfo[i].m_vecPosition = vecPosition;
