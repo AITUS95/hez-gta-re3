@@ -26,6 +26,8 @@ class CCarGenerator
 	CVector m_vecSup;
 	float m_fSize;
 public:
+	bool IsPortlandPoliceStation() const;
+	void EnablePoliceDutyStation();
 	void SwitchOff();
 	void SwitchOn();
 	uint32 CalcNextGen();

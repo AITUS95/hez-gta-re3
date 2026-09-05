@@ -303,6 +303,26 @@ int8 CRunningScript::ProcessCommands1000To1099(int32 command)
 			CPoliceDuty::BeginShift();
 			return 0;
 		}
+		// Retail GTA III mission 13 is COPCAR (Vigilante). Use its original
+		// loader and mission lifecycle; all story launch restrictions remain.
+		if (ScriptParams[0] == 13 && ScriptParams[0] < CTheScripts::NumberOfMissionScripts) {
+#ifdef MISSION_REPLAY
+			missionRetryScriptIndex = ScriptParams[0];
+#endif
+			CTimer::Suspend();
+			int offset = CTheScripts::MultiScriptArray[ScriptParams[0]];
+			CFileMgr::ChangeDir("\\");
+			int handle = CFileMgr::OpenFile("data\\main.scm", "rb");
+			CFileMgr::Seek(handle, offset, 0);
+			CFileMgr::Read(handle, (const char*)&CTheScripts::ScriptSpace[SIZE_MAIN_SCRIPT], SIZE_MISSION_SCRIPT);
+			CFileMgr::CloseFile(handle);
+			CRunningScript* pMissionScript = CTheScripts::StartNewScript(SIZE_MAIN_SCRIPT);
+			CTimer::Resume();
+			pMissionScript->m_bIsMissionScript = true;
+			pMissionScript->m_bMissionFlag = true;
+			CTheScripts::bAlreadyRunningAMissionScript = true;
+			return 0;
+		}
 		// Stop the launch trigger without loading story or vehicle mission code.
 		CWorld::Players[CWorld::PlayerInFocus].MakePlayerSafe(false);
 		TheCamera.RestoreWithJumpCut();

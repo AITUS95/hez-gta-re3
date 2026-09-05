@@ -14,12 +14,30 @@
 #include "Vehicle.h"
 #include "World.h"
 #include "SaveBuf.h"
+#include "ModelIndices.h"
 
 uint8 CTheCarGenerators::ProcessCounter;
 uint32 CTheCarGenerators::NumOfCarGenerators;
 CCarGenerator CTheCarGenerators::CarGeneratorArray[NUM_CARGENS];
 uint8 CTheCarGenerators::GenerateEvenIfPlayerIsCloseCounter;
 uint32 CTheCarGenerators::CurrentActiveCount;
+
+bool CCarGenerator::IsPortlandPoliceStation() const
+{
+	// Identify the two retail MAIN generators, never allocate replacements.
+	return m_nModelIndex == MI_POLICE &&
+		((Abs(m_vecPos.x - 1139.0f) < 1.0f && Abs(m_vecPos.y + 646.0f) < 1.0f) ||
+		 (Abs(m_vecPos.x - 1139.688f) < 1.0f && Abs(m_vecPos.y + 684.6875f) < 1.0f));
+}
+
+void CCarGenerator::EnablePoliceDutyStation()
+{
+	if (!IsPortlandPoliceStation()) return;
+	if (m_nUsesRemaining == 0) SwitchOn();
+	m_nDoorlock = 0;
+	CVehicle *car = m_nVehicleHandle == -1 ? nil : CPools::GetVehiclePool()->GetAt(m_nVehicleHandle);
+	if (car) car->m_nDoorLock = CARLOCK_UNLOCKED;
+}
 
 void CCarGenerator::SwitchOff()
 {
@@ -52,7 +70,8 @@ void CCarGenerator::DoInternalProcessing()
 			--CTheCarGenerators::CurrentActiveCount;
 		return;
 	}
-	if (CCarCtrl::NumParkedCars >= 10)
+	// Keep the two duty bays available even when ambient parking is full.
+	if (CCarCtrl::NumParkedCars >= 10 && !IsPortlandPoliceStation())
 		return;
 	CStreaming::RequestModel(m_nModelIndex, STREAMFLAGS_DEPENDENCY);
 	if (!CStreaming::HasModelLoaded(m_nModelIndex))
@@ -199,6 +218,11 @@ bool CCarGenerator::CheckIfWithinRangeOfAnyPlayer()
 		return true;
 	if (m_bIsBlocking)
 		return false;
+	// Duty starts inside the vanilla near-clip exclusion (normally 100 m).
+	// These existing bays can populate nearby, but never on top of the player.
+	// Blockage, streaming, vehicle handles and return-after-use stay vanilla.
+	if (IsPortlandPoliceStation() && distance > 8.0f)
+		return true;
 	if (distance < nearclip)
 		return false;
 	return DotProduct2D(direction, FindPlayerSpeed()) <= 0;

@@ -11,8 +11,17 @@ generatori, pickup, garage, oggetti dinamici e thread ambientali. `CREATE_PLAYER
 crea il normale `CPlayerPed` a Portland, presso la centrale, con il modello
 `MI_COP`. Al posto del lancio della missione 0 (INTRO), `BeginShift` completa
 l'equipaggiamento, lo sblocco e il passaggio alla camera/controlli normali.
-MAIN continua a funzionare. I successivi lanci di missioni non avviano la storia
-né le missioni dei veicoli: il trigger viene fermato e restituisce i controlli.
+MAIN continua a funzionare. Vigilante (`COPCAR`, missione 13 del MAIN retail)
+usa nuovamente il caricatore, i trigger, gli obiettivi, i premi e la pulizia
+missione vanilla. Storia e altre missioni dei veicoli restano bloccate.
+
+Le due volanti di Portland usano i generatori originali del MAIN, senza
+aggiungerne altri. I due stalli possono generare anche quando il giocatore
+inizia entro il normale raggio di esclusione di 100 metri, mantenendo almeno
+8 metri di distanza e i controlli vanilla di spazio libero e streaming.
+Gli stalli restano disponibili anche se il limite ambientale di auto parcheggiate
+è già raggiunto. Le portiere sono sbloccate per il servizio. Handle del veicolo,
+attesa dopo il prelievo e ripristino al ritorno restano gestiti da `CCarGenerator`.
 
 Lo sblocco usa `CStats::IndustrialPassed`, `CommercialPassed`, `SuburbanPassed`,
 i metodi originali di `CPathFind` e le entità delle barriere di progressione
@@ -44,6 +53,7 @@ originale e richiede un esplosivo associato al suo utilizzatore.
 | **F7** | Genera uno SWAT |
 | **F8** | Genera un FBI |
 | **F9** | Genera un militare |
+| **Blocco Maiuscole / +** | Attiva/disattiva Vigilante su Police, Enforcer, FBI o Rhino (comando configurabile `TOGGLE_SUBMISSIONS`) |
 | **A piedi: mani nude + Mira + Fuoco** | Aumenta di una stella il sospetto sul bersaglio |
 | **In veicolo: Mira + Fuoco** | Stessa designazione su pedoni o altri veicoli |
 
@@ -81,6 +91,10 @@ del bersaglio dell'arma non lo cancella a mani nude o in auto.
 Occorre rilasciare e premere nuovamente Fuoco per ogni incremento; durante
 la designazione l'input non raggiunge armi, attacchi a pugni, drive-by o armi
 montate sui veicoli.
+
+Se un vecchio salvataggio è stato creato dopo aver tentato Vigilante nella
+versione che ne eliminava il trigger, iniziare una nuova partita: quel thread
+SCM non è più presente nel salvataggio.
 
 ## Wanted, alleanze e inseguimenti
 
@@ -168,7 +182,7 @@ Limiti espliciti:
 - Avvio SCM, registro sospetti, inseguimenti e posti di blocco: `src/control/CarAI.cpp`, `src/control/CarAI.h`, `src/control/CarCtrl.cpp`, `src/control/PoliceDuty.cpp`, `src/control/PoliceDuty.h`, `src/control/RoadBlocks.cpp`, `src/control/Script.cpp`, `src/control/Script2.cpp`, `src/control/Script6.cpp`.
 - Wanted, input, ciclo di gioco, streaming, danni e incendi: `src/core/Cam.cpp`, `src/core/Camera.cpp`, `src/core/Fire.cpp`, `src/core/Fire.h`, `src/core/Game.cpp`, `src/core/Pad.cpp`, `src/core/Pad.h`, `src/core/Streaming.cpp`, `src/core/Wanted.cpp`, `src/core/World.cpp`.
 - Giocatore, relazioni, combattimento e popolazione: `src/peds/CopPed.cpp`, `src/peds/PedAI.cpp`, `src/peds/PedFight.cpp`, `src/peds/PlayerPed.cpp`, `src/peds/Population.cpp`.
-- Danni, inseguimenti e supporto aereo: `src/vehicles/Automobile.cpp`, `src/vehicles/Heli.cpp`, `src/vehicles/Vehicle.cpp`.
+- Danni, inseguimenti e supporto aereo: `src/vehicles/Automobile.cpp`, `src/vehicles/CarGen.cpp`, `src/vehicles/CarGen.h`, `src/vehicles/Heli.cpp`, `src/vehicles/Vehicle.cpp`.
 - Munizioni e attribuzione del danno: `src/weapons/BulletInfo.cpp`, `src/weapons/Explosion.cpp`, `src/weapons/ShotInfo.cpp`, `src/weapons/Weapon.cpp`, `src/weapons/Weapon.h`.
 - Ripristino della modalità dopo il caricamento: `src/save/GenericGameStorage.cpp`.
 - Documentazione: `README.md`, `docs/POLICE.md`.

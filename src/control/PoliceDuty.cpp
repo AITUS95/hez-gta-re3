@@ -21,6 +21,7 @@
 #include "Timer.h"
 #include "General.h"
 #include "CarCtrl.h"
+#include "CarGen.h"
 #include "Object.h"
 #include "Game.h"
 #include "Hud.h"
@@ -339,6 +340,10 @@ void CPoliceDuty::RestoreShift()
 {
 	EquipPlayer();
 	UnlockWorld();
+	CStreaming::RequestModel(MI_POLICE, STREAMFLAGS_DEPENDENCY);
+	CStreaming::LoadAllRequestedModels(false);
+	for (uint32 i = 0; i < CTheCarGenerators::NumOfCarGenerators; ++i)
+		CTheCarGenerators::CarGeneratorArray[i].EnablePoliceDutyStation();
 	shiftStarted = true;
 }
 
