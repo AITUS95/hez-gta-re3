@@ -69,7 +69,11 @@ Un marcatore bianco al centro della visuale indica che la mira è attiva.
 Il raggio parte dalla camera aggiornata e, se non colpisce un bersaglio,
 la selezione cerca il candidato visibile più vicino al centro in un cono di
 25 gradi, entro 100 metri dal giocatore. `CWorld::ProcessLineOfSight` esclude
-bersagli dietro ostacoli. Anche pedoni neutrali e veicoli vuoti sono selezionabili.
+bersagli dietro ostacoli. Sono esclusi anche i bersagli alle spalle del giocatore
+rispetto alla direzione di mira, compresi quelli fra camera e giocatore. La mira
+disarmata conserva la direzione della visuale, cancella eventuali agganci della
+vecchia arma e impedisce il ricentraggio automatico e la camera da combattimento
+durante la designazione. Anche pedoni neutrali e veicoli vuoti sono selezionabili.
 Il marcatore vanilla diventa colorato sul bersaglio acquisito; il messaggio
 «Sospetto: N / 6» mostra il livello dopo ogni incremento. Il marcatore viene
 aggiornato dopo i controlli del giocatore e la camera, così la pulizia vanilla
@@ -162,7 +166,7 @@ Limiti espliciti:
 
 - Build Windows e filtri delle workflow esistenti: `.github/workflows/build-cmake-conan.yml`, `.github/workflows/build-switch.yml`, `.github/workflows/police-windows.yml` (sostituisce `re3_msvc_amd64.yml`), `.github/workflows/re3_msvc_x86.yml`.
 - Avvio SCM, registro sospetti, inseguimenti e posti di blocco: `src/control/CarAI.cpp`, `src/control/CarAI.h`, `src/control/CarCtrl.cpp`, `src/control/PoliceDuty.cpp`, `src/control/PoliceDuty.h`, `src/control/RoadBlocks.cpp`, `src/control/Script.cpp`, `src/control/Script2.cpp`, `src/control/Script6.cpp`.
-- Wanted, input, ciclo di gioco, streaming, danni e incendi: `src/core/Cam.cpp`, `src/core/Fire.cpp`, `src/core/Fire.h`, `src/core/Game.cpp`, `src/core/Pad.cpp`, `src/core/Pad.h`, `src/core/Streaming.cpp`, `src/core/Wanted.cpp`, `src/core/World.cpp`.
+- Wanted, input, ciclo di gioco, streaming, danni e incendi: `src/core/Cam.cpp`, `src/core/Camera.cpp`, `src/core/Fire.cpp`, `src/core/Fire.h`, `src/core/Game.cpp`, `src/core/Pad.cpp`, `src/core/Pad.h`, `src/core/Streaming.cpp`, `src/core/Wanted.cpp`, `src/core/World.cpp`.
 - Giocatore, relazioni, combattimento e popolazione: `src/peds/CopPed.cpp`, `src/peds/PedAI.cpp`, `src/peds/PedFight.cpp`, `src/peds/PlayerPed.cpp`, `src/peds/Population.cpp`.
 - Danni, inseguimenti e supporto aereo: `src/vehicles/Automobile.cpp`, `src/vehicles/Heli.cpp`, `src/vehicles/Vehicle.cpp`.
 - Munizioni e attribuzione del danno: `src/weapons/BulletInfo.cpp`, `src/weapons/Explosion.cpp`, `src/weapons/ShotInfo.cpp`, `src/weapons/Weapon.cpp`, `src/weapons/Weapon.h`.

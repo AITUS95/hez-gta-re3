@@ -88,9 +88,18 @@ bool CanDesignate(CEntity *entity)
 	return false;
 }
 
+bool InFrontOfPlayer(CEntity *entity, const CVector &direction)
+{
+	// The camera sits behind the player: its ray/cone also covers the space
+	// between them. Do not acquire someone behind the player in that space.
+	CVector offset = entity->GetBoundCentre() - FindPlayerCoors();
+	return offset.x * direction.x + offset.y * direction.y > 0.0f;
+}
+
 void ConsiderAimTarget(CEntity *candidate, const CVector &source, const CVector &direction, CEntity *&best, float &bestScore)
 {
 	if (!CanDesignate(candidate) || (candidate->GetPosition() - FindPlayerCoors()).MagnitudeSqr() > sq(100.0f)) return;
+	if (!InFrontOfPlayer(candidate, direction)) return;
 	CVector offset = candidate->GetBoundCentre() - source;
 	float distance = offset.Magnitude();
 	if (distance < 0.1f) return;
@@ -574,7 +583,7 @@ void CPoliceDuty::UpdateAim()
 		CEntity *oldIgnore = CWorld::pIgnoreEntity;
 		CWorld::pIgnoreEntity = FindPlayerVehicle() ? (CEntity*)FindPlayerVehicle() : (CEntity*)FindPlayerPed();
 		CWorld::ProcessLineOfSight(source, source + direction * 100.0f, point, hit, true, true, true, true, true, false, false);
-		if (!CanDesignate(hit)) {
+		if (!CanDesignate(hit) || !InFrontOfPlayer(hit, direction)) {
 			hit = nil;
 			float score = 1.0e20f;
 			for (int i = 0; i < CPools::GetPedPool()->GetSize(); ++i)

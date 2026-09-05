@@ -8,6 +8,7 @@
 #include "Automobile.h"
 #include "Ped.h"
 #include "PlayerPed.h"
+#include "PoliceDuty.h"
 #include "Wanted.h"
 #include "Pad.h"
 #include "ControllerConfig.h"
@@ -1119,7 +1120,7 @@ CCamera::CamControl(void)
 			WellBufferMe(CloseInPedHeightTarget, &Cams[ActiveCam].m_fCloseInPedHeightOffset, &Cams[ActiveCam].m_fCloseInPedHeightOffsetSpeed, 0.1f, 0.025f, false);
 
 			// Check if entering fight cam
-			if(!m_bFirstPersonBeingUsed){
+			if(!m_bFirstPersonBeingUsed && !CPoliceDuty::IsDesignating()){
 				if(FindPlayerPed()->GetPedState() == PED_FIGHT && !m_bUseMouse3rdPerson)
 					ReqMode = CCam::MODE_FIGHT_CAM;
 				if(((CPed*)pTargetEntity)->GetWeapon()->m_eWeaponType == WEAPONTYPE_BASEBALLBAT &&

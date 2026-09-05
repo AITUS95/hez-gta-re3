@@ -1013,7 +1013,12 @@ CPlayerPed::ProcessAnimGroups(void)
 void
 CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
 {
-	if (CPoliceDuty::IsDesignating()) return;
+	if (CPoliceDuty::IsDesignating()) {
+		// A previous weapon lock must not keep steering the camera at its target.
+		ClearWeaponTarget();
+		m_bHasLockOnTarget = false;
+		return;
+	}
 	CWeaponInfo *weaponInfo = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType);
 	if (m_bHasLockOnTarget && !m_pPointGunAt) {
 		TheCamera.ClearPlayerWeaponMode();

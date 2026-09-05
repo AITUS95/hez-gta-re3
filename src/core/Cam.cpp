@@ -1517,6 +1517,12 @@ CCam::Process_FollowPedWithMouse(const CVector &CameraTarget, float TargetOrient
 	CEntity *entity;
 
 	if(ResetStatics){
+		if (CPoliceDuty::IsDesignating()) {
+			// Follow cameras use different Beta conventions. Preserve the actual
+			// view direction when entering designation instead of reusing angles.
+			Beta = Atan2(Front.y, Front.x);
+			Alpha = Atan2(Front.z, Front.Magnitude2D());
+		}
 		Rotating = false;
 		m_bCollisionChecksOn = true;
 		CPad::GetPad(0)->ClearMouseHistory();
@@ -1582,12 +1588,12 @@ CCam::Process_FollowPedWithMouse(const CVector &CameraTarget, float TargetOrient
 	else
 		CamDist = fBaseDist + Cos(Alpha)*fAngleDist;
 
-	if(TheCamera.m_bUseTransitionBeta)
+	if(TheCamera.m_bUseTransitionBeta && !CPoliceDuty::IsDesignating())
 		Beta = CGeneral::GetATanOfXY(-Cos(m_fTransitionBeta), -Sin(m_fTransitionBeta));
 
-	if(TheCamera.m_bCamDirectlyBehind)
+	if(TheCamera.m_bCamDirectlyBehind && !CPoliceDuty::IsDesignating())
 		Beta = TheCamera.m_PedOrientForBehindOrInFront;
-	if(TheCamera.m_bCamDirectlyInFront)
+	if(TheCamera.m_bCamDirectlyInFront && !CPoliceDuty::IsDesignating())
 		Beta = TheCamera.m_PedOrientForBehindOrInFront + PI;
 	if(OnTrain)
 		Beta = TargetOrientation;
