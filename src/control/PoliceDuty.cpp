@@ -26,7 +26,6 @@
 #include "Game.h"
 #include "Hud.h"
 #include "Replay.h"
-#include "ControllerConfig.h"
 #include "Frontend.h"
 
 namespace {
@@ -61,18 +60,6 @@ void Release(CEntity **ref)
 	CEntity *old = *ref;
 	*ref = nil;
 	if (old) old->PruneReferences();
-}
-
-bool ActionDown(e_ControllerAction action)
-{
-	// Read the configured PC binding directly: the input mapper normally drops
-	// PED_LOCK_TARGET when driving, before it reaches CPad::GetTarget.
-	for (int type = KEYBOARD; type <= OPTIONAL_EXTRA; ++type) {
-		int key = ControlsManager.GetControllerKeyAssociatedWithAction(action, (eControllerType)type);
-		if (key >= 0 && key != rsNULL && ControlsManager.GetIsKeyboardKeyDown((RsKeyCodes)key)) return true;
-	}
-	int button = ControlsManager.GetControllerKeyAssociatedWithAction(action, MOUSE);
-	return button > 0 && ControlsManager.GetIsMouseButtonDown((RsKeyCodes)button);
 }
 
 bool CanDesignate(CEntity *entity)
@@ -490,8 +477,7 @@ bool CPoliceDuty::IsDesignating()
 	CPad *pad = CPad::GetPad(0);
 	return ready && shiftStarted && player && !player->DyingOrDead() && !pad->ArePlayerControlsDisabled() &&
 		!FrontEndMenuManager.GetIsMenuActive() && !CReplay::IsPlayingBack() &&
-		(ActionDown(PED_LOCK_TARGET) || pad->GetTarget() || pad->GetRightMouse()) &&
-		(player->bInVehicle || player->GetWeapon()->m_eWeaponType == WEAPONTYPE_UNARMED);
+		pad->GetLeftShoulder1(); // L1 designates independently of weapon/R1 aim.
 }
 
 bool CPoliceDuty::ScriptIntCompare(const char *thread, int32 *variable, int32 value)
@@ -574,6 +560,8 @@ void CPoliceDuty::Update()
 	CPlayerPed *player = FindPlayerPed();
 	if (!player->DyingOrDead() && (player->GetModelIndex() != MI_COP || !player->HasWeapon(WEAPONTYPE_COLT45)))
 		EquipPlayer();
+	// Clear any armed lock/first-person camera before player control runs.
+	if (IsDesignating()) player->ClearWeaponTarget();
 	CPad *pad = CPad::GetPad(0);
 	if (!pad->ArePlayerControlsDisabled()) {
 		// F6 = street police, F7 = SWAT, F8 = FBI, F9 = military.
@@ -590,7 +578,7 @@ void CPoliceDuty::UpdateAim()
 	// erases the marker in unarmed/vehicle states before anything is rendered.
 	if (!ready || !shiftStarted || !FindPlayerPed()) return;
 	CPad *pad = CPad::GetPad(0);
-	bool fire = ActionDown(PED_FIREWEAPON) || pad->GetWeaponInput() || (FindPlayerVehicle() && pad->GetCarGunInput());
+	bool fire = pad->GetCircle(); // Physical Circle, independent of the fire layout.
 	if (IsDesignating()) {
 		CCam &camera = TheCamera.Cams[TheCamera.ActiveCam];
 		CVector source = camera.Source;

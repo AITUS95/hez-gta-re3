@@ -54,8 +54,8 @@ originale e richiede un esplosivo associato al suo utilizzatore.
 | **F8** | Genera un FBI |
 | **F9** | Genera un militare |
 | **Blocco Maiuscole / +** | Attiva/disattiva Vigilante su Police, Enforcer, FBI o Rhino (comando configurabile `TOGGLE_SUBMISSIONS`) |
-| **A piedi: mani nude + Mira + Fuoco** | Aumenta di una stella il sospetto sul bersaglio |
-| **In veicolo: Mira + Fuoco** | Stessa designazione su pedoni o altri veicoli |
+| **A piedi: L1 + Cerchio** | Aumenta di una stella il sospetto, anche con un’arma equipaggiata |
+| **In veicolo: L1 + Cerchio** | Stessa designazione su pedoni o altri veicoli |
 
 I tasti funzionali sono documentati anche nel codice: l'array `CPad::F` parte
 da zero (F6 corrisponde all'indice 5). Gli agenti vengono collocati in una
@@ -65,15 +65,16 @@ leader vanilla per seguire il giocatore; durante un inseguimento questo obiettiv
 cede la precedenza all'AI della polizia. Le armi degli agenti già presenti non
 cambiano con quelle del giocatore.
 
-Tenere premuto **Mira (tasto destro del mouse)**, orientare la camera con il
-mouse verso un pedone o un veicolo, poi premere **Fuoco (tasto sinistro)**.
-A piedi occorre selezionare le mani nude; in auto funziona con qualsiasi arma.
-Anche le assegnazioni personalizzate di Mira/Fuoco vengono lette, compreso
-il comando Mira dei pedoni quando si guida. È mantenuto `CPad::GetTarget` per
-il controller; in veicolo il pulsante può condividere il freno a mano secondo
-il layout. Durante la designazione il mouse ruota la camera di inseguimento
-esistente e non aziona lo sterzo; resta disponibile lo sterzo da tastiera/controller.
-Non viene attivata una camera debug o una modalità Free Roam.
+Tenere premuto **L1**, orientare la camera verso il bersaglio e premere
+**Cerchio** per aggiungere una stella. Funziona sia a piedi sia in auto, con
+qualsiasi arma equipaggiata. Si leggono `CPad::GetLeftShoulder1` e `GetCircle`,
+indipendentemente dall'azione Fuoco del layout. **R1 rimane il normale comando
+di puntamento delle armi** e non attiva la designazione. Durante L1 i percorsi
+Fuoco, pugni, drive-by e armi del veicolo sono bloccati; Cerchio designa soltanto.
+Ogni incremento richiede un nuovo clic di Cerchio. La precedente combinazione
+Mira/Fuoco con mouse non attiva più il sospetto.
+Durante la designazione il mouse ruota la camera esistente e non aziona lo
+sterzo; resta disponibile lo sterzo da tastiera/controller.
 
 Un marcatore bianco al centro della visuale indica che la mira è attiva.
 Il raggio parte dalla camera aggiornata e, se non colpisce un bersaglio,
@@ -88,7 +89,7 @@ Il marcatore vanilla diventa colorato sul bersaglio acquisito; il messaggio
 «Sospetto: N / 6» mostra il livello dopo ogni incremento. Il marcatore viene
 aggiornato dopo i controlli del giocatore e la camera, così la pulizia vanilla
 del bersaglio dell'arma non lo cancella a mani nude o in auto.
-Occorre rilasciare e premere nuovamente Fuoco per ogni incremento; durante
+Occorre rilasciare e premere nuovamente Cerchio per ogni incremento; durante
 la designazione l'input non raggiunge armi, attacchi a pugni, drive-by o armi
 montate sui veicoli.
 
