@@ -119,12 +119,17 @@ ha un vero `CWanted`. Non sostituisce il puntatore del giocatore, non usa un
   inserire i tipi mancanti; conserva il limite globale dei veicoli, streaming,
   nodi stradali e controlli di collisione/visibilità. Una volta presenti,
   distribuzione casuale e quote delle nuove pattuglie tornano vanilla.
-- I posti di blocco armano correttamente il controllo d'ingresso all'inizio di
-  una ricerca. Restano nei nodi stradali originali, con probabilità vanilla:
-  non sono garantiti su ogni strada. Su strade troppo strette per i furgoni
-  si prova una volante. Ogni blocco conserva l'incidente assegnato e i suoi
-  agenti vengono generati anche quando si avvicina il sospetto. Il giocatore
-  deve restare abbastanza vicino da mantenere caricata l'area.
+- I posti di blocco usano i nodi vanilla entro 100 metri dal sospetto e 180
+  dal giocatore. Da 3 stelle i tentativi non dipendono più dalla probabilità
+  una tantum: un nodo non disponibile viene ritentato dopo 2 secondi, mentre
+  un blocco creato impone una pausa globale di 8 secondi. Questi sono intervalli
+  minimi, non una promessa di spawn ogni 8 secondi: occorrono una strada adatta,
+  modelli caricati e spazio libero, almeno 25 metri da giocatore e sospetto.
+  Un nodo viene segnato occupato solo dopo la creazione effettiva del blocco.
+  La composizione è Police/agenti a 3 stelle, Enforcer/SWAT a 4, FBI a 5,
+  Barracks/militari a 6. Non si ripiega su volanti ai livelli speciali: si attende
+  lo streaming o si prova un'altra strada. Gli agenti mantengono il bersaglio
+  assegnato e si attivano anche all'avvicinarsi del sospetto.
 - I pedoni sospetti usano gli obiettivi di fuga vanilla o conservano il proprio
   combattimento. Il conducente resta sospetto anche quando abbandona il mezzo.
   I mezzi vuoti usano l'obiettivo vanilla `OBJECTIVE_DESTROY_CAR`, insieme alla

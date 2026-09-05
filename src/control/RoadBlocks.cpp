@@ -16,7 +16,11 @@
 #include "CarCtrl.h"
 #include "General.h"
 
-#define ROADBLOCKDIST (80.0f)
+#define ROADBLOCKDIST (100.0f)
+
+// Schedule attempts rather than spending a tiny one-shot probability per node.
+static uint32 NextRoadblockTime;
+static uint32 NextNodeAttempt[NUMROADBLOCKS];
 
 int16 CRoadBlocks::NumRoadBlocks;
 int16 CRoadBlocks::RoadBlockObjects[NUMROADBLOCKS];
@@ -27,6 +31,8 @@ CRoadBlocks::Init(void)
 {
 	int i;
 	NumRoadBlocks = 0;
+	NextRoadblockTime = 0;
+	memset(NextNodeAttempt, 0, sizeof(NextNodeAttempt));
 	for (i = 0; i < ThePaths.m_numMapObjects; i++) {
 		if (ThePaths.m_objectFlags[i] & UseInRoadBlock) {
 			if (NumRoadBlocks < NUMROADBLOCKS) {
@@ -110,6 +116,7 @@ CRoadBlocks::GenerateRoadBlocks(void)
 		for (int i = 0; i < NumRoadBlocks; ++i) InOrOut[i] = false;
 		return;
 	}
+	if (CTimer::GetTimeInMilliseconds() < NextRoadblockTime) return;
 	CMatrix offsetMatrix;
 	uint32 frame = CTimer::GetFrameCounter() & 0xF;
 	int16 nRoadblockNode = (int16)(NUMROADBLOCKS * frame) / 16;
@@ -125,9 +132,11 @@ CRoadBlocks::GenerateRoadBlocks(void)
 		if (vecDistance.x > -ROADBLOCKDIST && vecDistance.x < ROADBLOCKDIST &&
 			vecDistance.y > -ROADBLOCKDIST && vecDistance.y < ROADBLOCKDIST &&
 			vecDistance.Magnitude() < ROADBLOCKDIST) {
-			if (!InOrOut[nRoadblockNode]) {
-				InOrOut[nRoadblockNode] = true;
-				if (CPoliceDuty::TargetVehicle() && (CGeneral::GetRandomNumber() & 0x7F) < CPoliceDuty::WantedFor()->m_RoadblockDensity) {
+			if (!InOrOut[nRoadblockNode] && CTimer::GetTimeInMilliseconds() >= NextNodeAttempt[nRoadblockNode]) {
+				NextNodeAttempt[nRoadblockNode] = CTimer::GetTimeInMilliseconds() + 2000;
+				// Never assemble a blockade directly on the suspect or the player.
+				if (vecDistance.Magnitude() < 25.0f || (mapObject->GetPosition() - FindPlayerCoors()).Magnitude2D() < 25.0f) continue;
+				{
 					CWanted *pPlayerWanted = CPoliceDuty::WantedFor();
 					float fMapObjectRadius = 2.0f * mapObject->GetColModel()->boundingBox.max.x;
 					int32 vehicleId = MI_POLICE;
@@ -137,24 +146,16 @@ CRoadBlocks::GenerateRoadBlocks(void)
 						vehicleId = MI_FBICAR;
 					else if (pPlayerWanted->AreSwatRequired())
 						vehicleId = MI_ENFORCER;
-					if (!CStreaming::HasModelLoaded(vehicleId))
-						vehicleId = MI_POLICE;
-					if (!CStreaming::HasModelLoaded(vehicleId)) {
-						InOrOut[nRoadblockNode] = false;
-						continue;
-					}
+					int32 pedModel = vehicleId == MI_BARRACKS ? MI_ARMY : vehicleId == MI_FBICAR ? MI_FBI : vehicleId == MI_ENFORCER ? MI_SWAT : MI_COP;
+					CStreaming::RequestModel(vehicleId, STREAMFLAGS_DEPENDENCY);
+					CStreaming::RequestModel(pedModel, STREAMFLAGS_DEPENDENCY);
+					if (!CStreaming::HasModelLoaded(vehicleId) || !CStreaming::HasModelLoaded(pedModel)) continue;
 					CColModel *pVehicleColModel = CModelInfo::GetColModel(vehicleId);
-					float fModelRadius = 2.0f * pVehicleColModel->boundingSphere.radius + 0.25f;
-					int16 radius = (int16)(fMapObjectRadius / fModelRadius);
-					// A large Enforcer/Barracks can fit zero times on a narrow road.
-					// Reuse a patrol car there instead of silently creating no block.
-					if (radius == 0 && vehicleId != MI_POLICE && CStreaming::HasModelLoaded(MI_POLICE)) {
-						vehicleId = MI_POLICE;
-						fModelRadius = 2.0f * CModelInfo::GetColModel(vehicleId)->boundingSphere.radius + 0.25f;
-						radius = (int16)(fMapObjectRadius / fModelRadius);
-					}
-					if (radius >= 6)
-						continue;
+					// Cars are rotated across the road: use their length, not the
+					// bounding-sphere diameter which unnecessarily rejects large vans.
+					float fModelRadius = pVehicleColModel->boundingBox.max.y - pVehicleColModel->boundingBox.min.y + 0.5f;
+					int16 radius = Min(5, (int)(fMapObjectRadius / fModelRadius));
+					if (radius < 1) continue; // Try another suitable vanilla road node.
 					CVector2D vecDistanceToCamera = TheCamera.GetPosition() - mapObject->GetPosition();
 					float fDotProduct = DotProduct2D(vecDistanceToCamera, mapObject->GetForward());
 					float fOffset = 0.5f * fModelRadius * (float)(radius - 1);
@@ -205,6 +206,8 @@ CRoadBlocks::GenerateRoadBlocks(void)
 								pVehicle->bCreateRoadBlockPeds = true;
 								pVehicle->m_nRoadblockType = nRoadblockType;
 								pVehicle->m_nRoadblockNode = nRoadblockNode;
+								InOrOut[nRoadblockNode] = true;
+								NextRoadblockTime = CTimer::GetTimeInMilliseconds() + 8000;
 							}
 							else {
 								delete pVehicle;
@@ -213,6 +216,7 @@ CRoadBlocks::GenerateRoadBlocks(void)
 					}
 				}
 			}
+			if (InOrOut[nRoadblockNode]) return;
 		} else {
 			InOrOut[nRoadblockNode] = false;
 		}
