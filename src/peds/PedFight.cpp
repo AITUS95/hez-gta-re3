@@ -1,4 +1,5 @@
 #include "common.h"
+#include "PoliceDuty.h"
 
 #include "main.h"
 #include "RpAnimBlend.h"
@@ -150,6 +151,7 @@ CheckForPedsOnGroundToAttack(CPed *attacker, CPed **pedOnGround)
 void
 CPed::SetPointGunAt(CEntity *to)
 {
+	if (CPoliceDuty::IsFriendlyFire(this, to)) return;
 	if (to) {
 		SetLookFlag(to, true);
 		SetAimFlag(to);
@@ -243,6 +245,8 @@ CPed::ClearPointGunAt(void)
 void
 CPed::SetAttack(CEntity *victim)
 {
+	if (CPoliceDuty::IsFriendlyFire(this, victim)) return ;
+	CPoliceDuty::ReportAttack(this, victim);
 	CPed *victimPed = nil;
 	if (victim && victim->IsPed())
 		victimPed = (CPed*)victim;
@@ -1568,6 +1572,7 @@ CPed::FightStrike(CVector &touchedNodePos)
 
 	for (int i = 0; i < m_numNearPeds; i++) {
 		nearPed = m_nearPeds[i];
+		if (CPoliceDuty::IsFriendlyFire(this, nearPed)) continue;
 		if (GetWeapon()->m_eWeaponType != WEAPONTYPE_UNARMED)
 			maxDistanceToBeBeaten = nearPed->GetBoundRadius() + tFightMoves[m_curFightMove].strikeRadius + 0.1f;
 		else
@@ -2056,6 +2061,8 @@ CPed::ClearInvestigateEvent(void)
 bool
 CPed::InflictDamage(CEntity *damagedBy, eWeaponType method, float damage, ePedPieceTypes pedPiece, uint8 direction)
 {
+	if (CPoliceDuty::IsFriendlyFire(this, damagedBy)) return false;
+	CPoliceDuty::ReportAttack(damagedBy, this);
 	CPlayerPed *player = FindPlayerPed();
 	float dieDelta = 4.0f;
 	float dieSpeed = 0.0f;
@@ -3026,6 +3033,8 @@ CPed::CollideWithPed(CPed *collideWith)
 void
 CPed::KillPedWithCar(CVehicle *car, float impulse)
 {
+	if (CPoliceDuty::IsFriendlyFire(this, car)) return;
+	CPoliceDuty::ReportAttack(car, this);
 	CVehicleModelInfo *vehModel;
 	CColModel *vehColModel;
 	uint8 damageDir;

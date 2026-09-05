@@ -1,4 +1,5 @@
 #include "common.h"
+#include "PoliceDuty.h"
 
 #include "World.h"
 #include "PlayerPed.h"
@@ -20,6 +21,7 @@
 CCopPed::CCopPed(eCopType copType) : CPed(PEDTYPE_COP)
 {
 	m_nCopType = copType;
+	m_fearFlags &= ~(PED_FLAG_PLAYER1 | PED_FLAG_COP);
 	switch (copType) {
 	case COP_STREET:
 		SetModelIndex(MI_COP);
@@ -86,9 +88,24 @@ CCopPed::~CCopPed()
 void
 CCopPed::SetArrestPlayer(CPed *player)
 {
-	if (!IsPedInControl() || !player)
+	if (!IsPedInControl() || !player || CPoliceDuty::IsOfficer(player))
 		return;
 
+	if (!player->IsPlayer()) {
+		if (player->DyingOrDead()) return;
+		player->ClearObjective();
+		player->ClearAttack();
+		player->SetPedState(PED_ARRESTED);
+		if (player->bInVehicle && player->m_pMyVehicle) {
+			player->m_pMyVehicle->AutoPilot.m_nCarMission = MISSION_STOP_FOREVER;
+			player->m_pMyVehicle->bIsHandbrakeOn = true;
+		}
+		SetPedState(PED_ARREST_PLAYER);
+		ClearObjective();
+		m_pSeekTarget = player;
+		player->RegisterReference((CEntity**)&m_pSeekTarget);
+		return;
+	}
 	switch (m_nCopType) {
 		case COP_FBI:
 			Say(SOUND_PED_ARREST_FBI);
@@ -145,7 +162,7 @@ CCopPed::ClearPursuit(void)
 	if (!player)
 		return;
 
-	CWanted *wanted = player->m_pWanted;
+	CWanted *wanted = CPoliceDuty::WantedFor(this);
 	int ourCopId = 0;
 	bool foundMyself = false;
 	int biggestCopId = 0;
@@ -197,7 +214,7 @@ CCopPed::ClearPursuit(void)
 void
 CCopPed::SetPursuit(bool ignoreCopLimit)
 {
-	CWanted *wanted = FindPlayerPed()->m_pWanted;
+	CWanted *wanted = CPoliceDuty::WantedFor(this);
 	if (m_bIsInPursuit || !IsPedInControl())
 		return;
 
@@ -213,7 +230,10 @@ CCopPed::SetPursuit(bool ignoreCopLimit)
 		if (m_bIsInPursuit) {
 			ClearObjective();
 			m_prevObjective = OBJECTIVE_NONE;
-			SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, FindPlayerPed());
+			if (CPoliceDuty::TargetPed(this))
+				SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, CPoliceDuty::TargetPed(this));
+			else if (CPoliceDuty::TargetVehicle(this))
+				SetObjective(OBJECTIVE_DESTROY_CAR, CPoliceDuty::TargetVehicle(this));
 			SetObjectiveTimer(0);
 			bNotAllowedToDuck = true;
 			bIsRunning = true;
@@ -290,9 +310,14 @@ CCopPed::ScanForCrimes(void)
 void
 CCopPed::CopAI(void)
 {
-	CWanted *wanted = FindPlayerPed()->m_pWanted;
+	CWanted *wanted = CPoliceDuty::WantedFor(this);
 	int wantedLevel = wanted->GetWantedLevel();
-	CPhysical *playerOrHisVeh = FindPlayerVehicle() ? (CPhysical*)FindPlayerVehicle() : (CPhysical*)FindPlayerPed();
+	if (wantedLevel && !CPoliceDuty::TargetPed(this)) {
+		// Empty vehicles use vanilla destroy-car objectives and car pursuit.
+		SetPursuit(false);
+		return;
+	}
+	CPhysical *playerOrHisVeh = CPoliceDuty::Target(this);
 
 	if (wanted->m_bIgnoredByEveryone || wanted->m_bIgnoredByCops) {
 		if (m_nPedState != PED_ARREST_PLAYER)
@@ -375,19 +400,19 @@ CCopPed::CopAI(void)
 			if (!m_bIsInPursuit)
 				return;
 
-			if (wantedLevel > 1 && GetWeapon()->m_eWeaponType == WEAPONTYPE_UNARMED)
-				SetCurrentWeapon(WEAPONTYPE_COLT45);
-			else if (wantedLevel == 1 && GetWeapon()->m_eWeaponType != WEAPONTYPE_UNARMED && !FindPlayerPed()->m_pCurrentPhysSurface) {
+			if (!CPoliceDuty::IsSpawnedOfficer(this) && wantedLevel > 1 && GetWeapon()->m_eWeaponType == WEAPONTYPE_UNARMED)
+				if (!CPoliceDuty::IsSpawnedOfficer(this)) SetCurrentWeapon(WEAPONTYPE_COLT45);
+			else if (!CPoliceDuty::IsSpawnedOfficer(this) && wantedLevel == 1 && GetWeapon()->m_eWeaponType != WEAPONTYPE_UNARMED && (!CPoliceDuty::TargetPed(this) || !CPoliceDuty::TargetPed(this)->m_pCurrentPhysSurface)) {
 				// i.e. if player is on top of car, cop will still use colt45.
 				SetCurrentWeapon(WEAPONTYPE_UNARMED);
 			}
 
-			if (FindPlayerVehicle()) {
+			if (CPoliceDuty::TargetVehicle(this)) {
 				if (m_bBeatingSuspect) {
 					--wanted->m_CopsBeatingSuspect;
 					m_bBeatingSuspect = false;
 				}
-				if (m_fDistanceToTarget * FindPlayerSpeed().Magnitude() > 4.0f)
+				if (m_fDistanceToTarget * CPoliceDuty::TargetSpeed(this).Magnitude() > 4.0f)
 					ClearPursuit();
 			}
 			return;
@@ -395,7 +420,7 @@ CCopPed::CopAI(void)
 		float weaponRange = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType)->m_fRange;
 		SetLookFlag(playerOrHisVeh, true);
 		TurnBody();
-		SetCurrentWeapon(WEAPONTYPE_COLT45);
+		if (!CPoliceDuty::IsSpawnedOfficer(this)) SetCurrentWeapon(WEAPONTYPE_COLT45);
 		if (!bIsDucking) {
 			if (m_attackTimer >= CTimer::GetTimeInMilliseconds()) {
 				if (m_nPedState != PED_ATTACK && m_nPedState != PED_FIGHT && !m_bZoneDisabled) {
@@ -412,10 +437,10 @@ CCopPed::CopAI(void)
 							bNotAllowedToDuck = false;
 							bDuckAndCover = false;
 							SetPursuit(false);
-							SetObjective(OBJECTIVE_KILL_CHAR_ANY_MEANS, FindPlayerPed());
+							SetObjective(OBJECTIVE_KILL_CHAR_ANY_MEANS, CPoliceDuty::TargetPed(this));
 						}
 					} else if (m_fDistanceToTarget < 5.0f
-							&& (!FindPlayerVehicle() || FindPlayerVehicle()->m_vecMoveSpeed.MagnitudeSqr() < sq(1.f/200.f))) {
+							&& (!CPoliceDuty::TargetVehicle(this) || CPoliceDuty::TargetVehicle(this)->m_vecMoveSpeed.MagnitudeSqr() < sq(1.f/200.f))) {
 						m_bIsDisabledCop = false;
 						bKindaStayInSamePlace = false;
 						bNotAllowedToDuck = false;
@@ -559,6 +584,12 @@ CCopPed::ProcessControl(void)
 	if (m_nZoneLevel > LEVEL_GENERIC && m_nZoneLevel != CCollision::ms_collisionInMemory)
 		return;
 
+	if (CPoliceDuty::IsFriendlyFire(this, m_pedInObjective)) {
+		ClearPursuit();
+		ClearObjective();
+		ClearAttack();
+		ClearPointGunAt();
+	}
 	CPed::ProcessControl();
 	if (bWasPostponed)
 		return;
@@ -579,8 +610,9 @@ CCopPed::ProcessControl(void)
 	if (m_moved.Magnitude() > 0.0f)
 		Avoid();
 
-	CPhysical *playerOrHisVeh = FindPlayerVehicle() ? (CPhysical*)FindPlayerVehicle() : (CPhysical*)FindPlayerPed();
-	CPlayerPed *player = FindPlayerPed();
+	CPhysical *playerOrHisVeh = CPoliceDuty::Target(this);
+	CPed *player = CPoliceDuty::TargetPed(this);
+	if (!player) player = FindPlayerPed(); // Idle patrols still share the player streaming area.
 
 	m_fDistanceToTarget = (playerOrHisVeh->GetPosition() - GetPosition()).Magnitude();
 	if (player->m_nPedState == PED_ARRESTED || player->DyingOrDead()) {
@@ -672,7 +704,7 @@ CCopPed::ProcessControl(void)
 					}
 #endif
 				} else if (Seek()) {
-					CVehicle *playerVeh = FindPlayerVehicle();
+					CVehicle *playerVeh = CPoliceDuty::TargetVehicle(this);
 					if (!playerVeh && player && player->EnteringCar()) {
 						SetArrestPlayer(player);
 					} else if (1.5f + GetPosition().z <= m_vecSeekPos.z || GetPosition().z - 0.3f >= m_vecSeekPos.z) {

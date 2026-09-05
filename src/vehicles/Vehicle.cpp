@@ -1,4 +1,5 @@
 #include "common.h"
+#include "PoliceDuty.h"
 #include "main.h"
 
 #include "General.h"
@@ -613,6 +614,8 @@ CVehicle::ProcessWheelRotation(tWheelState state, const CVector &fwd, const CVec
 void
 CVehicle::InflictDamage(CEntity* damagedBy, eWeaponType weaponType, float damage)
 {
+	if (CPoliceDuty::IsFriendlyFire(this, damagedBy)) return;
+	if (pDriver) CPoliceDuty::ReportAttack(damagedBy, pDriver);
 	if (!bCanBeDamaged)
 		return;
 	if (bOnlyDamagedByPlayer && (damagedBy != FindPlayerPed() && damagedBy != FindPlayerVehicle()))
@@ -747,7 +750,7 @@ CVehicle::DoFixedMachineGuns(void)
 				((CGeneral::GetRandomNumber()&0xFF)-128) * 0.015f,
 				((CGeneral::GetRandomNumber()&0xFF)-128) * 0.02f);
 			CWeapon::DoTankDoomAiming(this, pDriver, &source, &target);
-			FireOneInstantHitRound(&source, &target, 15);
+			FireOneInstantHitRound(&source, &target, 15, this);
 
 			source = GetMatrix() * CVector(-2.0f, 2.5f, 1.0f);
 			target = source + CVector(dx, dy, 0.0f)*60.0f;
@@ -756,7 +759,7 @@ CVehicle::DoFixedMachineGuns(void)
 				((CGeneral::GetRandomNumber()&0xFF)-128) * 0.015f,
 				((CGeneral::GetRandomNumber()&0xFF)-128) * 0.02f);
 			CWeapon::DoTankDoomAiming(this, pDriver, &source, &target);
-			FireOneInstantHitRound(&source, &target, 15);
+			FireOneInstantHitRound(&source, &target, 15, this);
 
 			DMAudio.PlayOneShot(m_audioEntityId, SOUND_WEAPON_SHOT_FIRED, 0.0f);
 

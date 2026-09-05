@@ -1,4 +1,5 @@
 #include "common.h"
+#include "PoliceDuty.h"
 #include "Camera.h"
 #include "CarCtrl.h"
 #include "CopPed.h"
@@ -2038,10 +2039,11 @@ CWorld::TriggerExplosionSectorList(CPtrList &list, const CVector &position, floa
 {
 	for(CPtrNode *pNode = list.first; pNode; pNode = pNode->next) {
 		CPhysical *pEntity = (CPhysical *)pNode->item;
+		if (CPoliceDuty::IsFriendlyFire(pCreator, pEntity)) continue;
 		CVector vecDistance = pEntity->GetPosition() - position;
 		float fMagnitude = vecDistance.Magnitude();
 		if(fRadius > fMagnitude) {
-			CWeapon::BlowUpExplosiveThings(pEntity);
+			CWeapon::BlowUpExplosiveThings(pEntity, pCreator);
 			CPed *pPed = (CPed *)pEntity;
 			CObject *pObject = (CObject *)pEntity;
 			CVehicle *pVehicle = (CVehicle *)pEntity;

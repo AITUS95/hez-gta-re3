@@ -1,4 +1,5 @@
 #include "common.h"
+#include "PoliceDuty.h"
 
 #include "RoadBlocks.h"
 #include "PathFind.h"
@@ -48,9 +49,9 @@ CRoadBlocks::GenerateRoadBlockCopsForCar(CVehicle* pVehicle, int32 roadBlockType
 {
 	static const CVector vecRoadBlockOffets[6] = { CVector(-1.5, 1.8f, 0.0f), CVector(-1.5f, -1.8f, 0.0f), CVector(1.5f, 1.8f, 0.0f),
 	CVector(1.5f, -1.8f, 0.0f), CVector(-1.5f, 0.0f, 0.0f), CVector(1.5, 0.0, 0.0) };
-	CEntity* pEntityToAttack = (CEntity*)FindPlayerVehicle();
+	CEntity* pEntityToAttack = (CEntity*)CPoliceDuty::TargetVehicle();
 	if (!pEntityToAttack)
-		pEntityToAttack = (CEntity*)FindPlayerPed();
+		pEntityToAttack = (CEntity*)CPoliceDuty::Target();
 	CColModel* pPoliceColModel = CModelInfo::GetColModel(MI_POLICE);
 	float fRadius = pVehicle->GetBoundRadius() / pPoliceColModel->boundingSphere.radius;
 	for (int32 i = 0; i < 2; i++) {
@@ -103,7 +104,7 @@ void
 CRoadBlocks::GenerateRoadBlocks(void) 
 { 
 #ifdef SQUEEZE_PERFORMANCE
-	if (FindPlayerPed()->m_pWanted->m_RoadblockDensity == 0)
+	if (CPoliceDuty::WantedFor()->m_RoadblockDensity == 0)
 		return;
 #endif
 	CMatrix offsetMatrix;
@@ -112,14 +113,14 @@ CRoadBlocks::GenerateRoadBlocks(void)
 	const int16 maxRoadBlocks = (int16)(NUMROADBLOCKS * (frame + 1)) / 16;
 	for (; nRoadblockNode < Min(NumRoadBlocks, maxRoadBlocks); nRoadblockNode++) {
 		CTreadable *mapObject = ThePaths.m_mapObjects[RoadBlockObjects[nRoadblockNode]];
-		CVector2D vecDistance = FindPlayerCoors() - mapObject->GetPosition();
+		CVector2D vecDistance = CPoliceDuty::TargetPosition() - mapObject->GetPosition();
 		if (vecDistance.x > -ROADBLOCKDIST && vecDistance.x < ROADBLOCKDIST &&
 			vecDistance.y > -ROADBLOCKDIST && vecDistance.y < ROADBLOCKDIST &&
 			vecDistance.Magnitude() < ROADBLOCKDIST) {
 			if (!InOrOut[nRoadblockNode]) {
 				InOrOut[nRoadblockNode] = true;
-				if (FindPlayerVehicle() && (CGeneral::GetRandomNumber() & 0x7F) < FindPlayerPed()->m_pWanted->m_RoadblockDensity) {
-					CWanted *pPlayerWanted = FindPlayerPed()->m_pWanted;
+				if (CPoliceDuty::TargetVehicle() && (CGeneral::GetRandomNumber() & 0x7F) < CPoliceDuty::WantedFor()->m_RoadblockDensity) {
+					CWanted *pPlayerWanted = CPoliceDuty::WantedFor();
 					float fMapObjectRadius = 2.0f * mapObject->GetColModel()->boundingBox.max.x;
 					int32 vehicleId = MI_POLICE;
 					if (pPlayerWanted->AreArmyRequired())

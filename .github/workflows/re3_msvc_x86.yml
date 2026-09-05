@@ -2,7 +2,9 @@ name: re3 premake x86
 
 on:
   pull_request:
+    branches-ignore: [police]
   push:
+    branches-ignore: [police]
   release:
     types: published
 env:

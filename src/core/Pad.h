@@ -230,6 +230,8 @@ public:
 	bool GetExitVehicle(void);
 	bool ExitVehicleJustDown(void);
 	int32 GetWeapon(void);
+	int32 GetWeaponInput(void);
+	bool GetCarGunInput(void);
 	bool WeaponJustDown(void);
 	int16 GetAccelerate(void);
 	bool CycleCameraModeUpJustDown(void);

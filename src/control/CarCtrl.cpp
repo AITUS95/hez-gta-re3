@@ -1,4 +1,5 @@
 #include "common.h"
+#include "PoliceDuty.h"
 
 #include "CarCtrl.h"
 
@@ -121,7 +122,7 @@ CCarCtrl::GenerateOneRandomCar()
 		return;
 	if (NumFiretrucksOnDuty + NumAmbulancesOnDuty + NumParkedCars + NumMissionCars + NumLawEnforcerCars + NumRandomCars >= MaxNumberOfCarsInUse)
 		return;
-	CWanted* pWanted = pPlayer->m_pPed->m_pWanted;
+	CWanted* pWanted = CPoliceDuty::WantedFor();
 	int carClass;
 	int carModel;
 	if (pWanted->GetWantedLevel() > 1 && NumLawEnforcerCars < pWanted->m_MaximumLawEnforcerVehicles &&
@@ -331,7 +332,7 @@ CCarCtrl::GenerateOneRandomCar()
 	}
 	case COPS:
 		pVehicle->AutoPilot.m_nTempAction = TEMPACT_NONE;
-		if (CWorld::Players[CWorld::PlayerInFocus].m_pPed->m_pWanted->GetWantedLevel() != 0){
+		if (CPoliceDuty::WantedFor()->GetWantedLevel() != 0){
 			pVehicle->AutoPilot.m_nCruiseSpeed = CCarAI::FindPoliceCarSpeedForWantedLevel(pVehicle);
 			pVehicle->AutoPilot.m_fMaxTrafficSpeed = pVehicle->AutoPilot.m_nCruiseSpeed / 2;
 			pVehicle->AutoPilot.m_nCarMission = CCarAI::FindPoliceCarMissionForWantedLevel();
@@ -665,15 +666,15 @@ CCarCtrl::ChooseCarModel(int32 vehclass)
 int32
 CCarCtrl::ChoosePoliceCarModel(void)
 {
-	if (FindPlayerPed()->m_pWanted->AreSwatRequired() &&
+	if (CPoliceDuty::WantedFor()->AreSwatRequired() &&
 		CStreaming::HasModelLoaded(MI_ENFORCER) &&
 		CStreaming::HasModelLoaded(MI_POLICE))
 		return ((CGeneral::GetRandomNumber() & 0xF) == 0) ? MI_ENFORCER : MI_POLICE;
-	if (FindPlayerPed()->m_pWanted->AreFbiRequired() &&
+	if (CPoliceDuty::WantedFor()->AreFbiRequired() &&
 		CStreaming::HasModelLoaded(MI_FBICAR) &&
 		CStreaming::HasModelLoaded(MI_FBI))
 		return MI_FBICAR;
-	if (FindPlayerPed()->m_pWanted->AreArmyRequired() &&
+	if (CPoliceDuty::WantedFor()->AreArmyRequired() &&
 		CStreaming::HasModelLoaded(MI_RHINO) &&
 		CStreaming::HasModelLoaded(MI_BARRACKS) &&
 		CStreaming::HasModelLoaded(MI_ARMY))
@@ -1317,7 +1318,7 @@ void CCarCtrl::WeaveThroughCarsSectorList(CPtrList& lst, CVehicle* pVehicle, CPh
 
 void CCarCtrl::WeaveForOtherCar(CEntity* pOtherEntity, CVehicle* pVehicle, float* pAngleToWeaveLeft, float* pAngleToWeaveRight)
 {
-	if (pVehicle->AutoPilot.m_nCarMission == MISSION_RAMPLAYER_CLOSE && pOtherEntity == FindPlayerVehicle())
+	if (pVehicle->AutoPilot.m_nCarMission == MISSION_RAMPLAYER_CLOSE && pOtherEntity == CPoliceDuty::CarTargetVehicle(pVehicle))
 		return;
 	if (pVehicle->AutoPilot.m_nCarMission == MISSION_RAMCAR_CLOSE && pOtherEntity == pVehicle->AutoPilot.m_pTargetCar)
 		return;
@@ -1379,7 +1380,7 @@ void CCarCtrl::WeaveThroughPedsSectorList(CPtrList& lst, CVehicle* pVehicle, CPh
 }
 void CCarCtrl::WeaveForPed(CEntity* pOtherEntity, CVehicle* pVehicle, float* pAngleToWeaveLeft, float* pAngleToWeaveRight)
 {
-	if (pVehicle->AutoPilot.m_nCarMission == MISSION_RAMPLAYER_CLOSE && pOtherEntity == FindPlayerPed())
+	if (pVehicle->AutoPilot.m_nCarMission == MISSION_RAMPLAYER_CLOSE && pOtherEntity == CPoliceDuty::CarTargetPed(pVehicle))
 		return;
 	CPed* pPed = (CPed*)pOtherEntity;
 	CVector2D vecDiff = pPed->GetPosition() - pVehicle->GetPosition();
@@ -1481,12 +1482,12 @@ bool CCarCtrl::PickNextNodeAccordingStrategy(CVehicle* pVehicle)
 	case MISSION_RAMPLAYER_FARAWAY:
 	case MISSION_BLOCKPLAYER_FARAWAY:
 		PickNextNodeToChaseCar(pVehicle,
-			FindPlayerCoors().x,
-			FindPlayerCoors().y,
+			CPoliceDuty::CarTargetPosition(pVehicle).x,
+			CPoliceDuty::CarTargetPosition(pVehicle).y,
 #ifdef FIX_PATHFIND_BUG
-			FindPlayerCoors().z,
+			CPoliceDuty::CarTargetPosition(pVehicle).z,
 #endif
-			FindPlayerVehicle());
+			CPoliceDuty::CarTargetVehicle(pVehicle));
 		return false;
 	case MISSION_GOTOCOORDS:
 	case MISSION_GOTOCOORDS_ACCURATE:
@@ -2176,36 +2177,36 @@ void CCarCtrl::SteerAICarWithPhysics_OnlyMission(CVehicle* pVehicle, float* pSwe
 		return;
 	case MISSION_RAMPLAYER_CLOSE:
 	{
-		CVector2D targetPos = FindPlayerCoors();
-		if (FindPlayerVehicle()){
-			if (pVehicle->m_randomSeed & 1 && DotProduct(FindPlayerVehicle()->GetForward(), pVehicle->GetForward()) > 0.5f){
-				float targetWidth = FindPlayerVehicle()->GetColModel()->boundingBox.max.x;
+		CVector2D targetPos = CPoliceDuty::CarTargetPosition(pVehicle);
+		if (CPoliceDuty::CarTargetVehicle(pVehicle)){
+			if (pVehicle->m_randomSeed & 1 && DotProduct(CPoliceDuty::CarTargetVehicle(pVehicle)->GetForward(), pVehicle->GetForward()) > 0.5f){
+				float targetWidth = CPoliceDuty::CarTargetVehicle(pVehicle)->GetColModel()->boundingBox.max.x;
 				float ownWidth = pVehicle->GetColModel()->boundingBox.max.x;
 				if (pVehicle->m_randomSeed & 2){
-					targetPos += (targetWidth + ownWidth - 0.2f) * FindPlayerVehicle()->GetRight();
+					targetPos += (targetWidth + ownWidth - 0.2f) * CPoliceDuty::CarTargetVehicle(pVehicle)->GetRight();
 				}else{
-					targetPos -= (targetWidth + ownWidth - 0.2f) * FindPlayerVehicle()->GetRight();
+					targetPos -= (targetWidth + ownWidth - 0.2f) * CPoliceDuty::CarTargetVehicle(pVehicle)->GetRight();
 				}
-				float targetSpeed = FindPlayerVehicle()->GetMoveSpeed().Magnitude();
+				float targetSpeed = CPoliceDuty::CarTargetVehicle(pVehicle)->GetMoveSpeed().Magnitude();
 				float distanceToTarget = ((CVector2D)pVehicle->GetPosition() - targetPos).Magnitude();
 				if (12.0f * targetSpeed + 2.0f > distanceToTarget && pVehicle->AutoPilot.m_nTempAction == TEMPACT_NONE){
 					pVehicle->AutoPilot.m_nTempAction = (pVehicle->m_randomSeed & 2) ? TEMPACT_TURNLEFT : TEMPACT_TURNRIGHT;
 					pVehicle->AutoPilot.m_nTimeTempAction = CTimer::GetTimeInMilliseconds() + 250;
 				}
 			}else{
-				targetPos += FindPlayerVehicle()->GetRight() / 160 * ((pVehicle->m_randomSeed & 0xFF) - 128);
+				targetPos += CPoliceDuty::CarTargetVehicle(pVehicle)->GetRight() / 160 * ((pVehicle->m_randomSeed & 0xFF) - 128);
 			}
 		}
-		SteerAICarWithPhysicsHeadingForTarget(pVehicle, FindPlayerVehicle(), targetPos.x, targetPos.y, pSwerve, pAccel, pBrake, pHandbrake);
+		SteerAICarWithPhysicsHeadingForTarget(pVehicle, CPoliceDuty::CarTargetVehicle(pVehicle), targetPos.x, targetPos.y, pSwerve, pAccel, pBrake, pHandbrake);
 		return;
 	}
 	case MISSION_BLOCKPLAYER_CLOSE:
-		SteerAICarWithPhysicsTryingToBlockTarget(pVehicle, FindPlayerCoors().x, FindPlayerCoors().y,
-			FindPlayerSpeed().x, FindPlayerSpeed().y, pSwerve, pAccel, pBrake, pHandbrake);
+		SteerAICarWithPhysicsTryingToBlockTarget(pVehicle, CPoliceDuty::CarTargetPosition(pVehicle).x, CPoliceDuty::CarTargetPosition(pVehicle).y,
+			CPoliceDuty::CarTargetSpeed(pVehicle).x, CPoliceDuty::CarTargetSpeed(pVehicle).y, pSwerve, pAccel, pBrake, pHandbrake);
 		return;
 	case MISSION_BLOCKPLAYER_HANDBRAKESTOP:
-		SteerAICarWithPhysicsTryingToBlockTarget_Stop(pVehicle, FindPlayerCoors().x, FindPlayerCoors().y,
-			FindPlayerSpeed().x, FindPlayerSpeed().y, pSwerve, pAccel, pBrake, pHandbrake);
+		SteerAICarWithPhysicsTryingToBlockTarget_Stop(pVehicle, CPoliceDuty::CarTargetPosition(pVehicle).x, CPoliceDuty::CarTargetPosition(pVehicle).y,
+			CPoliceDuty::CarTargetSpeed(pVehicle).x, CPoliceDuty::CarTargetSpeed(pVehicle).y, pSwerve, pAccel, pBrake, pHandbrake);
 		return;
 	case MISSION_GOTOCOORDS_STRAIGHT:
 	case MISSION_GOTO_COORDS_STRAIGHT_ACCURATE:
@@ -2473,7 +2474,7 @@ void CCarCtrl::SteerAICarWithPhysicsTryingToBlockTarget_Stop(CVehicle* pVehicle,
 			pVehicle->AutoPilot.m_nCarMission = MISSION_NONE;
 		}
 	}else{
-		if (FindPlayerVehicle() && FindPlayerVehicle()->GetMoveSpeed().Magnitude() < 0.05f)
+		if (CPoliceDuty::CarTargetVehicle(pVehicle) && CPoliceDuty::CarTargetVehicle(pVehicle)->GetMoveSpeed().Magnitude() < 0.05f)
 #ifdef FIX_BUGS
 			pVehicle->m_nTimeBlocked += CTimer::GetTimeStepInMilliseconds();
 #else
@@ -2481,8 +2482,8 @@ void CCarCtrl::SteerAICarWithPhysicsTryingToBlockTarget_Stop(CVehicle* pVehicle,
 #endif
 		else
 			pVehicle->m_nTimeBlocked = 0;
-		if (FindPlayerVehicle() == nil || FindPlayerVehicle()->IsUpsideDown() ||
-		  FindPlayerVehicle()->GetMoveSpeed().Magnitude() < 0.05f &&
+		if (CPoliceDuty::CarTargetVehicle(pVehicle) == nil || CPoliceDuty::CarTargetVehicle(pVehicle)->IsUpsideDown() ||
+		  CPoliceDuty::CarTargetVehicle(pVehicle)->GetMoveSpeed().Magnitude() < 0.05f &&
 		  pVehicle->m_nTimeBlocked > TIME_COPS_WAIT_TO_EXIT_AFTER_STOPPING){
 			if (pVehicle->bIsLawEnforcer && distanceToTargetSqr < SQR(DISTANCE_TO_SWITCH_FROM_STOP_TO_BLOCK)){
 				CCarAI::TellOccupantsToLeaveCar(pVehicle);

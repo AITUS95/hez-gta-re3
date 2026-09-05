@@ -1,4 +1,5 @@
 #include "common.h"
+#include "PoliceDuty.h"
 
 #include "RwHelper.h"
 #include "PlayerPed.h"
@@ -9,6 +10,7 @@
 #include "Camera.h"
 #include "WeaponEffects.h"
 #include "ModelIndices.h"
+#include "ModelInfo.h"
 #include "World.h"
 #include "RpAnimBlend.h"
 #include "AnimBlendAssociation.h"
@@ -252,7 +254,7 @@ CPlayerPed::SetInitialState(void)
 	SetPedState(PED_IDLE);
 	SetMoveState(PEDMOVE_STILL);
 	m_nLastPedState = PED_NONE;
-	m_animGroup = ASSOCGRP_PLAYER;
+	m_animGroup = (AssocGroupId)((CPedModelInfo*)CModelInfo::GetModelInfo(MI_COP))->m_animGroup;
 	m_fMoveSpeed = 0.0f;
 	m_nSelectedWepSlot = WEAPONTYPE_UNARMED;
 	m_nEvadeAmount = 0;
@@ -1001,6 +1003,7 @@ CPlayerPed::ProcessAnimGroups(void)
 		}
 	}
 
+	groupToSet = (AssocGroupId)((CPedModelInfo*)CModelInfo::GetModelInfo(MI_COP))->m_animGroup;
 	if (m_animGroup != groupToSet) {
 		m_animGroup = groupToSet;
 		ReApplyMoveAnims();
@@ -1010,6 +1013,7 @@ CPlayerPed::ProcessAnimGroups(void)
 void
 CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
 {
+	if (CPoliceDuty::IsDesignating()) return;
 	CWeaponInfo *weaponInfo = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType);
 	if (m_bHasLockOnTarget && !m_pPointGunAt) {
 		TheCamera.ClearPlayerWeaponMode();

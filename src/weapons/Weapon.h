@@ -63,7 +63,7 @@ public:
 	static void MakePedsJumpAtShot(CPhysical *shooter, CVector *source, CVector *target);
 	
 	bool HitsGround(CEntity *holder, CVector *fireSource, CEntity *aimingTo);
-	static void BlowUpExplosiveThings(CEntity *thing);
+	static void BlowUpExplosiveThings(CEntity *thing, CEntity *source = nil);
 	bool HasWeaponAmmoToBeUsed(void);
 	
 	static bool ProcessLineOfSight(CVector const &point1, CVector const &point2, CColPoint &point, CEntity *&entity, eWeaponType type, CEntity *shooter, bool checkBuildings, bool checkVehicles, bool checkPeds, bool checkObjects, bool checkDummies, bool ignoreSeeThrough, bool ignoreSomeObjects);
@@ -75,4 +75,4 @@ public:
 };
 VALIDATE_SIZE(CWeapon, 0x18);
 
-void FireOneInstantHitRound(CVector *source, CVector *target, int32 damage);
+void FireOneInstantHitRound(CVector *source, CVector *target, int32 damage, CEntity *shooter = nil);

@@ -1,4 +1,5 @@
 #include "common.h"
+#include "PoliceDuty.h"
 
 #include "Script.h"
 #include "ScriptCommands.h"
@@ -81,6 +82,20 @@ int8 CRunningScript::ProcessCommands1000To1099(int32 command)
 	case COMMAND_MAKE_PLAYER_SAFE_FOR_CUTSCENE:
 	{
 		CollectParameters(&m_nIp, 1);
+		if (ScriptParams[0] == 0) {
+			CPoliceDuty::BeginShift();
+			return 0;
+		}
+		// No story/vehicle mission can take control away from the duty session.
+		CWorld::Players[CWorld::PlayerInFocus].MakePlayerSafe(false);
+		TheCamera.RestoreWithJumpCut();
+		TheCamera.Fade(0.0f, FADE_IN);
+		CTheScripts::bAlreadyRunningAMissionScript = false;
+		if (CTheScripts::OnAMissionFlag)
+			*(int32*)&CTheScripts::ScriptSpace[CTheScripts::OnAMissionFlag] = 0;
+		RemoveScriptFromList(&CTheScripts::pActiveScripts);
+		AddScriptToList(&CTheScripts::pIdleScripts);
+		return 1;
 #ifdef MISSION_REPLAY
 		AllowMissionReplay = MISSION_RETRY_STAGE_NORMAL;
 		SaveGameForPause(SAVE_TYPE_QUICKSAVE_FOR_MISSION_REPLAY);
@@ -297,29 +312,8 @@ int8 CRunningScript::ProcessCommands1000To1099(int32 command)
 	case COMMAND_LOAD_AND_LAUNCH_MISSION_INTERNAL:
 	{
 		CollectParameters(&m_nIp, 1);
-#ifdef MISSION_REPLAY
-		missionRetryScriptIndex = ScriptParams[0];
-		if (missionRetryScriptIndex == 19)
-			CStats::LastMissionPassedName[0] = '\0';
-#endif
-		CTimer::Suspend();
-		int offset = CTheScripts::MultiScriptArray[ScriptParams[0]];
-#ifdef USE_DEBUG_SCRIPT_LOADER
-		int handle = CTheScripts::OpenScript();
-#else
-		CFileMgr::ChangeDir("\\");
-		int handle = CFileMgr::OpenFile("data\\main.scm", "rb");
-#endif
-		CFileMgr::Seek(handle, offset, 0);
-		CFileMgr::Read(handle, (const char*)&CTheScripts::ScriptSpace[SIZE_MAIN_SCRIPT], SIZE_MISSION_SCRIPT);
-		CFileMgr::CloseFile(handle);
-		CRunningScript* pMissionScript = CTheScripts::StartNewScript(SIZE_MAIN_SCRIPT);
-		CTimer::Resume();
-		pMissionScript->m_bIsMissionScript = true;
-		pMissionScript->m_bMissionFlag = true;
-		CTheScripts::bAlreadyRunningAMissionScript = true;
-		return 0;
 	}
+
 	case COMMAND_SET_OBJECT_DRAW_LAST:
 	{
 		CollectParameters(&m_nIp, 2);

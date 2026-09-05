@@ -1,5 +1,6 @@
 #define WITHDINPUT
 #include "common.h"
+#include "PoliceDuty.h"
 #include "crossplatform.h"
 #include "platform.h"
 #ifdef XINPUT
@@ -1852,6 +1853,11 @@ bool CPad::HornJustDown(void)
 
 bool CPad::GetCarGunFired(void)
 {
+	return !CPoliceDuty::IsDesignating() && GetCarGunInput();
+}
+
+bool CPad::GetCarGunInput(void)
+{
 	if ( ArePlayerControlsDisabled() )
 		return false;
 
@@ -1879,6 +1885,7 @@ bool CPad::GetCarGunFired(void)
 
 bool CPad::CarGunJustDown(void)
 {
+	if (CPoliceDuty::IsDesignating()) return false;
 	if ( ArePlayerControlsDisabled() )
 		return false;
 
@@ -2031,6 +2038,11 @@ bool CPad::ExitVehicleJustDown(void)
 
 int32 CPad::GetWeapon(void)
 {
+	return CPoliceDuty::IsDesignating() ? 0 : GetWeaponInput();
+}
+
+int32 CPad::GetWeaponInput(void)
+{
 	if ( ArePlayerControlsDisabled() )
 		return false;
 
@@ -2064,6 +2076,7 @@ int32 CPad::GetWeapon(void)
 
 bool CPad::WeaponJustDown(void)
 {
+	if (CPoliceDuty::IsDesignating()) return false;
 	if ( ArePlayerControlsDisabled() )
 		return false;
 

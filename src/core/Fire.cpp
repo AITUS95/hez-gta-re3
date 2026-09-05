@@ -1,4 +1,5 @@
 #include "common.h"
+#include "PoliceDuty.h"
 
 #include "Vector.h"
 #include "PlayerPed.h"
@@ -40,6 +41,7 @@ CFire::~CFire() {}
 void
 CFire::ProcessFire(void)
 {
+	if (CPoliceDuty::IsFriendlyFire(m_pEntity, m_pSource)) { Extinguish(); return; }
 	float fDamagePlayer;
 	float fDamagePeds;
 	float fDamageVehicle;
@@ -197,6 +199,7 @@ CFireManager::StartFire(CVector pos, float size, bool propagation)
 CFire *
 CFireManager::StartFire(CEntity *entityOnFire, CEntity *fleeFrom, float strength, bool propagation)
 {
+	if (CPoliceDuty::IsFriendlyFire(entityOnFire, fleeFrom)) return nil;
 	CPed *ped = (CPed *)entityOnFire;
 	CVehicle *veh = (CVehicle *)entityOnFire;
 

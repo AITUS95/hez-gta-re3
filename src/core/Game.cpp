@@ -1,4 +1,5 @@
 #include "common.h"
+#include "PoliceDuty.h"
 #include "platform.h"
 
 #include "Game.h"
@@ -667,6 +668,7 @@ bool CGame::Initialise(const char* datFile)
 
 bool CGame::ShutDown(void)
 {
+	CPoliceDuty::Shutdown();
 	CReplay::FinishPlayback();
 	CPlane::Shutdown();
 	CTrain::Shutdown();
@@ -835,6 +837,7 @@ void CGame::ReloadIPLs(void)
 
 void CGame::ShutDownForRestart(void)
 {
+	CPoliceDuty::Shutdown();
 	CReplay::FinishPlayback();
 	CReplay::EmptyReplayBuffer();
 	DMAudio.DestroyAllGameCreatedEntities();
@@ -1043,6 +1046,7 @@ void CGame::Process(void)
 
 		PUSH_MEMID(MEMID_SCRIPT);
 		CTheScripts::Process();
+		CPoliceDuty::Update();
 		POP_MEMID();
 
 		CCollision::Update();

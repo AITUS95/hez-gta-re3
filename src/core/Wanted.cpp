@@ -1,4 +1,5 @@
 #include "common.h"
+#include "PoliceDuty.h"
 
 #include "Pools.h"
 #include "ModelIndices.h"
@@ -78,6 +79,7 @@ CWanted::NumOfHelisRequired()
 void
 CWanted::SetWantedLevel(int32 level)
 {
+	if (CPoliceDuty::IsPlayerWanted(this)) level = 0;
 	if (level > MaximumWantedLevel)
 		level = MaximumWantedLevel;
 
@@ -155,12 +157,14 @@ CWanted::SetMaximumWantedLevel(int32 level)
 void
 CWanted::RegisterCrime(eCrimeType type, const CVector &coors, uint32 id, bool policeDoesntCare)
 {
+	if (CPoliceDuty::IsPlayerWanted(this)) return;
 	AddCrimeToQ(type, id, coors, false, policeDoesntCare);
 }
 
 void
 CWanted::RegisterCrime_Immediately(eCrimeType type, const CVector &coors, uint32 id, bool policeDoesntCare)
 {
+	if (CPoliceDuty::IsPlayerWanted(this)) return;
 #if defined FIX_SIGNIFICANT_BUGS || defined PEDS_REPORT_CRIMES_ON_PHONE
 	if (!AddCrimeToQ(type, id, coors, true, policeDoesntCare))
 #else
@@ -180,6 +184,7 @@ CWanted::ClearQdCrimes()
 bool
 CWanted::AddCrimeToQ(eCrimeType type, int32 id, const CVector &coors, bool reported, bool policeDoesntCare)
 {
+	if (CPoliceDuty::IsPlayerWanted(this)) return true;
 	int i;
 
 	for(i = 0; i < 16; i++)
@@ -208,6 +213,7 @@ CWanted::AddCrimeToQ(eCrimeType type, int32 id, const CVector &coors, bool repor
 void
 CWanted::ReportCrimeNow(eCrimeType type, const CVector &coors, bool policeDoesntCare)
 {
+	if (CPoliceDuty::IsPlayerWanted(this)) return;
 	float sensitivity, chaos;
 	int wantedLevelDrop;
 
@@ -283,6 +289,12 @@ CWanted::ReportCrimeNow(eCrimeType type, const CVector &coors, bool policeDoesnt
 void
 CWanted::UpdateWantedLevel()
 {
+	if (CPoliceDuty::IsPlayerWanted(this)) {
+		m_nChaos = 0;
+		m_bIgnoredByCops = true;
+		m_bSwatRequired = m_bFbiRequired = m_bArmyRequired = false;
+		ClearQdCrimes();
+	}
 	int32 CurrWantedLevel = m_nWantedLevel;
 
 	if (m_nChaos > nMaximumWantedLevel)
@@ -370,6 +382,7 @@ CWanted::WorkOutPolicePresence(CVector posn, float radius)
 void
 CWanted::Update(void)
 {
+	if (CPoliceDuty::IsPlayerWanted(this)) { UpdateWantedLevel(); return; }
 	if (CTimer::GetTimeInMilliseconds() - m_nLastUpdateTime > 1000) {
 		if (m_nWantedLevel > 1) {
 			m_nLastUpdateTime = CTimer::GetTimeInMilliseconds();

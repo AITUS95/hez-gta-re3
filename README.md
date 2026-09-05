@@ -1,5 +1,11 @@
 <img src="https://github.com/hezkore/re3/blob/master/res/images/logo_1024.png?raw=true" alt="re3 logo" width="200">
 
+## Branch police
+
+Modalità agente con avvio sul MAIN vanilla, alleati e sospetti NPC/veicoli.
+Vedere [documentazione, comandi e architettura](docs/POLICE.md).
+F6: Police; F7: SWAT; F8: FBI; F9: Military.
+
 ## About this fork of re3
 This fork fixes some issues I've had with the original re3.\
 They're currently only applied to GTA 3.

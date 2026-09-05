@@ -1,5 +1,6 @@
 #define WITHWINDOWS
 #include "common.h"
+#include "PoliceDuty.h"
 #include "crossplatform.h"
 #include "main.h"
 
@@ -376,6 +377,7 @@ GenericLoad()
 	}
 
 	DoGameSpecificStuffAfterSucessLoad();
+	CPoliceDuty::RestoreShift();
 	debug("Game successfully loaded \n");
 	return true;
 }

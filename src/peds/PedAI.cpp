@@ -1,4 +1,5 @@
 #include "common.h"
+#include "PoliceDuty.h"
 
 #include "main.h"
 #include "Particle.h"
@@ -166,6 +167,9 @@ CPed::SetObjective(eObjective newObj)
 void
 CPed::SetObjective(eObjective newObj, void *entity)
 {
+	if ((newObj == OBJECTIVE_KILL_CHAR_ON_FOOT || newObj == OBJECTIVE_KILL_CHAR_ANY_MEANS ||
+		newObj == OBJECTIVE_DESTROY_CAR || newObj == OBJECTIVE_MUG_CHAR) &&
+		CPoliceDuty::IsFriendlyFire(this, (CEntity*)entity)) return;
 	if (DyingOrDead())
 		return;
 
@@ -531,6 +535,8 @@ CPed::ClearLeader(void)
 void
 CPed::UpdateFromLeader(void)
 {
+	// Following the player resumes when the vanilla pursuit objective ends.
+	if (m_nPedType == PEDTYPE_COP && ((CCopPed*)this)->m_bIsInPursuit) return;
 	if (CTimer::GetTimeInMilliseconds() <= m_objectiveTimer)
 		return;
 
@@ -1064,7 +1070,7 @@ CPed::ProcessObjective(void)
 					SetLookFlag(m_pedInObjective, false);
 					TurnBody();
 				}
-				if (m_nPedType == PEDTYPE_COP && distWithTargetSc < 1.5f && m_pedInObjective->IsPlayer()) {
+				if (m_nPedType == PEDTYPE_COP && distWithTargetSc < 1.5f && (m_pedInObjective->IsPlayer() || CPoliceDuty::IsSuspect(m_pedInObjective))) {
 					if (m_pedInObjective->m_getUpTimer > CTimer::GetTimeInMilliseconds()
 						|| m_pedInObjective->m_nPedState == PED_DRAG_FROM_CAR) {
 
@@ -2051,6 +2057,7 @@ CPed::SelectGunIfArmed(void)
 void
 CPed::ReactToPointGun(CEntity *entWithGun)
 {
+	if (CPoliceDuty::IsFriendlyFire(this, entWithGun)) return;
 	CPed *pedWithGun = (CPed*)entWithGun;
 	int waitTime;
 
@@ -2135,6 +2142,8 @@ CPed::ReactToPointGun(CEntity *entWithGun)
 void
 CPed::ReactToAttack(CEntity *attacker)
 {
+	if (CPoliceDuty::IsFriendlyFire(this, attacker)) return ;
+	CPoliceDuty::ReportAttack(attacker, this);
 	if (IsPlayer() && attacker->IsPed()) {
 		InformMyGangOfAttack(attacker);
 		SetLookFlag(attacker, true);
@@ -4726,6 +4735,8 @@ CPed::PedSetOutTrainCB(CAnimBlendAssociation *animAssoc, void *arg)
 void
 CPed::RegisterThreatWithGangPeds(CEntity *attacker)
 {
+	if (CPoliceDuty::IsFriendlyFire(this, attacker)) return;
+	CPoliceDuty::ReportAttack(attacker, this);
 	CPed *attackerPed = nil;
 	if (attacker) {
 		if (m_objective != OBJECTIVE_KILL_CHAR_ON_FOOT && m_objective != OBJECTIVE_KILL_CHAR_ANY_MEANS) {

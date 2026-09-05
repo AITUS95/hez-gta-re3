@@ -1,4 +1,5 @@
 #include "common.h"
+#include "PoliceDuty.h"
 
 #include "Weapon.h"
 #include "AnimBlendAssociation.h"
@@ -275,6 +276,8 @@ CWeapon::Fire(CEntity *shooter, CVector *fireSource)
 
 		if (fired)
 		{
+			if (shooter == FindPlayerPed())
+				CPoliceDuty::ReportAttack(shooter, ((CPed*)shooter)->m_pPointGunAt);
 			bool isPlayer = false;
 
 			if (shooter->IsPed())
@@ -290,7 +293,7 @@ CWeapon::Fire(CEntity *shooter, CVector *fireSource)
 			}
 
 			if (m_nAmmoInClip > 0) m_nAmmoInClip--;
-			if (m_nAmmoTotal > 0 && (m_nAmmoTotal < 25000 || isPlayer)) m_nAmmoTotal--;
+			if (!CPoliceDuty::HasInfiniteAmmo(shooter) && m_nAmmoTotal > 0 && (m_nAmmoTotal < 25000 || isPlayer)) m_nAmmoTotal--;
 
 			if (m_eWeaponState == WEAPONSTATE_READY && m_eWeaponType == WEAPONTYPE_FLAMETHROWER)
 				DMAudio.PlayOneShot(((CPhysical*)shooter)->m_audioEntityId, SOUND_WEAPON_FLAMETHROWER_FIRE, 0.0f);
@@ -352,7 +355,7 @@ CWeapon::FireFromCar(CAutomobile *shooter, bool left)
 		DMAudio.PlayOneShot(shooter->m_audioEntityId, SOUND_WEAPON_SHOT_FIRED, 0.0f);
 
 		if ( m_nAmmoInClip > 0 ) m_nAmmoInClip--;
-		if ( m_nAmmoTotal < 25000 && m_nAmmoTotal > 0 ) m_nAmmoTotal--;
+		if (!CPoliceDuty::HasInfiniteAmmo(shooter) && m_nAmmoTotal < 25000 && m_nAmmoTotal > 0) m_nAmmoTotal--;
 
 		m_eWeaponState = WEAPONSTATE_FIRING;
 
@@ -394,6 +397,7 @@ CWeapon::FireMelee(CEntity *shooter, CVector &fireSource)
 	{
 		CPed *victimPed = shooterPed->m_nearPeds[i];
 		ASSERT(victimPed!=nil);
+		if (CPoliceDuty::IsFriendlyFire(shooter, victimPed)) continue;
 
 		if ( (victimPed->m_nPedType != shooterPed->m_nPedType || victimPed == shooterPed->m_pSeekTarget)
 				&& victimPed != shooterPed->m_leader || !(CGeneral::GetRandomNumber() & 31) )
@@ -911,6 +915,7 @@ void
 CWeapon::DoBulletImpact(CEntity *shooter, CEntity *victim,
 		CVector *source, CVector *target, CColPoint *point, CVector2D ahead)
 {
+	if (CPoliceDuty::IsFriendlyFire(shooter, victim)) return;
 	ASSERT(shooter!=nil);
 	ASSERT(source!=nil);
 	ASSERT(target!=nil);
@@ -1176,7 +1181,7 @@ CWeapon::DoBulletImpact(CEntity *shooter, CEntity *victim,
 	if ( shooter == FindPlayerPed() )
 		CPad::GetPad(0)->StartShake_Distance(240, 128, FindPlayerPed()->GetPosition().x, FindPlayerPed()->GetPosition().y, FindPlayerPed()->GetPosition().z);
 
-	BlowUpExplosiveThings(victim);
+	BlowUpExplosiveThings(victim, shooter);
 }
 
 bool
@@ -2134,7 +2139,7 @@ CWeapon::Update(int32 audioEntity)
 }
 
 void
-FireOneInstantHitRound(CVector *source, CVector *target, int32 damage)
+FireOneInstantHitRound(CVector *source, CVector *target, int32 damage, CEntity *shooter)
 {
 	ASSERT(source!=nil);
 	ASSERT(target!=nil);
@@ -2148,6 +2153,7 @@ FireOneInstantHitRound(CVector *source, CVector *target, int32 damage)
 	CColPoint point;
 	CEntity *victim;
 	CWorld::ProcessLineOfSight(*source, *target, point, victim, true, true, true, true, true, true, false);
+	if (CPoliceDuty::IsFriendlyFire(shooter, victim)) return;
 
 	CParticle::AddParticle(PARTICLE_HELI_ATTACK, *source, ((*target) - (*source)) * 0.15f);
 
@@ -2170,7 +2176,7 @@ FireOneInstantHitRound(CVector *source, CVector *target, int32 damage)
 				asoc->blendAmount = 0.0f;
 				asoc->blendDelta  = 8.0f;
 
-				victimPed->InflictDamage(nil, WEAPONTYPE_UZI, damage, (ePedPieceTypes)point.pieceB, localDir);
+				victimPed->InflictDamage(shooter, WEAPONTYPE_UZI, damage, (ePedPieceTypes)point.pieceB, localDir);
 
 				pos.z += 0.8f;
 
@@ -2192,7 +2198,7 @@ FireOneInstantHitRound(CVector *source, CVector *target, int32 damage)
 			}
 		}
 		else if ( victim->IsVehicle() )
-			((CVehicle *)victim)->InflictDamage(nil, WEAPONTYPE_UZI, damage);
+			((CVehicle *)victim)->InflictDamage(shooter, WEAPONTYPE_UZI, damage);
 		//BUG ? no CGlass::WasGlassHitByBullet
 
 		switch ( victim->GetType() )
@@ -2322,7 +2328,7 @@ CWeapon::HitsGround(CEntity *holder, CVector *fireSource, CEntity *aimingTo)
 }
 
 void
-CWeapon::BlowUpExplosiveThings(CEntity *thing)
+CWeapon::BlowUpExplosiveThings(CEntity *thing, CEntity *source)
 {
 #ifdef FIX_BUGS
 	if ( thing && thing->IsObject() )
@@ -2336,7 +2342,7 @@ CWeapon::BlowUpExplosiveThings(CEntity *thing)
 		{
 			object->bHasBeenDamaged = true;
 
-			CExplosion::AddExplosion(object, FindPlayerPed(), EXPLOSION_BARREL, object->GetPosition()+CVector(0.0f,0.0f,0.5f), 100);
+			CExplosion::AddExplosion(object, source, EXPLOSION_BARREL, object->GetPosition()+CVector(0.0f,0.0f,0.5f), 100);
 
 			if ( MI_EXPLODINGBARREL == mi )
 				object->m_vecMoveSpeed.z += 0.75f;
@@ -2380,7 +2386,12 @@ CPed::IsPedDoingDriveByShooting(void)
 bool
 CWeapon::ProcessLineOfSight(CVector const &point1, CVector const &point2, CColPoint &point, CEntity *&entity, eWeaponType type, CEntity *shooter, bool checkBuildings, bool checkVehicles, bool checkPeds, bool checkObjects, bool checkDummies, bool ignoreSeeThrough, bool ignoreSomeObjects)
 {
-	return CWorld::ProcessLineOfSight(point1, point2, point, entity, checkBuildings, checkVehicles, checkPeds, checkObjects, checkDummies, ignoreSeeThrough, ignoreSomeObjects);
+	bool hit = CWorld::ProcessLineOfSight(point1, point2, point, entity, checkBuildings, checkVehicles, checkPeds, checkObjects, checkDummies, ignoreSeeThrough, ignoreSomeObjects);
+	if (hit && CPoliceDuty::IsFriendlyFire(shooter, entity)) {
+		entity = nil;
+		return false;
+	}
+	return hit;
 }
 
 #ifdef COMPATIBLE_SAVES

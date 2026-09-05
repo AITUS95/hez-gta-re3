@@ -1,4 +1,5 @@
 #include "common.h"
+#include "PoliceDuty.h"
 
 #include "Game.h"
 #include "General.h"
@@ -581,9 +582,9 @@ CPopulation::AddToPopulation(float minDist, float maxDist, float minDistOffScree
 	CPlayerInfo *playerInfo = &CWorld::Players[CWorld::PlayerInFocus];
 	CVector playerCentreOfWorld = FindPlayerCentreOfWorld(CWorld::PlayerInFocus);
 	CTheZones::GetZoneInfoForTimeOfDay(&playerCentreOfWorld, &zoneInfo);
-	CWanted *wantedInfo = playerInfo->m_pPed->m_pWanted;
+	CWanted *wantedInfo = CPoliceDuty::WantedFor();
 	if (wantedInfo->GetWantedLevel() > 2) {
-		if (ms_nNumCop < wantedInfo->m_MaxCops && !playerInfo->m_pPed->bInVehicle
+		if (ms_nNumCop < wantedInfo->m_MaxCops && !CPoliceDuty::TargetVehicle()
 			&& (CCarCtrl::NumLawEnforcerCars >= wantedInfo->m_MaximumLawEnforcerVehicles
 				|| CCarCtrl::NumRandomCars >= playerInfo->m_nTrafficMultiplier * CCarCtrl::CarDensityMultiplier
 				|| CCarCtrl::NumFiretrucksOnDuty + CCarCtrl::NumAmbulancesOnDuty + CCarCtrl::NumParkedCars

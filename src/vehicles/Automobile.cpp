@@ -1,4 +1,5 @@
 #include "common.h"
+#include "PoliceDuty.h"
 #include "main.h"
 
 #include "General.h"
@@ -3224,6 +3225,7 @@ CAutomobile::PlaceOnRoadProperly(void)
 void
 CAutomobile::VehicleDamage(float impulse, uint16 damagedPiece)
 {
+	if (CPoliceDuty::IsFriendlyFire(this, m_pDamageEntity)) return;
 	int i;
 	float damageMultiplier = 0.2f;
 	bool doubleMoney = false;
@@ -3846,6 +3848,7 @@ CAutomobile::RemoveRefsToVehicle(CEntity *ent)
 void
 CAutomobile::BlowUpCar(CEntity *culprit)
 {
+	if (CPoliceDuty::IsFriendlyFire(this, culprit)) return;
 	int i;
 	RpAtomic *atomic;
 

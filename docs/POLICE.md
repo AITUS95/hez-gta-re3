@@ -1,0 +1,130 @@
+# Modalità agente — branch `police`
+
+Avviare una **nuova partita**, con i normali asset PC di GTA III e il suo
+`data/main.scm` originale. Il branch non installa un SCM sostitutivo e non usa
+`main_freeroam.scm`, `main_d.scm`, cheat o il caricatore debug per la modalità.
+
+## Avvio e mondo
+
+Il normale interprete esegue MAIN e la sua inizializzazione di traffico, pedoni,
+generatori, pickup, garage, oggetti dinamici e thread ambientali. `CREATE_PLAYER`
+crea il normale `CPlayerPed` a Portland, presso la centrale, con il modello
+`MI_COP`. Al posto del lancio della missione 0 (INTRO), `BeginShift` completa
+l'equipaggiamento, lo sblocco e il passaggio alla camera/controlli normali.
+MAIN continua a funzionare. I successivi lanci di missioni non avviano la storia
+né le missioni dei veicoli: il trigger viene fermato e restituisce i controlli.
+
+Lo sblocco usa `CStats::IndustrialPassed`, `CommercialPassed`, `SuburbanPassed`,
+i metodi originali di `CPathFind` e le entità delle barriere di progressione
+create dal MAIN. Le barriere di ponti, tunnel, metropolitana e aree recintate
+vincolate alla storia perdono visibilità **e collisione**, conservando gli handle
+SCM. Il ponte levatoio mantiene il suo ciclo vanilla. Non vengono inventati
+missioni completate, pacchetti raccolti o un falso valore statistico del 100%.
+
+La camminata deriva dal gruppo animazioni del modello `MI_COP` in `ped.ide`,
+anche quando cambia l'arma; combattimento e controlli restano quelli del motore.
+Tutte le armi dell'inventario vanilla sono assegnate al giocatore. La riserva
+non si consuma; capienza del caricatore, ricarica, cadenza, danni e proiettili
+mantengono il comportamento originale. Anche gli agenti hanno riserva infinita.
+
+## Comandi
+
+| Comando | Effetto |
+| --- | --- |
+| **F6** | Genera un agente di strada |
+| **F7** | Genera uno SWAT |
+| **F8** | Genera un FBI |
+| **F9** | Genera un militare |
+| **A piedi: mani nude + Mira + Fuoco** | Aumenta di una stella il sospetto sul bersaglio |
+| **In veicolo: Mira + Fuoco** | Stessa designazione su pedoni o altri veicoli |
+
+I tasti funzionali sono documentati anche nel codice: l'array `CPad::F` parte
+da zero (F6 corrisponde all'indice 5). Gli agenti vengono collocati in una
+posizione libera vicino al giocatore, tramite streaming e `CPopulation::AddPed`.
+Ricevono l'arma **equipaggiata al momento della richiesta** e usano la relazione
+leader vanilla per seguire il giocatore; durante un inseguimento questo obiettivo
+cede la precedenza all'AI della polizia. Le armi degli agenti già presenti non
+cambiano con quelle del giocatore.
+
+Mira usa `CPad::GetTarget` (o il pulsante destro del mouse); Fuoco usa l'input
+configurato nel gioco. Nel veicolo la mira può condividere il pulsante con il
+freno a mano, secondo il layout del controller. Il raggio deriva da
+`CCamera::Find3rdPersonCamTargetVector` e `CWorld::ProcessLineOfSight`: muri e altri
+ostacoli occludono la selezione. Anche i pedoni neutrali e i veicoli vuoti sono
+selezionabili. Il marcatore vanilla indica il bersaglio e il messaggio
+«Sospetto: N / 6» mostra il livello. Occorre rilasciare e premere nuovamente
+Fuoco per ogni incremento; durante la designazione l'input non raggiunge armi,
+attacchi a pugni, drive-by o armi montate sui veicoli.
+
+## Wanted, alleanze e inseguimenti
+
+`CPoliceDuty` mantiene un piccolo registro di identità dei sospetti; ciascuna
+ha un vero `CWanted`. Non sostituisce il puntatore del giocatore, non usa un
+`CPlayerPed` fittizio e non imposta stelle al giocatore per ottenere rinforzi.
+
+- `CWanted::SetWantedLevel` e `UpdateWantedLevel` conservano soglie, limiti di
+  agenti/veicoli e densità dei posti di blocco vanilla.
+- `CCopPed::SetPursuit`, `ClearPursuit`, `CopAI` e `ProcessControl` ricevono il
+  relativo sospetto e conservano prenotazione degli agenti, scelta delle armi,
+  ricerca, combattimento e comportamento vicino ai veicoli.
+- `CCarAI` e `CCarCtrl` riutilizzano le missioni di blocco/speronamento, le
+  transizioni lontano/vicino, velocità, ricerca dei nodi stradali e sterzata.
+- `CStreaming`, `CPopulation`, la scelta dei modelli della polizia,
+  `CRoadBlocks` e `CHeli` usano l'incidente prioritario per la risposta:
+  pattuglie, elicotteri, SWAT a 4 stelle, FBI a 5, esercito a 6, con le
+  condizioni e probabilità originali.
+- I pedoni sospetti usano gli obiettivi di fuga vanilla o conservano il proprio
+  combattimento. Il conducente resta sospetto anche quando abbandona il mezzo.
+  I mezzi vuoti usano l'obiettivo vanilla `OBJECTIVE_DESTROY_CAR`, insieme alla
+  risposta veicolare della polizia.
+- `SetArrestPlayer` condivide stato e animazione di arresto con gli NPC senza
+  convertirli illegalmente a `CPlayerPed`. Si riusa l'arresto ravvicinato di un
+  sospetto atterrato, estratto da un'auto o intercettato durante l'ingresso.
+
+L'attacco del giocatore a un pedone e l'attacco di un pedone al giocatore o a un
+agente registrano una minaccia da almeno 2 stelle. Gli agenti vicini prendono in
+carico il sospetto attraverso il normale sistema di inseguimento. Un agente già
+impegnato mantiene il proprio incidente; i rinforzi generali danno precedenza
+al livello più alto, poi alla vicinanza al giocatore.
+
+I metodi di registrazione dei crimini e di aggiornamento Wanted impediscono
+**internamente** che il giocatore accumuli caos, reati in coda o livelli di
+sospetto. I filtri di relazione, obiettivo, puntamento, reazione e danno rendono
+alleati giocatore, polizia, SWAT, FBI e militari. La protezione reciproca riguarda
+anche pugni, investimenti, proiettili, armi da veicolo, fuoco ed esplosioni; la
+provenienza del danno viene propagata alle esplosioni concatenate. Gli alleati
+non possono essere trasformati in nemici dalla designazione manuale.
+
+Il registro usa riferimenti del motore in indirizzi stabili. Prima di riutilizzare
+una voce si scollegano gli agenti e si eliminano i vecchi riferimenti con
+`PruneReferences`. Morte, arresto, distruzione del mezzo senza un conducente
+ancora valido e rimozione dallo streaming chiudono l'incidente. Non si cambia
+la disposizione in memoria delle classi vanilla né il formato dei salvataggi.
+
+## Build e limiti tecnici
+
+La workflow esistente `.github/workflows/re3_msvc_amd64.yml` compila e collega
+Debug e Release x64/D3D9/OpenAL con MSVC v143 su `windows-2022`. Usa i submodule
+fissati dal repository, Premake e le dipendenze audio già incluse. Ogni errore
+interrompe il job; gli eseguibili e le DLL vengono pubblicati come artifact.
+Le vecchie workflow di altre piattaforme non scattano per il branch `police`.
+
+La validazione di questa modifica è **solo compilazione**: nessun avvio del
+gioco, test di gameplay, emulatore o test automatico aggiuntivo.
+
+Limiti espliciti:
+
+- Fino a 32 sospetti e 32 agenti richiamati contemporaneamente, oltre alle
+  normali pattuglie; lo spawn rispetta lo spazio libero del pool e le collisioni.
+- Streaming e popolazione restano centrati sul vero giocatore. Un sospetto
+  rimosso dal mondo non viene mantenuto artificialmente in memoria.
+- La risposta generale seleziona un incidente prioritario; gli agenti già
+  assegnati possono inseguire incidenti diversi. Il motore non diventa una
+  simulazione globale di tutti i sospetti su isole non caricate.
+- Sospetti e richiami sono transitori e non vengono serializzati. Caricando
+  un salvataggio si ripristinano uniforme, armi e sblocco del mondo, conservando
+  la posizione salvata. Usare una nuova partita per iniziare la modalità;
+  l'importazione di salvataggi vanilla nel mezzo di una missione non è supportata.
+- Per un veicolo vuoto non esiste una persona da arrestare. Si chiude il relativo
+  inseguimento alla distruzione o invalidazione del veicolo. L'arresto degli NPC
+  riusa le condizioni vanilla, senza aggiungere trasporto in centrale o detenzione.

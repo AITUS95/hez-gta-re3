@@ -1,4 +1,5 @@
 #include "common.h"
+#include "PoliceDuty.h"
 
 #include "Script.h"
 #include "ScriptCommands.h"
@@ -503,17 +504,15 @@ int CTheScripts::ScriptToLoad = 0;
 int CTheScripts::OpenScript()
 {
 	CFileMgr::ChangeDir("\\");
-	switch (ScriptToLoad) {
-	case 0: return CFileMgr::OpenFile("data\\main.scm", "rb");
-	case 1: return CFileMgr::OpenFile("data\\main_freeroam.scm", "rb");
-	case 2: return CFileMgr::OpenFile("data\\main_d.scm", "rb");
-	}
+	// Duty always uses the retail SCM, including mission-file reads.
+	ScriptToLoad = 0;
 	return CFileMgr::OpenFile("data\\main.scm", "rb");
 }
 #endif
 
 void CTheScripts::Init()
 {
+	CPoliceDuty::Init();
 	for (int i = 0; i < SIZE_SCRIPT_SPACE; i++)
 		ScriptSpace[i] = 0;
 	pActiveScripts = pIdleScripts = nil;
@@ -528,8 +527,7 @@ void CTheScripts::Init()
 	// glfwGetKey doesn't work because of CGame::Initialise is blocking
 	CPad::UpdatePads();
 	if(CPad::GetPad(0)->GetChar('G')) ScriptToLoad = 0;
-	if(CPad::GetPad(0)->GetChar('R')) ScriptToLoad = 1;
-	if(CPad::GetPad(0)->GetChar('D')) ScriptToLoad = 2;
+	ScriptToLoad = 0;
 
 	int mainf = OpenScript();
 #else
@@ -1372,7 +1370,8 @@ int8 CRunningScript::ProcessCommands0To99(int32 command)
 		CPlayerPed::SetupPlayerPed(index);
 		CWorld::Players[index].m_pPed->CharCreatedBy = MISSION_CHAR;
 		CPlayerPed::DeactivatePlayerPed(index);
-		CVector pos = *(CVector*)&ScriptParams[1];
+		CPoliceDuty::EquipPlayer();
+		CVector pos(1140.0f, -675.0f, 14.8f);
 		if (pos.z <= MAP_Z_LOW_LIMIT)
 			pos.z = CWorld::FindGroundZForCoord(pos.x, pos.y);
 		pos.z += CWorld::Players[index].m_pPed->GetDistanceFromCentreOfMassToBaseOfModel();
@@ -2430,8 +2429,7 @@ int8 CRunningScript::ProcessCommands200To299(int32 command)
 	case COMMAND_LAUNCH_MISSION:
 	{
 		CollectParameters(&m_nIp, 1);
-		CRunningScript* pNew = CTheScripts::StartNewScript(ScriptParams[0]);
-		pNew->m_bIsMissionScript = true;
+		// Alternate mission-launch opcode must not bypass the duty startup.
 		return 0;
 	}
 	case COMMAND_MISSION_HAS_FINISHED:

@@ -1,4 +1,5 @@
 #include "common.h"
+#include "PoliceDuty.h"
 
 #include "BulletInfo.h"
 
@@ -113,6 +114,15 @@ void CBulletInfo::Update(void)
 		CColPoint point;
 		CEntity* pHitEntity;
 		if (CWorld::ProcessLineOfSight(vecOldPos, vecNewPos, point, pHitEntity, true, true, true, true, true, true)) {
+			if (CPoliceDuty::IsFriendlyFire(pBullet->m_pSource, pHitEntity)) {
+				pBullet->m_bInUse = false;
+#ifdef SQUEEZE_PERFORMANCE
+				--bulletInfoInUse;
+#endif
+				CWorld::pIgnoreEntity = nil;
+				CWorld::bIncludeCarTyres = CWorld::bIncludeDeadPeds = false;
+				continue;
+			}
 			if (pBullet->m_pSource && (pHitEntity->IsPed() || pHitEntity->IsVehicle()))
 				CStats::InstantHitsHitByPlayer++;
 			if (pHitEntity->IsPed()) {
@@ -236,7 +246,7 @@ void CBulletInfo::Update(void)
 				}
 			}
 			CGlass::WasGlassHitByBullet(pHitEntity, point.point);
-			CWeapon::BlowUpExplosiveThings(pHitEntity);
+			CWeapon::BlowUpExplosiveThings(pHitEntity, pBullet->m_pSource);
 		}
 		CWorld::pIgnoreEntity = nil;
 		CWorld::bIncludeDeadPeds = false;
