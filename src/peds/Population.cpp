@@ -1114,6 +1114,20 @@ CPopulation::ManagePopulation(void)
 		CPed *ped = CPools::GetPedPool()->GetSlot(poolIndex);
 
 		if (ped && !ped->IsPlayer() && ped->CanBeDeleted() && !ped->bInVehicle) {
+			// Blocks are created out to 180m; the ambient off-screen cutoff is
+			// only 25m and otherwise removes their crew before the player arrives.
+			if (ped->m_nPedType == PEDTYPE_COP && !ped->DyingOrDead()) {
+				CCopPed *cop = (CCopPed*)ped;
+				if (cop->m_nRoadblockNode >= 0 && cop->m_pMyVehicle &&
+					cop->m_pMyVehicle->m_fHealth > 0.0f && cop->m_pMyVehicle->GetStatus() != STATUS_WRECKED &&
+					(cop->m_pMyVehicle->GetPosition() - playerPos).Magnitude2D() < 180.0f &&
+					(cop->GetPosition() - playerPos).Magnitude2D() < 200.0f &&
+					CPoliceDuty::CarWanted(cop->m_pMyVehicle)->GetWantedLevel() > 0) {
+					cop->bFadeOut = false;
+					continue;
+				}
+			}
+
 			if (ped->m_nPedState == PED_DEAD && CTimer::GetTimeInMilliseconds() - ped->m_bloodyFootprintCountOrDeathTime > 60000)
 				ped->bFadeOut = true;
 

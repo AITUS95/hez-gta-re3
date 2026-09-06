@@ -320,25 +320,25 @@ CWanted::UpdateWantedLevel()
 	}
 	else if (m_nChaos >= 400 && m_nChaos < 800) {
 		m_nWantedLevel = 3;
-		m_MaximumLawEnforcerVehicles = 2;
+		m_MaximumLawEnforcerVehicles = 4;
 		m_MaxCops = 4;
 		m_RoadblockDensity = 4;
 	}
 	else if (m_nChaos >= 800 && m_nChaos < 1600) {
 		m_nWantedLevel = 4;
-		m_MaximumLawEnforcerVehicles = 2;
+		m_MaximumLawEnforcerVehicles = 5;
 		m_MaxCops = 6;
 		m_RoadblockDensity = 8;
 	}
 	else if (m_nChaos >= 1600 && m_nChaos < 3200) {
 		m_nWantedLevel = 5;
-		m_MaximumLawEnforcerVehicles = 3;
+		m_MaximumLawEnforcerVehicles = 6;
 		m_MaxCops = 8;
 		m_RoadblockDensity = 10;
 	}
 	else if (m_nChaos >= 3200) {
 		m_nWantedLevel = 6;
-		m_MaximumLawEnforcerVehicles = 3;
+		m_MaximumLawEnforcerVehicles = 8;
 		m_MaxCops = 10;
 		m_RoadblockDensity = 12;
 	}

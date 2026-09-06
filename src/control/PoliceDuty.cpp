@@ -45,10 +45,10 @@ struct PatrolAssignment {
 	CVehicle *car;
 	Incident *incident;
 };
-PatrolAssignment patrols[MAX_BACKUP];
+PatrolAssignment patrols[96];
 // Preserve the patrol car when vanilla carjacking temporarily changes m_pMyVehicle.
 struct DutyVehicleAssignment { CCopPed *officer; CVehicle *car; };
-DutyVehicleAssignment dutyVehicles[128];
+DutyVehicleAssignment dutyVehicles[NUMPEDS];
 CPed *backup[MAX_BACKUP];
 CWanted noIncident;
 bool ready;
@@ -153,7 +153,7 @@ Incident *Select(CCopPed *officer)
 				if (incidents[i].wanted.m_pCops[j] == officer) return &incidents[i];
 	// Officers leaving a patrol continue its incident on foot, including passengers.
 	if (officer && officer->m_pMyVehicle)
-		for (int i = 0; i < MAX_BACKUP; ++i)
+		for (int i = 0; i < ARRAY_SIZE(patrols); ++i)
 			if (patrols[i].car == officer->m_pMyVehicle && patrols[i].incident && Valid(*patrols[i].incident))
 				return patrols[i].incident;
 	Incident *best = nil;
@@ -180,7 +180,7 @@ void ClearIncident(Incident &incident)
 			cop->ClearPursuit();
 			cop->ReturnToDutyVehicle();
 		}
-	for (int i = 0; i < MAX_BACKUP; ++i)
+	for (int i = 0; i < ARRAY_SIZE(patrols); ++i)
 		if (patrols[i].incident == &incident) {
 			// Cover officers are not necessarily in CWanted::m_pCops.
 			for (int j = 0; j < CPools::GetPedPool()->GetSize(); ++j) {
@@ -212,7 +212,7 @@ Incident *SelectForCar(CVehicle *car)
 {
 	if (!ready || !PoliceCar(car)) return nil;
 	PatrolAssignment *freeSlot = nil;
-	for (int i = 0; i < MAX_BACKUP; ++i) {
+	for (int i = 0; i < ARRAY_SIZE(patrols); ++i) {
 		PatrolAssignment &patrol = patrols[i];
 		if (patrol.car == car) {
 			if (patrol.incident && Valid(*patrol.incident)) return patrol.incident;
@@ -295,8 +295,8 @@ void CPoliceDuty::Init()
 		incidents[i].driver = nil;
 		incidents[i].wanted.Initialise();
 	}
-	for (int i = 0; i < MAX_BACKUP; ++i) {
-		backup[i] = nil;
+	for (int i = 0; i < MAX_BACKUP; ++i) backup[i] = nil;
+	for (int i = 0; i < ARRAY_SIZE(patrols); ++i) {
 		patrols[i].car = nil;
 		patrols[i].incident = nil;
 	}
@@ -607,7 +607,7 @@ void CPoliceDuty::SpawnOfficer(int type)
 void CPoliceDuty::Update()
 {
 	if (!ready || !FindPlayerPed() || CReplay::IsPlayingBack()) return;
-	for (int i = 0; i < MAX_BACKUP; ++i)
+	for (int i = 0; i < ARRAY_SIZE(patrols); ++i)
 		if (!patrols[i].car || !PoliceCar(patrols[i].car) || patrols[i].car->GetStatus() == STATUS_WRECKED) {
 			Release((CEntity**)&patrols[i].car);
 			patrols[i].incident = nil;

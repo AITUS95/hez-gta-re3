@@ -313,3 +313,35 @@ budget vanilla di zona: da +15% a una stella fino a +90% a sei. Il limite
 locale passa da 30 a 60 auto casuali; restano vincolanti disponibilità delle
 strade, streaming e limite globale dei veicoli configurato nel motore.
 Non vengono modificati i moltiplicatori impostati dagli script.
+
+### Capacità e permanenza delle unità in servizio
+
+Il despawn ambientale dei pedoni poteva eliminare fuori schermo le guardie già
+oltre 25 metri, mentre i blocchi erano generati fino a 180 metri dal giocatore.
+Le guardie vive assegnate a un blocco attivo vengono ora mantenute entro tale
+raggio, anche fuori schermo. Fine incidente, morte, distruzione dell'auto o
+allontanamento ripristinano la normale pulizia. Anche le auto della polizia
+impegnate entro 180 metri sono escluse dalla pulizia del traffico fuori schermo.
+
+I contingenti mobili contano soltanto veicoli funzionanti, con guidatore della
+polizia vivo, associati allo stesso incidente e presenti nell'area: le auto
+ferme dei blocchi non saturano più la quota delle pattuglie o quella degli
+specialisti. Il generatore stradale vanilla può richiedere rinforzi anche quando
+il budget dei veicoli civili o quello degli agenti a piedi è già raggiunto.
+Restano attivi i controlli di strada, collisione, modelli caricati e capacità.
+
+| Limite | Precedente | Nuovo |
+| --- | ---: | ---: |
+| Pool pedoni | 140 | 240 |
+| Pool veicoli | 110 | 220 |
+| Riferimenti a entità | 800 | 3200 |
+| Budget globale base auto (moltiplicatore 1) | 12 | 48 |
+| Assegnazioni veicolo/incidente | 32 | 96 |
+
+Il budget di generazione aggiunge otto posti per stella: fino a 96 a sei stelle
+con il moltiplicatore predefinito. Durante gli inseguimenti otto posti del budget
+sono riservati ai rinforzi; il traffico civile lascia inoltre liberi venti slot
+pedoni. Le quote mobili a 2/3/4/5/6 stelle sono rispettivamente 2/4/5/6/8 veicoli.
+Gli array dei poliziotti impegnati nel combattimento di `CWanted` mantengono la
+capienza vanilla. I pool aumentati richiedono più memoria e possono aumentare
+il carico CPU; non è stata eseguita una verifica di gameplay o prestazioni.

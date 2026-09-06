@@ -90,12 +90,34 @@ uint32 aCarsToKeepTime[MAX_CARS_TO_KEEP];
 
 static int32 MissingDutyReinforcement();
 
+// Roadblock cars and abandoned patrols are not mobile reinforcements.
+static bool IsMobileDutyPatrol(CVehicle *car, CWanted *wanted)
+{
+	return car && car != FindPlayerVehicle() && car->bIsLawEnforcer &&
+		car->pDriver && car->pDriver->m_nPedType == PEDTYPE_COP && !car->pDriver->DyingOrDead() &&
+		(car->GetStatus() == STATUS_SIMPLE || car->GetStatus() == STATUS_PHYSICS) && car->m_fHealth > 0.0f &&
+		(car->GetPosition() - FindPlayerCoors()).Magnitude2D() < 180.0f && CPoliceDuty::CarWanted(car) == wanted;
+}
+
+static bool DutyPatrolNeeded()
+{
+	CWanted *wanted = CPoliceDuty::WantedFor();
+	if (wanted->GetWantedLevel() < 2) return false;
+	int count = 0;
+	for (int i = 0; i < CPools::GetVehiclePool()->GetSize(); ++i)
+		if (IsMobileDutyPatrol(CPools::GetVehiclePool()->GetSlot(i), wanted)) ++count;
+	return count < wanted->m_MaximumLawEnforcerVehicles &&
+		CTimer::GetTimeInMilliseconds() > CCarCtrl::LastTimeLawEnforcerCreated +
+		(wanted->GetWantedLevel() >= 3 ? 2000 : 8000);
+}
+
+
 void
 CCarCtrl::GenerateRandomCars()
 {
 	if (CCutsceneMgr::IsRunning())
 		return;
-	if (NumRandomCars < 30 + 5 * CPoliceDuty::WantedFor()->GetWantedLevel() || MissingDutyReinforcement() >= 0){
+	if (NumRandomCars < 30 + 5 * CPoliceDuty::WantedFor()->GetWantedLevel() || MissingDutyReinforcement() >= 0 || DutyPatrolNeeded()){
 		if (CountDownToCarsAtStart == 0){
 			GenerateOneRandomCar();
 		}
@@ -127,9 +149,7 @@ static int32 MissingDutyReinforcement()
 		bool present = false;
 		for (int i = 0; i < CPools::GetVehiclePool()->GetSize(); ++i) {
 			CVehicle *car = CPools::GetVehiclePool()->GetSlot(i);
-			if (car && car != FindPlayerVehicle() && car->bIsLawEnforcer &&
-				car->GetModelIndex() == models[j] && car->GetStatus() != STATUS_WRECKED &&
-				car->m_fHealth > 0.0f && CPoliceDuty::CarWanted(car) == wanted) {
+			if (IsMobileDutyPatrol(car, wanted) && car->GetModelIndex() == models[j]) {
 				present = true;
 				break;
 			}
@@ -150,21 +170,20 @@ CCarCtrl::GenerateOneRandomCar()
 	CTheZones::GetZoneInfoForTimeOfDay(&vecTargetPos, &zone);
 	pPlayer->m_nTrafficMultiplier = pPlayer->m_fRoadDensity * zone.carDensity;
 	int32 reinforcement = MissingDutyReinforcement();
-	if (reinforcement < 0 && NumRandomCars >= pPlayer->m_nTrafficMultiplier * CarDensityMultiplier * CIniFile::CarNumberMultiplier *
+	bool dispatch = reinforcement >= 0 || DutyPatrolNeeded();
+	if (!dispatch && NumRandomCars >= pPlayer->m_nTrafficMultiplier * CarDensityMultiplier * CIniFile::CarNumberMultiplier *
 		(1.0f + 0.15f * CPoliceDuty::WantedFor()->GetWantedLevel()))
 		return;
-	if (NumFiretrucksOnDuty + NumAmbulancesOnDuty + NumParkedCars + NumMissionCars + NumLawEnforcerCars + NumRandomCars >= MaxNumberOfCarsInUse)
+	if (NumFiretrucksOnDuty + NumAmbulancesOnDuty + NumParkedCars + NumMissionCars + NumLawEnforcerCars + NumRandomCars >=
+		MaxNumberOfCarsInUse + 8 * CPoliceDuty::WantedFor()->GetWantedLevel() - (!dispatch && CPoliceDuty::WantedFor()->GetWantedLevel() > 0 ? 8 : 0))
 		return;
+	// Reserve enough physical slots for the selected vehicle's occupants.
+	if (CPools::GetVehiclePool()->GetSize() - CPools::GetVehiclePool()->GetNoOfUsedSpaces() < 8 ||
+		CPools::GetPedPool()->GetSize() - CPools::GetPedPool()->GetNoOfUsedSpaces() < (dispatch ? 4 : 20)) return;
 	CWanted* pWanted = CPoliceDuty::WantedFor();
 	int carClass;
 	int carModel;
-	if (reinforcement >= 0 || (pWanted->GetWantedLevel() > 1 && NumLawEnforcerCars < pWanted->m_MaximumLawEnforcerVehicles &&
-		pWanted->m_CurrentCops < pWanted->m_MaxCops && (
-			pWanted->GetWantedLevel() > 3 ||
-			pWanted->GetWantedLevel() > 2 && CTimer::GetTimeInMilliseconds() > LastTimeLawEnforcerCreated + 5000 ||
-			pWanted->GetWantedLevel() > 1 && CTimer::GetTimeInMilliseconds() > LastTimeLawEnforcerCreated + 8000))) {
-		/* Last pWanted->GetWantedLevel() > 1 is unnecessary but I added it for better readability. */
-		/* Wouldn't be surprised it was there originally but was optimized out. */
+	if (dispatch) {
 		carClass = COPS;
 		carModel = reinforcement >= 0 ? reinforcement : ChoosePoliceCarModel();
 	}else{
@@ -738,6 +757,8 @@ CCarCtrl::RemoveDistantCars()
 		if (!pVehicle)
 			continue;
 		PossiblyRemoveVehicle(pVehicle);
+		pVehicle = CPools::GetVehiclePool()->GetSlot(i);
+		if (!pVehicle) continue;
 		if (pVehicle->bCreateRoadBlockPeds){
 			if ((pVehicle->GetPosition() - FindPlayerCentreOfWorld(CWorld::PlayerInFocus)).Magnitude2D() < DISTANCE_TO_SPAWN_ROADBLOCK_PEDS ||
 				(CPoliceDuty::CarWanted(pVehicle)->GetWantedLevel() > 0 &&
@@ -756,6 +777,13 @@ CCarCtrl::PossiblyRemoveVehicle(CVehicle* pVehicle)
 		return;
 #endif
 	CVector vecPlayerPos = FindPlayerCentreOfWorld(CWorld::PlayerInFocus);
+	// Do not cull an active chase car as ordinary off-screen traffic at 25m.
+	if (pVehicle->bIsLawEnforcer && pVehicle->m_fHealth > 0.0f && pVehicle->GetStatus() != STATUS_WRECKED &&
+		(pVehicle->GetPosition() - vecPlayerPos).Magnitude2D() < 180.0f &&
+		CPoliceDuty::CarWanted(pVehicle)->GetWantedLevel() > 0) {
+		pVehicle->bFadeOut = false;
+		return;
+	}
 	/* BUG: this variable is initialized only in if-block below but can be used outside of it. */
 	if (!IsThisVehicleInteresting(pVehicle) && !pVehicle->bIsLocked &&
 		pVehicle->CanBeDeleted() && !CCranes::IsThisCarBeingTargettedByAnyCrane(pVehicle)){

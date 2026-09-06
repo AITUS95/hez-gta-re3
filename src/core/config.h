@@ -38,8 +38,8 @@ enum Config {
 	// Pool sizes
 	NUMPTRNODES = 30000,  // 26000 on PS2
 	NUMENTRYINFOS = 5400, // 3200 on PS2
-	NUMPEDS = 140,        // 90 on PS2
-	NUMVEHICLES = 110,    // 70 on PS2
+	NUMPEDS = 240,        // Duty crews plus civilian population; keep indices below 256.
+	NUMVEHICLES = 220,    // Traffic, mobile patrols and complete roadblocks.
 	NUMBUILDINGS = 5500,  // 4915 on PS2
 	NUMTREADABLES = 1214,
 	NUMOBJECTS = 450,
@@ -62,7 +62,7 @@ enum Config {
 	NUMALPHALIST = 20,
 	NUMALPHAENTITYLIST = 150,
 	NUMCOLCACHELINKS = 200,
-	NUMREFERENCES = 800,
+	NUMREFERENCES = 3200, // Registered suspect, crew and vehicle references.
 
 	// Zones
 	NUMAUDIOZONES = 36,
