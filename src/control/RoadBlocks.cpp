@@ -15,6 +15,7 @@
 #include "Camera.h"
 #include "CarCtrl.h"
 #include "General.h"
+#include "Pools.h"
 
 #define ROADBLOCKDIST (100.0f)
 
@@ -107,118 +108,104 @@ CRoadBlocks::GenerateRoadBlockCopsForCar(CVehicle* pVehicle, int32 roadBlockType
 	}
 }
 
-void 
-CRoadBlocks::GenerateRoadBlocks(void) 
-{ 
-	// SQUEEZE_PERFORMANCE used to freeze all nodes as "inside" before the
-	// first incident. Arm the entry checks when there is no eligible pursuit.
-	if (CPoliceDuty::WantedFor()->m_RoadblockDensity == 0 || !CPoliceDuty::TargetVehicle()) {
+void
+CRoadBlocks::GenerateRoadBlocks(void)
+{
+	CWanted *wanted = CPoliceDuty::WantedFor();
+	if (wanted->GetWantedLevel() < 3 || !CPoliceDuty::TargetVehicle()) {
 		for (int i = 0; i < NumRoadBlocks; ++i) InOrOut[i] = false;
 		return;
 	}
 	if (CTimer::GetTimeInMilliseconds() < NextRoadblockTime) return;
-	CMatrix offsetMatrix;
+	int vehicleId = wanted->AreArmyRequired() ? MI_BARRACKS : wanted->AreFbiRequired() ? MI_FBICAR : wanted->AreSwatRequired() ? MI_ENFORCER : MI_POLICE;
+	int pedModel = vehicleId == MI_BARRACKS ? MI_ARMY : vehicleId == MI_FBICAR ? MI_FBI : vehicleId == MI_ENFORCER ? MI_SWAT : MI_COP;
+	CStreaming::RequestModel(vehicleId, STREAMFLAGS_DEPENDENCY);
+	CStreaming::RequestModel(pedModel, STREAMFLAGS_DEPENDENCY);
+	if (!CStreaming::HasModelLoaded(vehicleId) || !CStreaming::HasModelLoaded(pedModel)) return;
+
 	uint32 frame = CTimer::GetFrameCounter() & 0xF;
-	int16 nRoadblockNode = (int16)(NUMROADBLOCKS * frame) / 16;
-	const int16 maxRoadBlocks = (int16)(NUMROADBLOCKS * (frame + 1)) / 16;
-	for (; nRoadblockNode < Min(NumRoadBlocks, maxRoadBlocks); nRoadblockNode++) {
-		CTreadable *mapObject = ThePaths.m_mapObjects[RoadBlockObjects[nRoadblockNode]];
-		// Collision/map streaming remains centred on the actual player.
-		if ((mapObject->GetPosition() - FindPlayerCoors()).Magnitude2D() > 180.0f) {
-			InOrOut[nRoadblockNode] = false;
+	int first = NUMROADBLOCKS * frame / 16;
+	int last = Min((int)NumRoadBlocks, (int)(NUMROADBLOCKS * (frame + 1) / 16));
+	for (int node = first; node < last; ++node) {
+		CTreadable *road = ThePaths.m_mapObjects[RoadBlockObjects[node]];
+		float distance = (CPoliceDuty::TargetPosition() - road->GetPosition()).Magnitude2D();
+		float playerDistance = (FindPlayerCoors() - road->GetPosition()).Magnitude2D();
+		if (distance >= ROADBLOCKDIST || playerDistance > 180.0f) {
+			InOrOut[node] = false;
 			continue;
 		}
-		CVector2D vecDistance = CPoliceDuty::TargetPosition() - mapObject->GetPosition();
-		if (vecDistance.x > -ROADBLOCKDIST && vecDistance.x < ROADBLOCKDIST &&
-			vecDistance.y > -ROADBLOCKDIST && vecDistance.y < ROADBLOCKDIST &&
-			vecDistance.Magnitude() < ROADBLOCKDIST) {
-			if (!InOrOut[nRoadblockNode] && CTimer::GetTimeInMilliseconds() >= NextNodeAttempt[nRoadblockNode]) {
-				NextNodeAttempt[nRoadblockNode] = CTimer::GetTimeInMilliseconds() + 2000;
-				// Never assemble a blockade directly on the suspect or the player.
-				if (vecDistance.Magnitude() < 25.0f || (mapObject->GetPosition() - FindPlayerCoors()).Magnitude2D() < 25.0f) continue;
-				{
-					CWanted *pPlayerWanted = CPoliceDuty::WantedFor();
-					float fMapObjectRadius = 2.0f * mapObject->GetColModel()->boundingBox.max.x;
-					int32 vehicleId = MI_POLICE;
-					if (pPlayerWanted->AreArmyRequired())
-						vehicleId = MI_BARRACKS;
-					else if (pPlayerWanted->AreFbiRequired())
-						vehicleId = MI_FBICAR;
-					else if (pPlayerWanted->AreSwatRequired())
-						vehicleId = MI_ENFORCER;
-					int32 pedModel = vehicleId == MI_BARRACKS ? MI_ARMY : vehicleId == MI_FBICAR ? MI_FBI : vehicleId == MI_ENFORCER ? MI_SWAT : MI_COP;
-					CStreaming::RequestModel(vehicleId, STREAMFLAGS_DEPENDENCY);
-					CStreaming::RequestModel(pedModel, STREAMFLAGS_DEPENDENCY);
-					if (!CStreaming::HasModelLoaded(vehicleId) || !CStreaming::HasModelLoaded(pedModel)) continue;
-					CColModel *pVehicleColModel = CModelInfo::GetColModel(vehicleId);
-					// Cars are rotated across the road: use their length, not the
-					// bounding-sphere diameter which unnecessarily rejects large vans.
-					float fModelRadius = pVehicleColModel->boundingBox.max.y - pVehicleColModel->boundingBox.min.y + 0.5f;
-					int16 radius = Min(5, (int)(fMapObjectRadius / fModelRadius));
-					if (radius < 1) continue; // Try another suitable vanilla road node.
-					CVector2D vecDistanceToCamera = TheCamera.GetPosition() - mapObject->GetPosition();
-					float fDotProduct = DotProduct2D(vecDistanceToCamera, mapObject->GetForward());
-					float fOffset = 0.5f * fModelRadius * (float)(radius - 1);
-					for (int16 i = 0; i < radius; i++) {
-						uint8 nRoadblockType = fDotProduct < 0.0f;
-						if (CGeneral::GetRandomNumber() & 1) {
-							offsetMatrix.SetRotateZ(((CGeneral::GetRandomNumber() & 0xFF) - 128.0f) * 0.003f + HALFPI);
-						}
-						else {
-							nRoadblockType = !nRoadblockType;
-							offsetMatrix.SetRotateZ(((CGeneral::GetRandomNumber() & 0xFF) - 128.0f) * 0.003f - HALFPI);
-						}
-						if (ThePaths.m_objectFlags[RoadBlockObjects[nRoadblockNode]] & ObjectEastWest)
-							offsetMatrix.GetPosition() = CVector(0.0f, i * fModelRadius - fOffset, 0.6f);
-						else
-							offsetMatrix.GetPosition() = CVector(i * fModelRadius - fOffset, 0.0f, 0.6f);
-						CMatrix vehicleMatrix = mapObject->GetMatrix() * offsetMatrix;
-						float fModelRadius = CModelInfo::GetColModel(vehicleId)->boundingSphere.radius - 0.25f;
-						int16 colliding = 0;
-						CWorld::FindObjectsKindaColliding(vehicleMatrix.GetPosition(), fModelRadius, 0, &colliding, 2, nil, false, true, true, false, false);
-						if (!colliding) {
-							CAutomobile *pVehicle = new CAutomobile(vehicleId, RANDOM_VEHICLE);
-							pVehicle->SetStatus(STATUS_ABANDONED);
-							// pVehicle->GetHeightAboveRoad(); // called but return value is ignored?
-							vehicleMatrix.GetPosition().z += fModelRadius - 0.6f;
-							pVehicle->SetMatrix(vehicleMatrix);
-							pVehicle->PlaceOnRoadProperly();
-							pVehicle->SetIsStatic(false);
-							pVehicle->GetMatrix().UpdateRW();
-							pVehicle->m_nDoorLock = CARLOCK_UNLOCKED;
-							CCarCtrl::JoinCarWithRoadSystem(pVehicle);
-							pVehicle->bIsLocked = false;
-							pVehicle->AutoPilot.m_nCarMission = MISSION_NONE;
-							pVehicle->AutoPilot.m_nTempAction = TEMPACT_NONE;
-							pVehicle->AutoPilot.m_nCurrentLane = 0;
-							pVehicle->AutoPilot.m_nNextLane = 0;
-							pVehicle->AutoPilot.m_fMaxTrafficSpeed = 0.0f;
-							pVehicle->AutoPilot.m_nCruiseSpeed = 0.0f;
-							pVehicle->bExtendedRange = true;
-							if (pVehicle->UsesSiren(pVehicle->GetModelIndex()) && CGeneral::GetRandomNumber() & 1)
-								pVehicle->m_bSirenOrAlarm = true;
-							if (pVehicle->GetUp().z > 0.94f) {
-								CVisibilityPlugins::SetClumpAlpha(pVehicle->GetClump(), 0);
-								CWorld::Add(pVehicle);
-								// Bind this block before its occupants are generated later.
-								pVehicle->ChangeLawEnforcerState(true);
-								CPoliceDuty::CarWanted(pVehicle);
-								pVehicle->bCreateRoadBlockPeds = true;
-								pVehicle->m_nRoadblockType = nRoadblockType;
-								pVehicle->m_nRoadblockNode = nRoadblockNode;
-								InOrOut[nRoadblockNode] = true;
-								NextRoadblockTime = CTimer::GetTimeInMilliseconds() + 8000;
-							}
-							else {
-								delete pVehicle;
-							}
-						}
-					}
-				}
-			}
-			if (InOrOut[nRoadblockNode]) return;
-		} else {
-			InOrOut[nRoadblockNode] = false;
+		if (InOrOut[node] || CTimer::GetTimeInMilliseconds() < NextNodeAttempt[node]) continue;
+		NextNodeAttempt[node] = CTimer::GetTimeInMilliseconds() + 2000;
+		if (distance < 25.0f || playerDistance < 25.0f) continue;
+
+		bool alongY = (ThePaths.m_objectFlags[RoadBlockObjects[node]] & ObjectEastWest) != 0;
+		CColBox &roadBox = road->GetColModel()->boundingBox;
+		float roadWidth = alongY ? roadBox.max.y - roadBox.min.y : roadBox.max.x - roadBox.min.x;
+		CColBox &carBox = CModelInfo::GetColModel(vehicleId)->boundingBox;
+		float length = carBox.max.y - carBox.min.y;
+		float width = carBox.max.x - carBox.min.x;
+		// Long military trucks may not fit sideways. Put them side by side,
+		// facing down the road, retaining the military model and crew.
+		bool transverse = roadWidth >= length;
+		float extent = transverse ? length : width;
+		if (extent <= 0.0f || roadWidth <= 0.0f) continue;
+		int count = (int)Ceil(roadWidth / (extent + 0.2f));
+		if (count < 1 || count > 8) continue;
+		if (CPools::GetVehiclePool()->GetSize() - CPools::GetVehiclePool()->GetNoOfUsedSpaces() < count + 2 ||
+			CPools::GetPedPool()->GetSize() - CPools::GetPedPool()->GetNoOfUsedSpaces() < count * 2 + 2) continue;
+		float angle = alongY ? 0.0f : HALFPI;
+		if (!transverse) angle += HALFPI;
+		float spacing = extent + 0.2f;
+		float rowCentre = alongY ? (roadBox.min.y + roadBox.max.y) * 0.5f : (roadBox.min.x + roadBox.max.x) * 0.5f;
+		CAutomobile *row[8] = {};
+		bool complete = true;
+		// Stage the entire row off-world: earlier cars must not invalidate
+		// later slots via their bounding spheres, leaving alternating holes.
+		for (int i = 0; i < count; ++i) {
+			CMatrix offset;
+			offset.SetRotateZ(angle);
+			float position = rowCentre + (i - (count - 1) * 0.5f) * spacing;
+			offset.GetPosition() = alongY ? CVector(0.0f, position, 0.6f) : CVector(position, 0.0f, 0.6f);
+			CMatrix matrix = road->GetMatrix() * offset;
+			int16 colliding = 0;
+			CWorld::FindObjectsKindaColliding(matrix.GetPosition(), CModelInfo::GetColModel(vehicleId)->boundingSphere.radius - 0.25f,
+				false, &colliding, 2, nil, false, true, true, true, false);
+			if (colliding) { complete = false; break; }
+			CAutomobile *car = row[i] = new CAutomobile(vehicleId, RANDOM_VEHICLE);
+			car->SetStatus(STATUS_ABANDONED);
+			car->SetMatrix(matrix);
+			car->PlaceOnRoadProperly();
+			if (car->GetUp().z <= 0.94f) { complete = false; break; }
 		}
+		if (!complete) {
+			for (int i = 0; i < count; ++i) if (row[i]) delete row[i];
+			continue; // Retry the full row later; never publish a partial block.
+		}
+		for (int i = 0; i < count; ++i) {
+			CAutomobile *car = row[i];
+			car->SetIsStatic(false);
+			car->GetMatrix().UpdateRW();
+			car->m_nDoorLock = CARLOCK_UNLOCKED;
+			CCarCtrl::JoinCarWithRoadSystem(car);
+			car->bIsLocked = false;
+			car->AutoPilot.m_nCarMission = MISSION_NONE;
+			car->AutoPilot.m_nTempAction = TEMPACT_NONE;
+			car->AutoPilot.m_nCurrentLane = car->AutoPilot.m_nNextLane = 0;
+			car->AutoPilot.m_fMaxTrafficSpeed = 0.0f;
+			car->AutoPilot.m_nCruiseSpeed = 0;
+			car->bExtendedRange = true;
+			CVisibilityPlugins::SetClumpAlpha(car->GetClump(), 0);
+			CWorld::Add(car);
+			car->ChangeLawEnforcerState(true);
+			CPoliceDuty::CarWanted(car);
+			car->m_nRoadblockType = 0;
+			car->m_nRoadblockNode = node;
+			// Models and pool capacity were checked for the whole crew up front.
+			GenerateRoadBlockCopsForCar(car, 0, node);
+			car->bCreateRoadBlockPeds = false;
+		}
+		InOrOut[node] = true;
+		NextRoadblockTime = CTimer::GetTimeInMilliseconds() + 8000;
+		return;
 	}
 }

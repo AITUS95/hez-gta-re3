@@ -2774,8 +2774,7 @@ int8 CRunningScript::ProcessCommands200To299(int32 command)
 			// COPCAR polls its criminal here each frame. Also repairs the flag
 			// in saved missions without changing immunity in unrelated scripts.
 			pPed->bOnlyDamagedByPlayer = false;
-			if (!pPed->DyingOrDead() && pPed->GetPedState() != PED_ARRESTED && !CPoliceDuty::IsSuspect(pPed))
-				CPoliceDuty::AddSuspicion(pPed, 2);
+			// Mission membership alone does not dispatch a patrol.
 		}
 		if (vigilante && pPed && pPed->GetPedState() == PED_ARRESTED && !CPoliceDuty::IsArrestComplete(pPed)) {
 			// Yield this thread at the poll, so its escape/leave-car commands

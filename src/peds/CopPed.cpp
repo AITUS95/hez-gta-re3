@@ -344,6 +344,10 @@ CCopPed::CopAI(void)
 {
 	CWanted *wanted = CPoliceDuty::WantedFor(this);
 	int wantedLevel = wanted->GetWantedLevel();
+	if (CPoliceDuty::RequiresArmedResponse(this) && GetWeapon()->m_eWeaponType == WEAPONTYPE_UNARMED) {
+		GiveWeapon(WEAPONTYPE_COLT45, 30000);
+		SetCurrentWeapon(WEAPONTYPE_COLT45);
+	}
 	if (wantedLevel && !CPoliceDuty::TargetPed(this)) {
 		// Empty vehicles use vanilla destroy-car objectives and car pursuit.
 		SetPursuit(false);
@@ -616,7 +620,8 @@ CCopPed::ProcessControl(void)
 	if (m_nZoneLevel > LEVEL_GENERIC && m_nZoneLevel != CCollision::ms_collisionInMemory)
 		return;
 
-	if (CPoliceDuty::IsFriendlyFire(this, m_pedInObjective)) {
+	if ((m_objective == OBJECTIVE_KILL_CHAR_ON_FOOT || m_objective == OBJECTIVE_KILL_CHAR_ANY_MEANS) &&
+		(CPoliceDuty::IsFriendlyFire(this, m_pedInObjective) || !CPoliceDuty::CanSupportTarget(this, m_pedInObjective))) {
 		ClearPursuit();
 		ClearObjective();
 		ClearAttack();
@@ -639,6 +644,9 @@ CCopPed::ProcessControl(void)
 		return;
 	}
 	GetWeapon()->Update(m_audioEntityId);
+	// CPed owns following/boarding. Do not run idle patrol AI over it.
+	if (CPoliceDuty::IsSpawnedOfficer(this) && !m_bIsInPursuit && CPoliceDuty::WantedFor(this)->GetWantedLevel() == 0)
+		return;
 	if (m_moved.Magnitude() > 0.0f)
 		Avoid();
 

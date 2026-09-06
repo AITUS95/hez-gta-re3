@@ -35,6 +35,8 @@ struct Incident {
 	CEntity *entity;
 	CPed *driver; // Remember a designated vehicle's driver after they leave it.
 	CWanted wanted;
+	bool meleeOnly;
+	bool armedResponse;
 };
 Incident incidents[MAX_INCIDENTS];
 // Autopilot's vanilla chase missions have no pedestrian target field. Keep
@@ -157,6 +159,7 @@ Incident *Select(CCopPed *officer)
 	for (int i = 0; i < MAX_INCIDENTS; ++i) {
 		Incident &candidate = incidents[i];
 		if (!Valid(candidate)) continue;
+		if (candidate.meleeOnly && (!officer || officer->GetWeapon()->m_eWeaponType != WEAPONTYPE_UNARMED)) continue;
 		float distance = (PhysicalOf(candidate)->GetPosition() - origin).MagnitudeSqr();
 		if (officer && distance > sq(100.0f)) continue;
 		float current = officer ? distance : distance - candidate.wanted.GetWantedLevel() * 1000000.0f;
@@ -361,7 +364,7 @@ void CPoliceDuty::BeginShift()
 	shiftStarted = true;
 }
 
-void CPoliceDuty::AddSuspicion(CEntity *entity, int level)
+void CPoliceDuty::AddSuspicion(CEntity *entity, int level, bool meleeOnly)
 {
 	if (!ready || !entity || (!entity->IsPed() && !entity->IsVehicle())) return;
 	// Uniformed allies cannot become adversaries through designation either.
@@ -374,6 +377,8 @@ void CPoliceDuty::AddSuspicion(CEntity *entity, int level)
 	}
 	if (!slot) return;
 	if (!slot->entity) {
+		slot->meleeOnly = meleeOnly;
+		slot->armedResponse = false;
 		slot->entity = entity;
 		entity->RegisterReference(&slot->entity);
 		if (entity->IsVehicle() && ((CVehicle*)entity)->pDriver) {
@@ -382,6 +387,8 @@ void CPoliceDuty::AddSuspicion(CEntity *entity, int level)
 		}
 	}
 	if (!Valid(*slot)) { ClearIncident(*slot); return; }
+	slot->meleeOnly = slot->meleeOnly && meleeOnly;
+	if (level && !meleeOnly) slot->armedResponse = true;
 	CWanted::SetMaximumWantedLevel(6);
 	slot->wanted.SetWantedLevel(level ? Max(level, slot->wanted.GetWantedLevel()) : Min(6, slot->wanted.GetWantedLevel() + 1));
 	if (!level) {
@@ -411,14 +418,32 @@ void CPoliceDuty::AddSuspicion(CEntity *entity, int level)
 	}
 }
 
-void CPoliceDuty::ReportAttack(CEntity *attacker, CEntity *victim)
+void CPoliceDuty::ReportAttack(CEntity *attacker, CEntity *victim, int weapon)
 {
 	if (!attacker || !victim || IsFriendlyFire(attacker, victim)) return;
-	if ((attacker == FindPlayerPed() || attacker == FindPlayerVehicle()) && victim->IsPed() && !IsOfficer(victim)) AddSuspicion(victim, 2);
+	bool fists = attacker->IsPed() && (weapon >= 0 ? weapon == WEAPONTYPE_UNARMED : ((CPed*)attacker)->GetWeapon()->m_eWeaponType == WEAPONTYPE_UNARMED);
+	if ((attacker == FindPlayerPed() || attacker == FindPlayerVehicle()) && victim->IsPed() && !IsOfficer(victim)) {
+		AddSuspicion(victim, fists ? 1 : 2, fists);
+	}
 	if (IsOfficer(victim) && !IsOfficer(attacker)) {
-		if (attacker->IsPed()) AddSuspicion(attacker, 2);
+		if (attacker->IsPed()) AddSuspicion(attacker, fists ? 1 : 2, fists);
 		else if (attacker->IsVehicle() && ((CVehicle*)attacker)->pDriver) AddSuspicion(attacker, 2);
 	}
+}
+
+bool CPoliceDuty::RequiresArmedResponse(CCopPed *officer)
+{
+	Incident *incident = Select(officer);
+	return incident && incident->armedResponse;
+}
+
+bool CPoliceDuty::CanSupportTarget(CPed *officer, CPed *target)
+{
+	if (!officer || !target) return true;
+	for (int i = 0; i < MAX_INCIDENTS; ++i)
+		if (Valid(incidents[i]) && PedOf(incidents[i]) == target && incidents[i].meleeOnly)
+			return officer->GetWeapon()->m_eWeaponType == WEAPONTYPE_UNARMED;
+	return true;
 }
 
 bool CPoliceDuty::IsArrestComplete(CPed *ped)

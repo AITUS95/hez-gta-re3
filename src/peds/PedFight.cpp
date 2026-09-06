@@ -246,6 +246,7 @@ void
 CPed::SetAttack(CEntity *victim)
 {
 	if (CPoliceDuty::IsFriendlyFire(this, victim)) return ;
+	if (m_nPedType == PEDTYPE_COP && victim && victim->IsPed() && !CPoliceDuty::CanSupportTarget(this, (CPed*)victim)) return;
 	CPoliceDuty::ReportAttack(this, victim);
 	CPed *victimPed = nil;
 	if (victim && victim->IsPed())
@@ -2062,7 +2063,7 @@ bool
 CPed::InflictDamage(CEntity *damagedBy, eWeaponType method, float damage, ePedPieceTypes pedPiece, uint8 direction)
 {
 	if (CPoliceDuty::IsFriendlyFire(this, damagedBy)) return false;
-	CPoliceDuty::ReportAttack(damagedBy, this);
+	CPoliceDuty::ReportAttack(damagedBy, this, method);
 	CPlayerPed *player = FindPlayerPed();
 	float dieDelta = 4.0f;
 	float dieSpeed = 0.0f;

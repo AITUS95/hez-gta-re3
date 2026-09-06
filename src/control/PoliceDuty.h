@@ -23,9 +23,11 @@ public:
 	static bool IsOfficer(CEntity *entity);
 	static bool IsFriendlyFire(CEntity *a, CEntity *b);
 	static bool HasInfiniteAmmo(CEntity *entity);
-	static void ReportAttack(CEntity *attacker, CEntity *victim);
-	static void AddSuspicion(CEntity *entity, int level = 0);
+	static void ReportAttack(CEntity *attacker, CEntity *victim, int weapon = -1);
+	static void AddSuspicion(CEntity *entity, int level = 0, bool meleeOnly = false);
 	static bool IsSuspect(CPed *ped);
+	static bool RequiresArmedResponse(CCopPed *officer);
+	static bool CanSupportTarget(CPed *officer, CPed *target);
 	static bool IsArrestComplete(CPed *ped);
 	static bool IsSpawnedOfficer(CPed *ped);
 	static bool IsDesignating();

@@ -543,6 +543,14 @@ CPed::UpdateFromLeader(void)
 	if (!m_leader)
 		return;
 
+	if (m_nPedType == PEDTYPE_COP && CPoliceDuty::IsSpawnedOfficer(this) &&
+		m_leader->IsPlayer() && bInVehicle && m_leader->bInVehicle &&
+		m_pMyVehicle == m_leader->m_pMyVehicle && CPoliceDuty::WantedFor((CCopPed*)this)->GetWantedLevel() == 0) {
+		// Do not restore a former on-foot follow objective while sharing a car.
+		if (m_objective != OBJECTIVE_WAIT_IN_CAR) SetObjective(OBJECTIVE_WAIT_IN_CAR);
+		return;
+	}
+
 	CVector leaderDist;
 	if (m_leader->InVehicle())
 		leaderDist = m_leader->m_pMyVehicle->GetPosition() - GetPosition();
@@ -595,6 +603,8 @@ CPed::UpdateFromLeader(void)
 			|| m_objective == m_leader->m_objective) {
 
 			if (m_leader->m_nPedState == PED_ATTACK) {
+				// Duty cops receive combat targets through the filtered pursuit system.
+				if (m_nPedType == PEDTYPE_COP && m_leader->IsPlayer()) return;
 				CEntity *lookTargetOfLeader = m_leader->m_pLookTarget;
 				if (lookTargetOfLeader && m_objective != OBJECTIVE_KILL_CHAR_ON_FOOT
 					&& lookTargetOfLeader->IsPed() && lookTargetOfLeader != this) {
@@ -621,7 +631,7 @@ CPed::UpdateFromLeader(void)
 #endif
 				}
 				if (m_nPedState == PED_IDLE && m_leader->IsPlayer()) {
-					if (ScanForThreats() && m_threatEntity) {
+					if (!(m_nPedType == PEDTYPE_COP && m_leader->IsPlayer()) && ScanForThreats() && m_threatEntity) {
 						m_pLookTarget = m_threatEntity;
 						m_pLookTarget->RegisterReference((CEntity **) &m_pLookTarget);
 						TurnBody();

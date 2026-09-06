@@ -131,7 +131,13 @@ ha un vero `CWanted`. Non sostituisce il puntatore del giocatore, non usa un
   La composizione è Police/agenti a 3 stelle, Enforcer/SWAT a 4, FBI a 5,
   Barracks/militari a 6. Non si ripiega su volanti ai livelli speciali: si attende
   lo streaming o si prova un'altra strada. Gli agenti mantengono il bersaglio
-  assegnato e si attivano anche all'avvicinarsi del sospetto.
+  assegnato. Ora tutta la fila viene preparata fuori dal world e pubblicata
+  solo se ogni mezzo può essere collocato, con due agenti per mezzo già presenti.
+  Le auto della stessa fila non si respingono attraverso i controlli sferici
+  durante la generazione. Il numero e l'orientamento seguono la larghezza
+  effettiva del nodo: sulle strade strette i Barracks vengono affiancati
+  longitudinalmente. Restano possibili varchi creati successivamente da danni
+  o spostamenti fisici, senza riparazioni o respawn artificiali.
 - I pedoni sospetti usano gli obiettivi di fuga vanilla o conservano il proprio
   combattimento. Il conducente resta sospetto anche quando abbandona il mezzo.
   I mezzi vuoti usano l'obiettivo vanilla `OBJECTIVE_DESTROY_CAR`, insieme alla
@@ -140,9 +146,11 @@ ha un vero `CWanted`. Non sostituisce il puntatore del giocatore, non usa un
   convertirli illegalmente a `CPlayerPed`. Si riusa l'arresto ravvicinato di un
   sospetto atterrato, estratto da un'auto o intercettato durante l'ingresso.
 
-L'attacco del giocatore a un pedone e l'attacco di un pedone al giocatore o a un
-agente registrano una minaccia da almeno 2 stelle. Gli agenti vicini prendono in
-carico il sospetto attraverso il normale sistema di inseguimento. Un agente già
+Le risse a pugni registrano un incidente da 1 stella riservato agli agenti
+che sono già disarmati, senza richiamare pattuglie. Gli spari portano la risposta
+ad almeno 2 stelle: intervengono anche gli agenti armati e i disarmati coinvolti
+ricevono una pistola. Un incidente già armato o designato manualmente non viene
+declassato da un pugno successivo. Gli agenti vicini usano gli obiettivi vanilla. Un agente già
 impegnato mantiene il proprio incidente; i rinforzi generali danno precedenza
 al livello più alto, poi alla vicinanza al giocatore.
 
@@ -218,7 +226,8 @@ il lancio di strisce chiodate rimane una funzionalità non implementata.
 
 Il controllo del criminale nel thread missione `COPCAR` rimuove la protezione
 «danneggiabile solo dal giocatore» anche nelle missioni caricate da salvataggio
-e registra il bersaglio nel sistema di sospetto per il supporto degli alleati.
+senza assegnare automaticamente stelle o pattuglie al bersaglio. Il sospetto
+si attiva tramite la designazione del giocatore oppure una reale aggressione.
 Solo quel thread riconosce anche l'arresto concluso come esito del controllo
 originale di eliminazione: il sospetto rimane vivo, mentre premi, contatore,
 pulizia e generazione del prossimo ricercato seguono il codice SCM originale.
@@ -241,3 +250,11 @@ scelto rimane agganciato finché valido e visibile o fino al rilascio di L1;
 non viene sovrascritto dal raggio centrale al fotogramma successivo.
 Durante L1 questi pulsanti non cambiano arma né ruotano la visuale laterale
 in auto. Fuori dalla designazione mantengono le funzioni originali.
+
+### Alleati a bordo
+
+Il controllo delle relazioni annulla solo obiettivi ostili verso alleati,
+non gli obiettivi di seguito. Gli agenti richiamati usano l'AI del leader
+senza sovrapporre la pattuglia inattiva e mantengono `OBJECTIVE_WAIT_IN_CAR`
+mentre condividono il veicolo del giocatore in assenza di un incidente.
+Quando il giocatore scende riprende il normale comportamento di uscita/seguito.
