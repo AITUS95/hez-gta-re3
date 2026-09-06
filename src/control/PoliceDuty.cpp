@@ -585,7 +585,19 @@ void CPoliceDuty::Update()
 		}
 	}
 	for (int i = 0; i < MAX_BACKUP; ++i)
-		if (backup[i] && backup[i]->DyingOrDead()) Release((CEntity**)&backup[i]);
+		if (backup[i]) {
+			CPed *ped = backup[i];
+			if (ped->DyingOrDead()) { Release((CEntity**)&backup[i]); continue; }
+			// Recover old ambient flee state without suppressing escape from fire.
+			if (!ped->bInVehicle && !ped->m_pFire && (ped->GetPedState() == PED_FLEE_ENTITY || ped->GetPedState() == PED_FLEE_POS)) {
+				((CCopPed*)ped)->ClearPursuit();
+				ped->ClearFlee();
+				ped->ClearObjective();
+				ped->SetIdle();
+				ped->SetLeader(FindPlayerPed());
+				ped->SetObjective(OBJECTIVE_GOTO_CHAR_ON_FOOT, FindPlayerPed());
+			}
+		}
 	if (!shiftStarted) return;
 	CPlayerPed *player = FindPlayerPed();
 	if (!player->DyingOrDead() && (player->GetModelIndex() != MI_COP || !player->HasWeapon(WEAPONTYPE_COLT45)))

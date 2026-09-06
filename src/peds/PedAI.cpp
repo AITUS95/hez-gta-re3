@@ -557,7 +557,7 @@ CPed::UpdateFromLeader(void)
 	else
 		leaderDist = m_leader->GetPosition() - GetPosition();
 
-	if (leaderDist.Magnitude() > 30.0f) {
+	if (leaderDist.Magnitude() > 30.0f && !CPoliceDuty::IsSpawnedOfficer(this)) {
 		if (IsPedInControl()) {
 			SetObjective(OBJECTIVE_NONE);
 			SetIdle();
@@ -2152,6 +2152,10 @@ CPed::ReactToPointGun(CEntity *entWithGun)
 void
 CPed::ReactToAttack(CEntity *attacker)
 {
+	if (CPoliceDuty::IsSpawnedOfficer(this)) {
+		CPoliceDuty::ReportAttack(attacker, this);
+		return; // Duty chooses melee/armed support instead of civilian flight.
+	}
 	if (CPoliceDuty::IsFriendlyFire(this, attacker)) return ;
 	CPoliceDuty::ReportAttack(attacker, this);
 	if (IsPlayer() && attacker->IsPed()) {

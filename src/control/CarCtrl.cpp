@@ -741,8 +741,7 @@ CCarCtrl::RemoveDistantCars()
 			if ((pVehicle->GetPosition() - FindPlayerCentreOfWorld(CWorld::PlayerInFocus)).Magnitude2D() < DISTANCE_TO_SPAWN_ROADBLOCK_PEDS ||
 				(CPoliceDuty::CarWanted(pVehicle)->GetWantedLevel() > 0 &&
 				 (pVehicle->GetPosition() - CPoliceDuty::CarTargetPosition(pVehicle)).Magnitude2D() < DISTANCE_TO_SPAWN_ROADBLOCK_PEDS)) {
-				CRoadBlocks::GenerateRoadBlockCopsForCar(pVehicle, pVehicle->m_nRoadblockType, pVehicle->m_nRoadblockNode);
-				pVehicle->bCreateRoadBlockPeds = false;
+				pVehicle->bCreateRoadBlockPeds = !CRoadBlocks::GenerateRoadBlockCopsForCar(pVehicle, pVehicle->m_nRoadblockType, pVehicle->m_nRoadblockNode);
 			}
 		}
 	}

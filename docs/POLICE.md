@@ -258,3 +258,18 @@ non gli obiettivi di seguito. Gli agenti richiamati usano l'AI del leader
 senza sovrapporre la pattuglia inattiva e mantengono `OBJECTIVE_WAIT_IN_CAR`
 mentre condividono il veicolo del giocatore in assenza di un incidente.
 Quando il giocatore scende riprende il normale comportamento di uscita/seguito.
+
+### Reclute e personale dei blocchi
+
+Le reclute mantengono il leader anche oltre 30 metri e non usano la scansione
+ambientale delle minacce per fuggire. Le aggressioni reali restano gestite da
+`ReportAttack` e dall'AI di polizia. Eventuali stati di fuga ambientale già
+attivi vengono chiusi ripristinando seguito/inseguimento, salvo la fuga quando
+la recluta è in fiamme.
+
+I due agenti di ogni auto del blocco vengono collocati fuori dalle dimensioni
+reali del mezzo, sul lato opposto all'arrivo del sospetto, controllando terreno
+e spazio libero. Non iniziano un attacco forzato durante la generazione:
+`CopAI` gestisce copertura, distanza e tiro. Se mancano spazio, modelli o posti
+nel pool, la generazione della coppia resta pendente e viene ritentata invece
+di essere considerata completata. La correzione riguarda tutti i livelli.

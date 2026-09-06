@@ -51,61 +51,64 @@ CRoadBlocks::Init(void)
 	}
 }
 
-void
-CRoadBlocks::GenerateRoadBlockCopsForCar(CVehicle* pVehicle, int32 roadBlockType, int16 roadBlockNode)
+bool
+CRoadBlocks::GenerateRoadBlockCopsForCar(CVehicle* car, int32 roadBlockType, int16 roadBlockNode)
 {
-	static const CVector vecRoadBlockOffets[6] = { CVector(-1.5, 1.8f, 0.0f), CVector(-1.5f, -1.8f, 0.0f), CVector(1.5f, 1.8f, 0.0f),
-	CVector(1.5f, -1.8f, 0.0f), CVector(-1.5f, 0.0f, 0.0f), CVector(1.5, 0.0, 0.0) };
-	CEntity* pEntityToAttack = (CEntity*)CPoliceDuty::CarTargetVehicle(pVehicle);
-	if (!pEntityToAttack)
-		pEntityToAttack = (CEntity*)CPoliceDuty::CarTargetPed(pVehicle);
-	if (CPoliceDuty::CarWanted(pVehicle)->GetWantedLevel() == 0) return;
-	CColModel* pPoliceColModel = CModelInfo::GetColModel(MI_POLICE);
-	float fRadius = pVehicle->GetBoundRadius() / pPoliceColModel->boundingSphere.radius;
-	for (int32 i = 0; i < 2; i++) {
-		const int32 roadBlockIndex = i + 2 * roadBlockType;
-		CVector posForZ = pVehicle->GetMatrix() * (fRadius * vecRoadBlockOffets[roadBlockIndex]);
-		int32 modelInfoId = MI_COP;
-		eCopType copType = COP_STREET;
-		switch (pVehicle->GetModelIndex())
-		{
-		case MI_FBICAR:
-			modelInfoId = MI_FBI;
-			copType = COP_FBI;
-			break;
-		case MI_ENFORCER:
-			modelInfoId = MI_SWAT;
-			copType = COP_SWAT;
-			break;
-		case MI_BARRACKS:
-			modelInfoId = MI_ARMY;
-			copType = COP_ARMY;
-			break;
-		}
-		if (!CStreaming::HasModelLoaded(modelInfoId))
-			copType = COP_STREET;
-		CCopPed* pCopPed = new CCopPed(copType);
-		if (copType == COP_STREET)
-			pCopPed->SetCurrentWeapon(WEAPONTYPE_COLT45);
-		CPedPlacement::FindZCoorForPed(&posForZ);
-		pCopPed->SetPosition(posForZ);
-		pCopPed->SetOrientation(0.0f, 0.0f, -HALFPI);
-		pCopPed->m_bIsDisabledCop = true;
-		pCopPed->SetIdle();
-		pCopPed->bKindaStayInSamePlace = true;
-		pCopPed->bNotAllowedToDuck = false;
-		pCopPed->m_nRoadblockNode = roadBlockNode;
-		pCopPed->bCrouchWhenShooting = roadBlockType != 2;
-		if (pEntityToAttack) {
-			pCopPed->SetWeaponLockOnTarget(pEntityToAttack);
-			pCopPed->SetAttack(pEntityToAttack);
-		}
-		pCopPed->m_pMyVehicle = pVehicle;
-		pVehicle->RegisterReference((CEntity**)&pCopPed->m_pMyVehicle);
-		pCopPed->bCullExtraFarAway = true;
-		CVisibilityPlugins::SetClumpAlpha(pCopPed->GetClump(), 0);
-		CWorld::Add(pCopPed);
+	CEntity *target = (CEntity*)CPoliceDuty::CarTargetVehicle(car);
+	if (!target) target = (CEntity*)CPoliceDuty::CarTargetPed(car);
+	if (!target || CPoliceDuty::CarWanted(car)->GetWantedLevel() == 0) return true;
+	int model = MI_COP;
+	eCopType type = COP_STREET;
+	switch (car->GetModelIndex()) {
+	case MI_ENFORCER: model = MI_SWAT; type = COP_SWAT; break;
+	case MI_FBICAR: model = MI_FBI; type = COP_FBI; break;
+	case MI_BARRACKS: model = MI_ARMY; type = COP_ARMY; break;
 	}
+	CStreaming::RequestModel(model, STREAMFLAGS_DEPENDENCY);
+	if (!CStreaming::HasModelLoaded(model) || CPools::GetPedPool()->GetSize() - CPools::GetPedPool()->GetNoOfUsedSpaces() < 2) return false;
+	CVector away = car->GetPosition() - target->GetPosition();
+	float side = DotProduct(away, car->GetRight());
+	float end = DotProduct(away, car->GetForward());
+	CColBox &box = car->GetColModel()->boundingBox;
+	CVector positions[2];
+	for (int i = 0; i < 2; ++i) {
+		bool clear = false;
+		for (int attempt = 0; attempt < 6; ++attempt) {
+			float margin = 0.9f + 0.4f * attempt;
+			CVector local(0.0f, 0.0f, 0.0f);
+			if (Abs(side) >= Abs(end)) {
+				local.x = side >= 0.0f ? box.max.x + margin : box.min.x - margin;
+				local.y = (box.min.y + box.max.y) * 0.5f + (i ? 0.25f : -0.25f) * (box.max.y - box.min.y);
+			} else {
+				local.y = end >= 0.0f ? box.max.y + margin : box.min.y - margin;
+				local.x = (box.min.x + box.max.x) * 0.5f + (i ? 0.3f : -0.3f) * (box.max.x - box.min.x);
+			}
+			positions[i] = car->GetMatrix() * local;
+			CPedPlacement::FindZCoorForPed(&positions[i]);
+			if (CPedPlacement::IsPositionClearForPed(&positions[i])) { clear = true; break; }
+		}
+		if (!clear) return false; // Retry both guards; never silently lose a slot.
+	}
+	for (int i = 0; i < 2; ++i) {
+		CCopPed *cop = new CCopPed(type);
+		cop->SetPosition(positions[i]);
+		cop->SetIdle();
+		cop->m_bIsDisabledCop = true;
+		cop->bKindaStayInSamePlace = true;
+		cop->bNotAllowedToDuck = false;
+		cop->m_nRoadblockNode = roadBlockNode;
+		cop->bCrouchWhenShooting = roadBlockType != 2;
+		cop->m_pMyVehicle = car;
+		car->RegisterReference((CEntity**)&cop->m_pMyVehicle);
+		cop->bCullExtraFarAway = true;
+		if (type == COP_STREET) cop->SetCurrentWeapon(WEAPONTYPE_COLT45);
+		cop->SetLookFlag(target, true);
+		cop->TurnBody();
+		// CopAI handles range, cover and shooting; don't force an attack at spawn.
+		CVisibilityPlugins::SetClumpAlpha(cop->GetClump(), 255);
+		CWorld::Add(cop);
+	}
+	return true;
 }
 
 void
@@ -201,8 +204,7 @@ CRoadBlocks::GenerateRoadBlocks(void)
 			car->m_nRoadblockType = 0;
 			car->m_nRoadblockNode = node;
 			// Models and pool capacity were checked for the whole crew up front.
-			GenerateRoadBlockCopsForCar(car, 0, node);
-			car->bCreateRoadBlockPeds = false;
+			car->bCreateRoadBlockPeds = !GenerateRoadBlockCopsForCar(car, 0, node);
 		}
 		InOrOut[node] = true;
 		NextRoadblockTime = CTimer::GetTimeInMilliseconds() + 8000;

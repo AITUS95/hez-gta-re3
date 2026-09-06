@@ -1,4 +1,5 @@
 #include "common.h"
+#include "PoliceDuty.h"
 
 #include "main.h"
 #include "Pools.h"
@@ -723,6 +724,8 @@ CPed::RestorePreviousState(void)
 uint32
 CPed::ScanForThreats(void)
 {
+	// Recruits use duty incidents for combat, not ambient civilian panic.
+	if (CPoliceDuty::IsSpawnedOfficer(this)) return 0;
 	int fearFlags = m_fearFlags;
 	CVector ourPos = GetPosition();
 	float closestPedDist = 60.0f;
