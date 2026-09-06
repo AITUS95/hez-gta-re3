@@ -95,7 +95,7 @@ CCarCtrl::GenerateRandomCars()
 {
 	if (CCutsceneMgr::IsRunning())
 		return;
-	if (NumRandomCars < 30 || MissingDutyReinforcement() >= 0){
+	if (NumRandomCars < 30 + 5 * CPoliceDuty::WantedFor()->GetWantedLevel() || MissingDutyReinforcement() >= 0){
 		if (CountDownToCarsAtStart == 0){
 			GenerateOneRandomCar();
 		}
@@ -150,7 +150,8 @@ CCarCtrl::GenerateOneRandomCar()
 	CTheZones::GetZoneInfoForTimeOfDay(&vecTargetPos, &zone);
 	pPlayer->m_nTrafficMultiplier = pPlayer->m_fRoadDensity * zone.carDensity;
 	int32 reinforcement = MissingDutyReinforcement();
-	if (reinforcement < 0 && NumRandomCars >= pPlayer->m_nTrafficMultiplier * CarDensityMultiplier * CIniFile::CarNumberMultiplier)
+	if (reinforcement < 0 && NumRandomCars >= pPlayer->m_nTrafficMultiplier * CarDensityMultiplier * CIniFile::CarNumberMultiplier *
+		(1.0f + 0.15f * CPoliceDuty::WantedFor()->GetWantedLevel()))
 		return;
 	if (NumFiretrucksOnDuty + NumAmbulancesOnDuty + NumParkedCars + NumMissionCars + NumLawEnforcerCars + NumRandomCars >= MaxNumberOfCarsInUse)
 		return;

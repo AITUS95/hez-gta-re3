@@ -16,6 +16,7 @@
 #include "CarCtrl.h"
 #include "General.h"
 #include "Pools.h"
+#include "Collision.h"
 
 #define ROADBLOCKDIST (100.0f)
 
@@ -51,26 +52,13 @@ CRoadBlocks::Init(void)
 	}
 }
 
-bool
-CRoadBlocks::GenerateRoadBlockCopsForCar(CVehicle* car, int32 roadBlockType, int16 roadBlockNode)
+static bool
+FindGuardPositions(CVehicle *car, CEntity *target, CVector *positions)
 {
-	CEntity *target = (CEntity*)CPoliceDuty::CarTargetVehicle(car);
-	if (!target) target = (CEntity*)CPoliceDuty::CarTargetPed(car);
-	if (!target || CPoliceDuty::CarWanted(car)->GetWantedLevel() == 0) return true;
-	int model = MI_COP;
-	eCopType type = COP_STREET;
-	switch (car->GetModelIndex()) {
-	case MI_ENFORCER: model = MI_SWAT; type = COP_SWAT; break;
-	case MI_FBICAR: model = MI_FBI; type = COP_FBI; break;
-	case MI_BARRACKS: model = MI_ARMY; type = COP_ARMY; break;
-	}
-	CStreaming::RequestModel(model, STREAMFLAGS_DEPENDENCY);
-	if (!CStreaming::HasModelLoaded(model) || CPools::GetPedPool()->GetSize() - CPools::GetPedPool()->GetNoOfUsedSpaces() < 2) return false;
 	CVector away = car->GetPosition() - target->GetPosition();
 	float side = DotProduct(away, car->GetRight());
 	float end = DotProduct(away, car->GetForward());
 	CColBox &box = car->GetColModel()->boundingBox;
-	CVector positions[2];
 	for (int i = 0; i < 2; ++i) {
 		bool clear = false;
 		for (int attempt = 0; attempt < 6; ++attempt) {
@@ -93,6 +81,13 @@ CRoadBlocks::GenerateRoadBlockCopsForCar(CVehicle* car, int32 roadBlockType, int
 		}
 		if (!clear) return false; // Retry both guards; never silently lose a slot.
 	}
+	return true;
+}
+
+static void
+CreateRoadblockGuards(CVehicle *car, CEntity *target, eCopType type, int32 roadBlockType,
+	int16 roadBlockNode, const CVector *positions)
+{
 	for (int i = 0; i < 2; ++i) {
 		CCopPed *cop = new CCopPed(type);
 		cop->SetPosition(positions[i]);
@@ -102,8 +97,10 @@ CRoadBlocks::GenerateRoadBlockCopsForCar(CVehicle* car, int32 roadBlockType, int
 		cop->bNotAllowedToDuck = false;
 		cop->m_nRoadblockNode = roadBlockNode;
 		cop->bCrouchWhenShooting = roadBlockType != 2;
+		if (cop->bCrouchWhenShooting) cop->SetDuck(60000);
 		cop->m_pMyVehicle = car;
 		car->RegisterReference((CEntity**)&cop->m_pMyVehicle);
+		CPoliceDuty::DutyVehicle(cop);
 		cop->bCullExtraFarAway = true;
 		if (type == COP_STREET) cop->SetCurrentWeapon(WEAPONTYPE_COLT45);
 		cop->SetLookFlag(target, true);
@@ -112,6 +109,26 @@ CRoadBlocks::GenerateRoadBlockCopsForCar(CVehicle* car, int32 roadBlockType, int
 		CVisibilityPlugins::SetClumpAlpha(cop->GetClump(), 255);
 		CWorld::Add(cop);
 	}
+}
+
+bool
+CRoadBlocks::GenerateRoadBlockCopsForCar(CVehicle* car, int32 roadBlockType, int16 roadBlockNode)
+{
+	CEntity *target = (CEntity*)CPoliceDuty::CarTargetVehicle(car);
+	if (!target) target = (CEntity*)CPoliceDuty::CarTargetPed(car);
+	if (!target || CPoliceDuty::CarWanted(car)->GetWantedLevel() == 0) return true;
+	int model = MI_COP;
+	eCopType type = COP_STREET;
+	switch (car->GetModelIndex()) {
+	case MI_ENFORCER: model = MI_SWAT; type = COP_SWAT; break;
+	case MI_FBICAR: model = MI_FBI; type = COP_FBI; break;
+	case MI_BARRACKS: model = MI_ARMY; type = COP_ARMY; break;
+	}
+	CStreaming::RequestModel(model, STREAMFLAGS_DEPENDENCY);
+	if (!CStreaming::HasModelLoaded(model) || CPools::GetPedPool()->GetSize() - CPools::GetPedPool()->GetNoOfUsedSpaces() < 2) return false;
+	CVector positions[2];
+	if (!FindGuardPositions(car, target, positions)) return false;
+	CreateRoadblockGuards(car, target, type, roadBlockType, roadBlockNode, positions);
 	return true;
 }
 
@@ -156,7 +173,7 @@ CRoadBlocks::GenerateRoadBlocks(void)
 		bool transverse = roadWidth >= length;
 		float extent = transverse ? length : width;
 		if (extent <= 0.0f || roadWidth <= 0.0f) continue;
-		int count = (int)Ceil(roadWidth / (extent + 0.2f));
+		int count = (int)((roadWidth + 0.2f) / (extent + 0.2f));
 		if (count < 1 || count > 8) continue;
 		if (CPools::GetVehiclePool()->GetSize() - CPools::GetVehiclePool()->GetNoOfUsedSpaces() < count + 2 ||
 			CPools::GetPedPool()->GetSize() - CPools::GetPedPool()->GetNoOfUsedSpaces() < count * 2 + 2) continue;
@@ -183,10 +200,43 @@ CRoadBlocks::GenerateRoadBlocks(void)
 			car->SetMatrix(matrix);
 			car->PlaceOnRoadProperly();
 			if (car->GetUp().z <= 0.94f) { complete = false; break; }
+			// Include buildings/dummies and test the placed body, not the wheels'
+			// suspension lines against the road. Never move a blocked car through a wall.
+			CEntity *nearby[64];
+			int16 found = 0;
+			CWorld::FindObjectsKindaColliding(car->GetBoundCentre(), car->GetBoundRadius(),
+				false, &found, 64, nearby, true, true, true, true, true);
+			if (found == 64) { complete = false; break; }
+			CColModel body;
+			body = *car->GetColModel();
+			body.numLines = 0;
+			CColPoint contacts[MAX_COLLISION_POINTS];
+			for (int j = 0; j < found; ++j)
+				if (nearby[j]->bUsesCollision && CCollision::ProcessColModels(car->GetMatrix(), body,
+					nearby[j]->GetMatrix(), *nearby[j]->GetColModel(), contacts, nil, nil)) {
+					complete = false;
+					break;
+				}
+			if (!complete) break;
 		}
 		if (!complete) {
 			for (int i = 0; i < count; ++i) if (row[i]) delete row[i];
 			continue; // Retry the full row later; never publish a partial block.
+		}
+		// Check the whole crew against the actual row before publishing a block.
+		for (int i = 0; i < count; ++i) CWorld::Add(row[i]);
+		CVector guardPositions[8][2];
+		for (int i = 0; i < count && complete; ++i) {
+			complete = FindGuardPositions(row[i], CPoliceDuty::Target(), guardPositions[i]);
+			for (int j = 0; j < i && complete; ++j)
+				for (int a = 0; a < 2; ++a)
+					for (int b = 0; b < 2; ++b)
+						if ((guardPositions[i][a] - guardPositions[j][b]).MagnitudeSqr() < sq(1.5f)) complete = false;
+		}
+		for (int i = 0; i < count; ++i) CWorld::Remove(row[i]);
+		if (!complete) {
+			for (int i = 0; i < count; ++i) delete row[i];
+			continue;
 		}
 		for (int i = 0; i < count; ++i) {
 			CAutomobile *car = row[i];
@@ -208,7 +258,9 @@ CRoadBlocks::GenerateRoadBlocks(void)
 			car->m_nRoadblockType = 0;
 			car->m_nRoadblockNode = node;
 			// Models and pool capacity were checked for the whole crew up front.
-			car->bCreateRoadBlockPeds = !GenerateRoadBlockCopsForCar(car, 0, node);
+			eCopType type = vehicleId == MI_BARRACKS ? COP_ARMY : vehicleId == MI_FBICAR ? COP_FBI : vehicleId == MI_ENFORCER ? COP_SWAT : COP_STREET;
+			CreateRoadblockGuards(car, CPoliceDuty::Target(), type, 0, node, guardPositions[i]);
+			car->bCreateRoadBlockPeds = false;
 		}
 		InOrOut[node] = true;
 		NextRoadblockTime = CTimer::GetTimeInMilliseconds() + 8000;

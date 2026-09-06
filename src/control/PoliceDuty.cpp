@@ -46,6 +46,9 @@ struct PatrolAssignment {
 	Incident *incident;
 };
 PatrolAssignment patrols[MAX_BACKUP];
+// Preserve the patrol car when vanilla carjacking temporarily changes m_pMyVehicle.
+struct DutyVehicleAssignment { CCopPed *officer; CVehicle *car; };
+DutyVehicleAssignment dutyVehicles[128];
 CPed *backup[MAX_BACKUP];
 CWanted noIncident;
 bool ready;
@@ -172,9 +175,19 @@ void ClearIncident(Incident &incident)
 {
 	// ClearPursuit unregisters from this incident before its entity is released.
 	for (int i = ARRAY_SIZE(incident.wanted.m_pCops) - 1; i >= 0; --i)
-		if (incident.wanted.m_pCops[i]) incident.wanted.m_pCops[i]->ClearPursuit();
+		if (incident.wanted.m_pCops[i]) {
+			CCopPed *cop = incident.wanted.m_pCops[i];
+			cop->ClearPursuit();
+			cop->ReturnToDutyVehicle();
+		}
 	for (int i = 0; i < MAX_BACKUP; ++i)
 		if (patrols[i].incident == &incident) {
+			// Cover officers are not necessarily in CWanted::m_pCops.
+			for (int j = 0; j < CPools::GetPedPool()->GetSize(); ++j) {
+				CPed *ped = CPools::GetPedPool()->GetSlot(j);
+				if (ped && ped->m_nPedType == PEDTYPE_COP && CPoliceDuty::DutyVehicle((CCopPed*)ped) == patrols[i].car)
+					((CCopPed*)ped)->ReturnToDutyVehicle();
+			}
 			Release((CEntity**)&patrols[i].car);
 			patrols[i].incident = nil;
 		}
@@ -252,6 +265,28 @@ void UnlockWorld()
 }
 }
 
+CVehicle *CPoliceDuty::DutyVehicle(CCopPed *officer)
+{
+	DutyVehicleAssignment *freeSlot = nil;
+	for (int i = 0; i < ARRAY_SIZE(dutyVehicles); ++i) {
+		DutyVehicleAssignment &entry = dutyVehicles[i];
+		if (!entry.officer || !entry.car) {
+			Release((CEntity**)&entry.officer);
+			Release((CEntity**)&entry.car);
+			if (!freeSlot) freeSlot = &entry;
+		} else if (entry.officer == officer) return entry.car;
+	}
+	CVehicle *car = officer->m_pMyVehicle;
+	if (freeSlot && car && car != FindPlayerVehicle() && car->bIsLawEnforcer) {
+		freeSlot->officer = officer;
+		officer->RegisterReference((CEntity**)&freeSlot->officer);
+		freeSlot->car = car;
+		car->RegisterReference((CEntity**)&freeSlot->car);
+		return car;
+	}
+	return nil;
+}
+
 void CPoliceDuty::Init()
 {
 	// Called before the SCM is started and after old world entities are removed.
@@ -264,6 +299,10 @@ void CPoliceDuty::Init()
 		backup[i] = nil;
 		patrols[i].car = nil;
 		patrols[i].incident = nil;
+	}
+	for (int i = 0; i < ARRAY_SIZE(dutyVehicles); ++i) {
+		dutyVehicles[i].officer = nil;
+		dutyVehicles[i].car = nil;
 	}
 	noIncident.Initialise();
 	noIncident.m_bIgnoredByCops = true;
@@ -278,6 +317,10 @@ void CPoliceDuty::Shutdown()
 	if (!ready) return;
 	for (int i = 0; i < MAX_INCIDENTS; ++i) ClearIncident(incidents[i]);
 	for (int i = 0; i < MAX_BACKUP; ++i) Release((CEntity**)&backup[i]);
+	for (int i = 0; i < ARRAY_SIZE(dutyVehicles); ++i) {
+		Release((CEntity**)&dutyVehicles[i].officer);
+		Release((CEntity**)&dutyVehicles[i].car);
+	}
 	Release(&marked);
 	ready = shiftStarted = false;
 }

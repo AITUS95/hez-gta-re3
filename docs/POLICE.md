@@ -287,3 +287,29 @@ con `CWorld::TestSphereAgainstWorld`, sulle geometrie di collisione effettive.
 Il precedente controllo dei raggi d'ingombro in 2D poteva scartare tutti i posti
 liberi vicino a una fila serrata di Police/Enforcer. Restano attivi i controlli
 su veicoli, pedoni e ostacoli, oltre al tentativo successivo se manca spazio.
+
+### Ingombro dei blocchi, rientro e traffico
+
+La fila deve rientrare nella larghezza del nodo stradale. Dopo l'allineamento
+al terreno, `CCollision::ProcessColModels` verifica la carrozzeria anche contro
+edifici e dummy; le linee delle sospensioni sono escluse da questo controllo.
+Prima di rendere disponibile un blocco si verifica lo spazio per tutti i suoi
+agenti contro l'intera fila, evitando sovrapposizioni fra le guardie. Se auto o
+personale non trovano spazio, il nodo viene ritentato senza lasciare una fila
+incompleta. Le guardie iniziano accovacciate con `SetDuck`; la risposta al
+sospetto rimane affidata a `CopAI`.
+
+Alla chiusura dell'incidente, gli agenti di pattuglia e delle barriere ricevono
+un obiettivo vanilla di rientro. Un solo agente prenota il posto guida; gli
+altri utilizzano la selezione delle portiere per i passeggeri. Gli stati di
+attacco e copertura vengono rimossi. L'agente che arresta completa prima la
+posa. Riferimenti registrati conservano l'auto di servizio anche quando la
+procedura di arresto cambia temporaneamente `m_pMyVehicle`; se l'auto è stata
+eliminata o distrutta, l'agente torna alla pattuglia a piedi. Le reclute
+riprendono invece il seguito del giocatore, compreso l'imbarco vanilla.
+
+La densità del traffico ambientale usa un fattore `1 + 0.15 * stelle` sul
+budget vanilla di zona: da +15% a una stella fino a +90% a sei. Il limite
+locale passa da 30 a 60 auto casuali; restano vincolanti disponibilità delle
+strade, streaming e limite globale dei veicoli configurato nel motore.
+Non vengono modificati i moltiplicatori impostati dagli script.

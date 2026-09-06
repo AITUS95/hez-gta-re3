@@ -17,6 +17,7 @@
 #include "CarCtrl.h"
 #include "Renderer.h"
 #include "Camera.h"
+#include "Pools.h"
 
 CCopPed::CCopPed(eCopType copType) : CPed(PEDTYPE_COP)
 {
@@ -232,10 +233,57 @@ CCopPed::ClearPursuit(void)
 	}
 }
 
+// Reuse vanilla entry, door selection and navigation after an incident.
+void
+CCopPed::ReturnToDutyVehicle(void)
+{
+	if (DyingOrDead() || m_nPedState == PED_ARREST_PLAYER || EnteringCar() || bInVehicle) return;
+	if (!IsPedInControl()) return;
+	ClearAttack();
+	ClearPointGunAt();
+	ClearDuck();
+	bCrouchWhenShooting = false;
+	bKindaStayInSamePlace = false;
+	m_bIsDisabledCop = false;
+	bDuckAndCover = false;
+	m_nLastPedState = PED_IDLE;
+	ClearObjective();
+	m_prevObjective = OBJECTIVE_NONE;
+	SetIdle();
+	m_nPedStateTimer = 0;
+	SetObjectiveTimer(0);
+	if (CPoliceDuty::IsSpawnedOfficer(this)) {
+		SetLeader(FindPlayerPed());
+		SetObjective(OBJECTIVE_GOTO_CHAR_ON_FOOT, FindPlayerPed());
+		return;
+	}
+	CVehicle *dutyCar = CPoliceDuty::DutyVehicle(this);
+	if (dutyCar != m_pMyVehicle) {
+		CVehicle *previous = m_pMyVehicle;
+		m_pMyVehicle = dutyCar;
+		if (previous) previous->PruneReferences();
+		if (dutyCar) dutyCar->RegisterReference((CEntity**)&m_pMyVehicle);
+	}
+	if (!m_pMyVehicle || m_pMyVehicle == FindPlayerVehicle() ||
+		m_pMyVehicle->GetStatus() == STATUS_WRECKED || m_pMyVehicle->m_fHealth <= 0.0f) {
+		SetWanderPath(CGeneral::GetRandomNumberInRange(0, 8));
+		return;
+	}
+	bool driverReserved = m_pMyVehicle->pDriver != nil;
+	for (int i = 0; i < CPools::GetPedPool()->GetSize() && !driverReserved; ++i) {
+		CPed *other = CPools::GetPedPool()->GetSlot(i);
+		if (other && other != this && !other->DyingOrDead() &&
+			other->m_carInObjective == m_pMyVehicle && other->m_objective == OBJECTIVE_ENTER_CAR_AS_DRIVER)
+			driverReserved = true;
+	}
+	SetObjective(driverReserved ? OBJECTIVE_ENTER_CAR_AS_PASSENGER : OBJECTIVE_ENTER_CAR_AS_DRIVER, m_pMyVehicle);
+}
+
 // TODO: I don't know why they needed that parameter.
 void
 CCopPed::SetPursuit(bool ignoreCopLimit)
 {
+	CPoliceDuty::DutyVehicle(this);
 	CWanted *wanted = CPoliceDuty::WantedFor(this);
 	if (m_bIsInPursuit || !IsPedInControl())
 		return;
@@ -277,6 +325,7 @@ CCopPed::ArrestPlayer(void)
 		m_pSeekTarget = nil;
 		if (suspect) suspect->PruneReferences();
 		SetIdle();
+		ReturnToDutyVehicle();
 		return;
 	}
 	if (suspect) {
@@ -627,6 +676,7 @@ CCopPed::ProcessControl(void)
 		ClearAttack();
 		ClearPointGunAt();
 	}
+	if (bInVehicle) CPoliceDuty::DutyVehicle(this);
 	CPed::ProcessControl();
 	if (bWasPostponed)
 		return;
@@ -646,7 +696,9 @@ CCopPed::ProcessControl(void)
 	GetWeapon()->Update(m_audioEntityId);
 	// CPed selects the follow objective, but derived peds must execute Seek.
 	// Skipping it leaves the recruit running in its previous facing direction.
-	if (CPoliceDuty::IsSpawnedOfficer(this) && !m_bIsInPursuit && CPoliceDuty::WantedFor(this)->GetWantedLevel() == 0) {
+	if (!m_bIsInPursuit && CPoliceDuty::WantedFor(this)->GetWantedLevel() == 0 &&
+		(CPoliceDuty::IsSpawnedOfficer(this) || m_objective == OBJECTIVE_ENTER_CAR_AS_DRIVER ||
+		 m_objective == OBJECTIVE_ENTER_CAR_AS_PASSENGER)) {
 		if (m_moved.Magnitude() > 0.0f) Avoid();
 		if (m_nPedState == PED_SEEK_ENTITY) {
 			if (!m_pSeekTarget) {

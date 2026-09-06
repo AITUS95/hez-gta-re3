@@ -33,6 +33,7 @@ public:
 	static bool IsDesignating();
 	static bool ScriptIntCompare(const char *thread, int32 *variable, int32 value);
 	static void SpawnOfficer(int type);
+	static CVehicle *DutyVehicle(CCopPed *officer);
 
 	// A null officer selects the dispatch incident (highest level, nearest player).
 	// An officer already in pursuit keeps its own incident until it is resolved.

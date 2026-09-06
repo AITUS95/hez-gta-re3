@@ -28,6 +28,7 @@ public:
 	~CCopPed();
 
 	void ClearPursuit(void);
+	void ReturnToDutyVehicle(void);
 	void ProcessControl(void);
 	void SetArrestPlayer(CPed*);
 	void SetPursuit(bool);
