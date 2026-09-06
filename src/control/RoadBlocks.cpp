@@ -85,7 +85,11 @@ CRoadBlocks::GenerateRoadBlockCopsForCar(CVehicle* car, int32 roadBlockType, int
 			}
 			positions[i] = car->GetMatrix() * local;
 			CPedPlacement::FindZCoorForPed(&positions[i]);
-			if (CPedPlacement::IsPositionClearForPed(&positions[i])) { clear = true; break; }
+			// Population's broad 2D bounding-radius test rejects free space beside
+			// tightly parked cars (especially Enforcers). Check actual collision
+			// geometry, including all cars and existing guards, instead.
+			if (!CWorld::TestSphereAgainstWorld(positions[i], 0.5f, nil,
+				true, true, true, true, true, false)) { clear = true; break; }
 		}
 		if (!clear) return false; // Retry both guards; never silently lose a slot.
 	}

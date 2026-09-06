@@ -273,3 +273,17 @@ e spazio libero. Non iniziano un attacco forzato durante la generazione:
 `CopAI` gestisce copertura, distanza e tiro. Se mancano spazio, modelli o posti
 nel pool, la generazione della coppia resta pendente e viene ritentata invece
 di essere considerata completata. La correzione riguarda tutti i livelli.
+
+### Correzione movimento reclute e spazio per le guardie
+
+Le reclute senza inseguimento eseguono `CPed::Seek` anche nel percorso che
+esclude l'AI di pattuglia: `ProcessObjective` sceglie il leader, mentre `Seek`
+aggiorna direzione e animazione del movimento. Il ritorno anticipato non deve
+saltare questa seconda fase, altrimenti l'agente corre nella direzione precedente.
+Imbarco e combattimento mantengono i rispettivi obiettivi vanilla.
+
+Le posizioni dei due agenti dietro ogni veicolo del blocco vengono verificate
+con `CWorld::TestSphereAgainstWorld`, sulle geometrie di collisione effettive.
+Il precedente controllo dei raggi d'ingombro in 2D poteva scartare tutti i posti
+liberi vicino a una fila serrata di Police/Enforcer. Restano attivi i controlli
+su veicoli, pedoni e ostacoli, oltre al tentativo successivo se manca spazio.

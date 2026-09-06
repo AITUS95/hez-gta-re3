@@ -644,9 +644,22 @@ CCopPed::ProcessControl(void)
 		return;
 	}
 	GetWeapon()->Update(m_audioEntityId);
-	// CPed owns following/boarding. Do not run idle patrol AI over it.
-	if (CPoliceDuty::IsSpawnedOfficer(this) && !m_bIsInPursuit && CPoliceDuty::WantedFor(this)->GetWantedLevel() == 0)
+	// CPed selects the follow objective, but derived peds must execute Seek.
+	// Skipping it leaves the recruit running in its previous facing direction.
+	if (CPoliceDuty::IsSpawnedOfficer(this) && !m_bIsInPursuit && CPoliceDuty::WantedFor(this)->GetWantedLevel() == 0) {
+		if (m_moved.Magnitude() > 0.0f) Avoid();
+		if (m_nPedState == PED_SEEK_ENTITY) {
+			if (!m_pSeekTarget) {
+				RestorePreviousState();
+			} else {
+				m_vecSeekPos = m_pSeekTarget->GetPosition();
+				if (Seek()) RestorePreviousState();
+			}
+		} else if (m_nPedState == PED_SEEK_POS) {
+			if (Seek()) RestorePreviousState();
+		}
 		return;
+	}
 	if (m_moved.Magnitude() > 0.0f)
 		Avoid();
 
