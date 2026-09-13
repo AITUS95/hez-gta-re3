@@ -1,5 +1,5 @@
 name: Corleone Windows artifact
-# Validates hideout death inventory and radar fixes.
+# Validates hideout death inventory and radar fixes; refreshes the distributable artifact.
 
 on:
   workflow_dispatch:
