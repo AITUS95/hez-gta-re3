@@ -1,5 +1,6 @@
 name: Corleone Windows artifact
 # Validates hideout death inventory and radar fixes; refreshes the distributable artifact.
+# Manual rebuild requested on 2026-10-25; no build configuration changes.
 
 on:
   workflow_dispatch:
